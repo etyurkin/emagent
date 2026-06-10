@@ -1374,6 +1374,30 @@ after connection failures."
            (emagent-acp--abort-prompt state (format "prompt failed: %s" message))
            (emagent-acp--notify-user state (format "emagent: prompt failed: %s" message))))))))
 
+(defun emagent-acp-interrupt ()
+  "Interrupt the in-flight prompt and close the response block cleanly.
+
+Appends a user-visible stop notice to whatever the agent has produced so far,
+then finalizes the response as if it completed normally.  The pending ACP
+request continues in the background but its result is ignored."
+  (let ((state emagent-acp--session))
+    (unless (or (map-elt state :busy) (map-elt state :prompt-finishing))
+      (user-error "No active emagent prompt to interrupt"))
+    (emagent-acp--clear-prompt-watchdog state)
+    (emagent-acp--cancel-prompt-render state)
+    (emagent-acp--flush-thought-buffer state)
+    (let* ((text (or (map-elt state :assistant-text) ""))
+           (notice "/Stopped — awaiting new instructions./")
+           (full (if (string-empty-p text)
+                     notice
+                   (concat text "\n\n" notice))))
+      (map-put! state :assistant-text full))
+    (map-put! state :busy nil)
+    (map-put! state :prompt-finishing t)
+    (map-put! state :prompt-finalized nil)
+    (emagent-acp--render-prompt-response state)
+    (emagent-acp--refresh-mode-line state)))
+
 (defun emagent-acp-shutdown-buffer ()
   "Shut down the ACP session for the current buffer."
   (emagent-chat-clear-slash-commands)

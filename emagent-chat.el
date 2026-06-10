@@ -36,6 +36,7 @@
     (define-key map (kbd "C-c C-l") #'emagent-messages)
     (define-key map (kbd "TAB") #'emagent-chat-tab)
     (define-key map (kbd "<backtab>") #'org-shifttab)
+    (define-key map (kbd "C-g") #'emagent-chat-interrupt)
     map)
   "Keymap for `emagent-mode'.")
 
@@ -125,13 +126,14 @@ hideblocks / `org-cycle-hide-block-startup'."
 
 (defconst emagent-chat-initial-comment
   "# This buffer is a scratch pad for chatting with emagent.
-# 
+#
 # Type plain text below; agent replies appear in delimited response sections.
 # TAB    on # --- emagent --- fold/unfold the response; else org-cycle
 # C-c C-c send line or active region (C-e is end-of-line)
 # C-c C-b attach buffer context to the next send
 # C-c C-v set ACP model
 # C-c C-l show emagent status log (*emagent messages*)
+# C-g     interrupt agent response
 # C-x k   kill buffer and disconnect agent
 # M-x emagent-mode to reconnect a saved session
 
@@ -295,7 +297,8 @@ the newest begin delimiter through `point-max'."
     (goto-char (point-min))
     (while (and (not (eobp))
                 (or (looking-at "#\\+")
-                    (looking-at "# ")))
+                    (looking-at "# ")
+                    (looking-at "#$")))
       (forward-line 1))
     (point)))
 
@@ -457,7 +460,8 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
   (goto-char (point-min))
   (while (and (not (eobp))
               (or (looking-at "#\\+")
-                  (looking-at "# ")))
+                  (looking-at "# ")
+                  (looking-at "#$")))
     (forward-line 1))
   (skip-chars-forward "\n")
   (point))
@@ -1140,6 +1144,21 @@ line (or nearest preceding sendable line in the user zone)."
     (when emagent-chat--on-send
       (funcall emagent-chat--on-send input))))
 
+(declare-function emagent-acp-interrupt "emagent-acp")
+
+(defun emagent-chat-interrupt ()
+  "Interrupt the running agent response (C-g).
+
+When the agent is busy, closes the response block with a stop notice and
+returns the session to idle.  When idle, falls through to `keyboard-quit'."
+  (interactive)
+  (let ((state (and (boundp 'emagent-acp--session) emagent-acp--session)))
+    (if (and state (or (map-elt state :busy) (map-elt state :prompt-finishing)))
+        (progn
+          (emagent-acp-interrupt)
+          (message "emagent: interrupted"))
+      (keyboard-quit))))
+
 (defun emagent-chat-attach-buffer ()
   "Attach a buffer summary to the next prompt."
   (interactive)
@@ -1238,8 +1257,7 @@ line (or nearest preceding sendable line in the user zone)."
   (setq-local org-src-fontify-natively t
               org-ellipsis "…"
               org-fontify-quote-and-verse-blocks t
-              org-cycle-hide-block-startup t)
-  (emagent-chat--ensure-org-startup))
+              org-cycle-hide-block-startup t))
 
 ;;;###autoload
 (define-derived-mode emagent-mode org-mode "Emagent"
@@ -1274,6 +1292,7 @@ Run \\[emagent-mode] to reconnect a saved session."
                     (emagent-chat--short-cwd-label dir))
                    t))
   (emagent-chat--insert-initial-comment)
+  (emagent-chat--ensure-org-startup)
   (emagent-chat--sync-user-zone-marker)
   (add-hook 'completion-at-point-functions
             #'emagent-chat-slash-command-completion-at-point nil t))

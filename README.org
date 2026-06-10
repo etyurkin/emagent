@@ -49,6 +49,7 @@ For a local clone, add =:load-path "~/path/to/emagent"= instead of =:ensure=.
 | =C-c C-v=                    | Set model                                   |
 | =TAB= on =# --- emagent ---=   | Fold / unfold the response block            |
 | =TAB= elsewhere              | =org-cycle= (headlines, Reasoning, etc.)      |
+| =C-g=                        | Interrupt agent response                    |
 | =C-x k=                      | Kill buffer and disconnect agent            |
 
 ** Project directory and agent
