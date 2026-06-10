@@ -1,0 +1,1394 @@
+;;; emagent-acp.el --- ACP wire-up for emagent -*- lexical-binding: t; -*-
+
+;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Version: 0.1.0
+;; Package-Requires: ((emacs "29.1") (acp "0.12.2"))
+
+;;; Code:
+
+(eval-when-compile
+  (require 'cl-lib))
+
+(require 'cl-lib)
+(require 'acp)
+(require 'emagent-acp-compat)
+(require 'emagent-log)
+(require 'emagent-chat)
+(require 'emagent-context)
+(require 'emagent-mcp)
+(require 'emagent-oauth)
+
+(declare-function emagent-chat-set-slash-commands "emagent-chat")
+(declare-function emagent-chat-clear-slash-commands "emagent-chat")
+(declare-function emagent-chat-begin-thought "emagent-chat")
+(declare-function emagent-chat-append-thought "emagent-chat")
+(declare-function emagent-chat-close-thought "emagent-chat")
+
+(defvar emagent-acp-extra-mcp-config-file)
+
+(defconst emagent-acp-system-prompt
+  "You are emagent, an Emacs assistant focused on Emacs internals, elisp, and org-mode operations.
+
+The user chats in an org-mode scratch buffer (already org-mode). Write org markup
+directly in your reply — headings, paragraphs, lists, and tables. Never wrap
+your whole reply in #+BEGIN_SRC org; the buffer is already org-mode and prose
+would be hidden inside a src block. Use #+BEGIN_SRC only for executable or
+syntax-highlighted code snippets (lisp, java, shell, ...).
+
+Write org markup, not markdown:
+
+- Use *bold* and /italic/ (not ** or _)
+- Use org links: [[https://example.com][label]]
+- Use org headings (*, **), not markdown ## headings.
+- For code snippets only, use #+BEGIN_SRC / #+END_SRC with the language tag
+  (java, python, shell, lisp, elisp, ...). Use elisp (not emacs-lisp) for Emacs
+  Lisp. Never wrap prose, headings, or tables in src blocks.
+  Never use markdown ``` fences or line-number file citations like 597:623:file.el.
+  Leave a blank line after every #+END_SRC before the next paragraph or heading.
+- For tables, use org pipe tables with a separator row (hline) after the header.
+  Example:
+  | Module | Role |
+  |--------+------|
+  | emagent.el | entry |
+  Leave a blank line before and after every table.
+
+Example for Java:
+
+#+BEGIN_SRC java
+public class Example { public static void main(String[] args) {} }
+#+END_SRC
+
+Example for Emacs Lisp:
+
+#+BEGIN_SRC elisp
+(defun example () 42)
+#+END_SRC
+
+Another paragraph starts after a blank line.
+
+You have emagent tools (read_file, write_file, grep, find_files, git_status,
+git_diff, git_log, list_files, eval, apropos, run_shell_command, ...) that
+execute inside the live Emacs process. Prefer them — and the user's installed
+Emacs packages — over Bash, zsh, or the agent's built-in terminal tools.
+run_shell_command runs through Emacs; reach for elisp and emagent tools first.
+
+If you do not know how to do something in Emacs, discover the API first — never guess.
+Describe what you found before suggesting changes. Ask for confirmation before mutating buffers.")
+
+(defconst emagent-acp-system-prompt-prefer-emacs
+  "
+
+Tool preference: prefer emagent tools and the live Emacs when they can do the job.
+Before Bash, zsh, Python, jq, or the agent's built-in file/terminal tools, check
+whether an emagent tool or Emacs Lisp can handle it.
+
+Substitution guide (use the emagent tool, not shell):
+
+| Instead of              | Use                                      |
+|-------------------------+------------------------------------------|
+| cat, head, tail         | read_file (optional line, limit)         |
+| grep, rg, ag            | grep                                     |
+| find -name GLOB         | find_files                               |
+| find / list tree        | list_files                               |
+| git status              | git_status                               |
+| git diff                | git_diff                                 |
+| git log                 | git_log                                  |
+| jq                      | eval with json-parse-string / json-read  |
+| open URL                | eval with browse-url                     |
+| interactive bash/zsh    | run_shell_command only when unavoidable  |
+
+run_shell_command auto-redirects simple cat/grep/git/find commands to the tools
+above and blocks git --no-verify and push to merged PR branches.
+
+Use external tools — Bash, plugin slash commands (/workflow:dev, /quality:*, …),
+gateway MCP backends, mvn, curl — only when:
+- A Claude Code plugin or workflow requires them
+- The task cannot reasonably be done inside Emacs
+- No emagent or Emacs alternative exists for that specific step
+
+Discover Emacs APIs before guessing: apropos, describe_symbol, find_function,
+where_is, then eval a small test.
+
+emagent tools: read_file, write_file, undo_file, delete_file, delete_directory,
+list_files, find_files, grep, git_status, git_diff, git_log, project_directory,
+eval, apropos, describe_symbol, find_function, where_is, run_shell_command.
+
+Omit a path to use the session project directory; relative paths resolve against
+it. File tools are confined to the session root. To revert a mistake, call
+undo_file — do not rewrite files from memory. delete-file, write-file,
+shell-command, call-process and similar are blocked inside eval; use the
+dedicated tools (they prompt the user). Do not read iCloud paths or other apps'
+container directories.")
+
+;; Backward compatibility (aliases before their referents).
+(define-obsolete-variable-alias 'emagent-acp-emacs-native 'emagent-acp-prefer-emacs "0.1.0")
+(define-obsolete-variable-alias 'emagent-acp-emacs-only 'emagent-acp-prefer-emacs "0.1.0")
+
+(defcustom emagent-acp-prefer-emacs t
+  "Instruct the agent to prefer emagent and Emacs tools, with external fallback.
+
+When non-nil (default), emagent tells the agent to reach for emagent MCP tools
+and Emacs Lisp first, but still allows Claude Code built-in tools, plugin slash
+commands, and forwarded MCP gateways when Emacs cannot do the job.  File search
+uses pure Emacs grep rather than ripgrep.  Keep `emagent-acp-file-access'
+enabled so ACP file read/write route through Emacs buffers."
+  :type 'boolean
+  :group 'emagent)
+
+(defconst emagent-acp-system-prompt-gateway
+  "
+
+Forwarded MCP gateways from your Claude config are available in this session
+alongside emagent tools.  The ebay-ai-gateway exposes backends (jira__, wiki__,
+sherlock, …) through gateway tools such as list_backends, list_backend_tools,
+and call_backend_tool — not as top-level jira__* tools.  For Jira use
+call_backend_tool with backend \"jira\" and tool jira__getIssueByKey (issue key
+such as RECONV-570).  If authenticate / complete_authentication appear, start
+OAuth; emagent opens the browser and captures the localhost callback for you."
+  "Appended when `emagent-acp-extra-mcp-config-file' forwards MCP servers.")
+
+(defun emagent-acp--gateway-system-prompt ()
+  "Return gateway guidance when extra MCP servers are forwarded."
+  (when (and emagent-acp-extra-mcp-config-file
+             (emagent-acp--config-file-mcp-servers))
+    emagent-acp-system-prompt-gateway))
+
+(defun emagent-acp--system-prompt ()
+  "Return the system prompt for new ACP sessions."
+  (concat emagent-acp-system-prompt
+          (emagent-acp--gateway-system-prompt)
+          (when emagent-acp-prefer-emacs
+            emagent-acp-system-prompt-prefer-emacs)))
+
+(defun emagent-acp-prefer-emacs-p ()
+  "Return non-nil when emagent instructs the agent to prefer Emacs tools."
+  emagent-acp-prefer-emacs)
+
+(define-obsolete-function-alias 'emagent-acp-emacs-native-p 'emagent-acp-prefer-emacs-p "0.1.0")
+(define-obsolete-function-alias 'emagent-acp-emacs-only-p 'emagent-acp-prefer-emacs-p "0.1.0")
+
+(defcustom emagent-acp-file-access t
+  "Route ACP file read/write through Emacs file tools.
+
+When non-nil (default), agent read_file and write_file calls run
+`emagent-tools--read-file-content' and `emagent-tools--write-file-content'
+instead of cursor-agent's own file tools.  That matches agent-shell and
+avoids macOS \"access data from other apps\" prompts on normal project trees.
+
+Emagent still refuses iCloud and ~/Library/Containers paths to avoid separate
+iCloud Drive prompts.  Set to nil only if you prefer the agent's own file tools."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-auto-approve-permissions t
+  "Automatically approve ACP session permission requests.
+
+These gates do not replace the external agent's own tool permissions; they
+only unblock the ACP session handshake."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-stream-to-buffer nil
+  "When non-nil, stream agent chunks into the chat buffer while a prompt is busy.
+
+Disabled by default because interleaved ACP notifications can finalize before
+the full reply arrives.  Reasoning and answers are rendered once the prompt
+completes."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-thought-progress 'buffer
+  "How to surface agent reasoning from `agent_thought_chunk' updates.
+
+- nil — silent in `emagent-log-buffer-name' (Reasoning still appears on finish)
+- buffer — stream and show Reasoning in the chat buffer (default)
+- minimal — truncated one-line log entries in `emagent-log-buffer-name'
+- trail — log entries keeping the sentence tail visible
+- both — Reasoning block in the chat buffer and minimal log lines"
+  :type '(choice (const :tag "Silent" nil)
+                 (const :tag "Chat buffer" buffer)
+                 (const :tag "Log per sentence" minimal)
+                 (const :tag "Log sentence tail" trail)
+                 (const :tag "Chat buffer and log" both))
+  :group 'emagent)
+
+(defcustom emagent-acp-render-delay 0.05
+  "Seconds to wait after the last prompt chunk before rendering the response."
+  :type 'number
+  :group 'emagent)
+
+(defcustom emagent-log-agent-stderr nil
+  "When non-nil, log filtered cursor-agent stderr to `emagent-log-buffer-name'."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-trace nil
+  "Log ACP wire events to `emagent-log-buffer-name'.
+
+Shows outgoing methods, each `session/update' type with payload size, and
+when `session/prompt' completes.  Also enables `acp-logging-enabled' for
+the full wire log in the ACP logs buffer (`acp-logs-buffer')."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-extra-mcp-config-file "~/.claude.json"
+  "JSON file whose top-level `mcpServers' block is forwarded to ACP agents.
+
+Emagent reads the `mcpServers' object from this file and advertises those
+servers, alongside the in-Emacs emagent server, to agents that support http MCP
+over ACP (e.g. Claude).  This reuses an existing Claude gateway (Jira,
+Confluence, Git, …) without re-declaring it for emagent.
+
+Only agents wired through ACP `mcpServers' are affected; Cursor discovers MCP
+servers from its own ~/.cursor/mcp.json and ignores this option.  Servers that
+require interactive OAuth may still need credentials supplied via their headers.
+Set to nil to forward only the emagent server."
+  :type '(choice (const :tag "None" nil) (file :tag "JSON config"))
+  :group 'emagent)
+
+(defconst emagent-acp-auto-model-id "auto"
+  "Model id used by cursor-agent-acp for automatic model selection.
+
+Claude and other agents that do not advertise this id fall back to the
+session's current model instead.")
+
+(defvar-local emagent-acp--session nil
+  "ACP session state for the current emagent buffer.")
+
+(defun emagent-acp--strip-pino-colors (string)
+  "Remove literal pino color tokens like [32m from STRING."
+  (replace-regexp-in-string "\\[[0-9]+m" "" string))
+
+(defun emagent-acp--agent-log-line-p (line)
+  "Return non-nil when LINE is cursor-agent info/warn stderr."
+  (let ((line (string-trim (emagent-acp--strip-pino-colors line))))
+    (or (string-empty-p line)
+        (string-match-p "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] .*\\[ *\\(info\\|warn\\) *\\]:" line))))
+
+(defun emagent-acp--stderr-notify-p (acp-error)
+  "Return non-nil when ACP-ERROR should be shown to the user."
+  (let ((message (string-trim (or (map-elt acp-error 'message) (format "%s" acp-error)))))
+    (cond
+     ((string-empty-p message) nil)
+     ((string-match-p "\\`\\(?:finished\\|Process\\|acp-client(\\)" message) nil)
+     ((string-match-p "\\[32minfo\\|\\[33mwarn" message) nil)
+     ((string-match-p "ApiError\\|failed with status\\|\\[31merror" message) t)
+     (t
+      (let ((lines (split-string message "\n" t)))
+        (not (and lines (seq-every-p #'emagent-acp--agent-log-line-p lines))))))))
+
+(defun emagent-acp--log-agent-stderr (message)
+  (when emagent-log-agent-stderr
+    (emagent-log "agent: %s" (string-trim message))))
+
+(defun emagent-acp--session ()
+  (or emagent-acp--session
+      (error "No active emagent session for this buffer")))
+
+(defun emagent-acp--connected-p ()
+  "Return non-nil when the current buffer has a live, ready ACP session."
+  (and emagent-acp--session
+       (map-elt emagent-acp--session :ready)
+       (let ((client (map-elt emagent-acp--session :client)))
+         (and client (acp--client-started-p client)))))
+
+(defun emagent-acp--teardown-stale-session ()
+  "Shut down a dead or incomplete ACP session without clearing persisted ids."
+  (when-let* ((state emagent-acp--session)
+              (client (map-elt state :client)))
+    (ignore-errors (acp-shutdown :client client)))
+  (setq emagent-acp--session nil))
+
+(cl-defun emagent-acp--make-state (&key client chat-buffer on-reveal)
+  "Return a mutable session state table for Emacs 30 `map-put!'.
+
+Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
+  (let ((state (make-hash-table :test 'eq))
+        (usage (make-hash-table :test 'eq)))
+    (puthash :context-used nil usage)
+    (puthash :context-size nil usage)
+    (puthash :total-tokens 0 usage)
+    (puthash :client client state)
+    (puthash :chat-buffer chat-buffer state)
+    (puthash :session-id nil state)
+    (puthash :config-options nil state)
+    (puthash :usage usage state)
+    (puthash :initialized nil state)
+    (puthash :mcp-http nil state)
+    (puthash :ready nil state)
+    (puthash :busy nil state)
+    (puthash :assistant-text "" state)
+    (puthash :thought-text "" state)
+    (puthash :thought-buffer "" state)
+    (puthash :prompt-finalized nil state)
+    (puthash :prompt-finishing nil state)
+    (puthash :finish-token nil state)
+    (puthash :finish-timer nil state)
+    (puthash :prompt-watchdog nil state)
+    (puthash :extra-context nil state)
+    (puthash :replaying-history nil state)
+    (puthash :on-reveal on-reveal state)
+    state))
+
+(defun emagent-acp--chat-buffer (state)
+  (map-elt state :chat-buffer))
+
+(defun emagent-acp--session-cwd (state)
+  (with-current-buffer (emagent-acp--chat-buffer state)
+    (emagent-chat--session-directory)))
+
+(defun emagent-acp--persist-session-id (state session-id)
+  (with-current-buffer (emagent-acp--chat-buffer state)
+    (emagent-chat-set-session-id session-id)))
+
+(defun emagent-acp--saved-session-id (state)
+  (with-current-buffer (emagent-acp--chat-buffer state)
+    (emagent-chat-session-id)))
+
+(defun emagent-acp--saved-model-id (state)
+  (with-current-buffer (emagent-acp--chat-buffer state)
+    (emagent-chat-model)))
+
+(defun emagent-acp--persist-model-id (state model-id)
+  (with-current-buffer (emagent-acp--chat-buffer state)
+    (emagent-chat-set-model model-id))
+  (emagent-acp--refresh-mode-line state))
+
+(defun emagent-acp--refresh-mode-line (state)
+  (when-let ((buffer (emagent-acp--chat-buffer state)))
+    (with-current-buffer buffer
+      (force-mode-line-update t))))
+
+(defun emagent-acp--usage-state (state)
+  (or (map-elt state :usage)
+      (let ((usage (make-hash-table :test 'eq)))
+        (puthash :context-used nil usage)
+        (puthash :context-size nil usage)
+        (puthash :total-tokens 0 usage)
+        (map-put! state :usage usage)
+        usage)))
+
+(defun emagent-acp--save-usage-from-response (state acp-usage)
+  "Update STATE usage from a prompt response usage field."
+  (let ((usage (emagent-acp--usage-state state)))
+    (when-let ((total (map-elt acp-usage 'totalTokens)))
+      (map-put! usage :total-tokens total))
+    (map-put! state :usage usage)))
+
+(defun emagent-acp--update-usage-from-notification (state acp-update)
+  "Update STATE usage from a session/update usage_update payload."
+  (let ((usage (emagent-acp--usage-state state)))
+    (when-let ((used (or (map-elt acp-update 'used)
+                         (map-elt acp-update 'contextUsed))))
+      (map-put! usage :context-used used))
+    (when-let ((size (or (map-elt acp-update 'size)
+                         (map-elt acp-update 'contextLimit)
+                         (map-elt acp-update 'contextSize))))
+      (map-put! usage :context-size size))
+    (map-put! state :usage usage)
+    (emagent-acp--refresh-mode-line state)))
+
+(defun emagent-acp--normalize-config-option (acp-option)
+  `((:id . ,(map-elt acp-option 'id))
+    (:name . ,(map-elt acp-option 'name))
+    (:description . ,(map-elt acp-option 'description))
+    (:category . ,(map-elt acp-option 'category))
+    (:type . ,(map-elt acp-option 'type))
+    (:current-value . ,(map-elt acp-option 'currentValue))
+    (:options . ,(mapcar (lambda (acp-value)
+                            `((:value . ,(map-elt acp-value 'value))
+                              (:name . ,(map-elt acp-value 'name))
+                              (:description . ,(map-elt acp-value 'description))))
+                          (append (map-elt acp-option 'options) nil)))))
+
+(defun emagent-acp--normalize-config-options (acp-config-options)
+  (mapcar #'emagent-acp--normalize-config-option
+          (append acp-config-options nil)))
+
+(defun emagent-acp--save-config-options (state acp-config-options)
+  (when acp-config-options
+    (map-put! state :config-options
+              (emagent-acp--normalize-config-options acp-config-options))))
+
+(defun emagent-acp--config-options (state)
+  (map-elt state :config-options))
+
+(defun emagent-acp--config-option-by-category (state category)
+  (seq-find (lambda (option)
+              (equal category (map-elt option :category)))
+            (emagent-acp--config-options state)))
+
+(defun emagent-acp--model-config-option (state)
+  (or (emagent-acp--config-option-by-category state "model")
+      (seq-find (lambda (option)
+                  (string= (map-elt option :id) "model"))
+                (emagent-acp--config-options state))))
+
+(defun emagent-acp--config-option-value-name (option value)
+  (or (map-elt (seq-find (lambda (candidate)
+                           (equal value (map-elt candidate :value)))
+                         (map-elt option :options))
+              :name)
+      value))
+
+(defun emagent-acp--config-option-set-value (state config-id value)
+  (dolist (option (emagent-acp--config-options state))
+    (when (equal config-id (map-elt option :id))
+      (setf (map-elt option :current-value) value))))
+
+(defun emagent-acp--model-entry-id (entry)
+  (or (map-elt entry 'modelId) (map-elt entry 'model-id) (map-elt entry 'value)))
+
+(defun emagent-acp--model-entry-name (entry)
+  (or (map-elt entry 'name) (emagent-acp--model-entry-id entry)))
+
+(defun emagent-acp--model-entries-from-response (response)
+  "Return a list of ((:model-id . ID) (:name . NAME)) from a session/new RESPONSE."
+  (when response
+    (let* ((models (emagent-acp--models-from-response response))
+           (entries (append (emagent-acp--available-model-entries models) nil)))
+      (delq nil
+            (mapcar (lambda (entry)
+                      (let ((id (or (map-elt entry :model-id)
+                                    (map-elt entry :value)
+                                    (emagent-acp--model-entry-id entry)))
+                            (name (or (map-elt entry :name)
+                                      (emagent-acp--model-entry-name entry))))
+                        (when id
+                          `((:model-id . ,id) (:name . ,name)))))
+                    entries)))))
+
+(defun emagent-acp--models-from-response (response)
+  (or (map-elt response 'models)
+      (when-let* ((options (map-elt response 'configOptions))
+                  (model-opt
+                   (seq-find (lambda (option)
+                               (or (string= (map-elt option 'category) "model")
+                                   (string= (map-elt option 'id) "model")))
+                             options)))
+        (list (cons 'availableModels (map-elt model-opt 'options))
+              (cons 'currentModelId (map-elt model-opt 'currentValue))))))
+
+(defun emagent-acp--available-model-entries (models)
+  (or (map-elt models 'availableModels) (map-elt models 'options) nil))
+
+(defun emagent-acp--get-available-models (state models)
+  (if-let ((model-option (emagent-acp--model-config-option state)))
+      (mapcar (lambda (value)
+                `((:model-id . ,(map-elt value :value))
+                  (:name . ,(map-elt value :name))
+                  (:description . ,(map-elt value :description))))
+              (map-elt model-option :options))
+    (emagent-acp--available-model-entries models)))
+
+(defun emagent-acp--current-model-id (state models)
+  (or (map-elt (emagent-acp--model-config-option state) :current-value)
+      (and models (map-elt models 'currentModelId))
+      (emagent-acp--saved-model-id state)))
+
+(defun emagent-acp--model-display-name (state models model-id)
+  (or (map-elt (seq-find (lambda (model)
+                           (string= (or (map-elt model :model-id)
+                                        (emagent-acp--model-entry-id model))
+                                    model-id))
+                         (emagent-acp--get-available-models state models))
+               :name)
+      (emagent-acp--model-entry-name
+       (seq-find (lambda (model)
+                   (string= (emagent-acp--model-entry-id model) model-id))
+                 (emagent-acp--get-available-models state models)))
+      model-id))
+
+(defun emagent-acp--model-choices (state models)
+  (mapcar (lambda (entry)
+            (let ((id (or (map-elt entry :model-id)
+                          (emagent-acp--model-entry-id entry)))
+                  (name (or (map-elt entry :name)
+                            (emagent-acp--model-entry-name entry))))
+              (cons (format "%s (%s)" name id) id)))
+          (emagent-acp--get-available-models state models)))
+
+(defun emagent-acp--model-available-p (model-id state models)
+  (and model-id (not (string-empty-p model-id))
+       (seq-find (lambda (entry)
+                   (string= model-id
+                            (or (map-elt entry :model-id)
+                                (emagent-acp--model-entry-id entry))))
+                 (emagent-acp--get-available-models state models))))
+
+(defun emagent-acp--resolve-model-id (state models saved-model-id)
+  "Return a model id for session connect without prompting.
+
+Prefers a saved buffer model, then \"auto\" when advertised, then the
+agent's current model.  Claude agents omit \"auto\" and use their default."
+  (let* ((available (emagent-acp--get-available-models state models))
+         (current (and models (map-elt models 'currentModelId))))
+    (cond
+     ((and saved-model-id
+           (emagent-acp--model-available-p saved-model-id state models))
+      saved-model-id)
+     ((emagent-acp--model-available-p emagent-acp-auto-model-id state models)
+      emagent-acp-auto-model-id)
+     ((and current (not (string-empty-p current))) current)
+     ((= (length available) 1)
+      (or (map-elt (car available) :model-id)
+          (emagent-acp--model-entry-id (car available))))
+     (t nil))))
+
+(cl-defun emagent-acp--config-option-set-model-id (&key state session-id model-id
+                                                      on-success on-failure)
+  (if-let ((model-option (emagent-acp--model-config-option state)))
+      (emagent-acp--send-request
+       :state state
+       :request (acp-make-session-set-config-option-request
+                 :session-id session-id
+                 :config-id (map-elt model-option :id)
+                 :value model-id)
+       :on-success (lambda (response)
+                     (if (map-elt response 'configOptions)
+                         (emagent-acp--save-config-options state
+                                                          (map-elt response 'configOptions))
+                       (emagent-acp--config-option-set-value state
+                                                            (map-elt model-option :id)
+                                                            model-id))
+                     (emagent-acp--persist-model-id state model-id)
+                     (emagent-acp--progress
+                      state
+                      (format "model %s"
+                              (emagent-acp--config-option-value-name model-option model-id)))
+                     (when on-success (funcall on-success)))
+       :on-failure (lambda (error _raw)
+                     (emagent-acp--notify-user
+                      state
+                      (format "emagent: model %s not applied: %s"
+                              model-id
+                              (or (map-elt error 'message) (format "%s" error))))
+                     (when on-failure (funcall on-failure))))
+    (emagent-acp--send-request
+     :state state
+     :request (acp-make-session-set-model-request
+               :session-id session-id
+               :model-id model-id)
+     :on-success (lambda (_response)
+                   (emagent-acp--persist-model-id state model-id)
+                   (emagent-acp--notify-user
+                    state
+                    (format "emagent: model %s" model-id))
+                   (when on-success (funcall on-success)))
+     :on-failure (lambda (error _raw)
+                   (emagent-acp--notify-user
+                    state
+                    (format "emagent: model %s not applied: %s"
+                            model-id
+                            (or (map-elt error 'message) (format "%s" error))))
+                   (when on-failure (funcall on-failure))))))
+
+(defun emagent-acp--finish-configure-model (state session-id on-ready resumed)
+  (emagent-acp--session-ready
+   :state state
+   :session-id session-id
+   :on-ready on-ready
+   :resumed resumed))
+
+(cl-defun emagent-acp--configure-model (&key state session-id response on-ready resumed)
+  (emagent-acp--progress state "selecting model…")
+  (emagent-acp--save-config-options state (map-elt response 'configOptions))
+  (let* ((models (emagent-acp--models-from-response response))
+         (current (emagent-acp--current-model-id state models))
+         (choice (emagent-acp--resolve-model-id state models
+                                               (emagent-acp--saved-model-id state))))
+    (cond
+     ((and choice session-id (not (string-empty-p choice))
+           current (string= choice current))
+      (emagent-acp--progress
+       state
+       (format "model %s"
+               (emagent-acp--model-display-name state models choice)))
+      (emagent-acp--persist-model-id state choice)
+      (emagent-acp--finish-configure-model state session-id on-ready resumed))
+     ((and choice session-id (not (string-empty-p choice)))
+      (emagent-acp--progress
+       state
+       (format "setting model to %s…"
+               (emagent-acp--model-display-name state models choice)))
+      (emagent-acp--config-option-set-model-id
+       :state state
+       :session-id session-id
+       :model-id choice
+       :on-success (lambda ()
+                     (emagent-acp--finish-configure-model state session-id on-ready resumed))
+       :on-failure (lambda ()
+                    (emagent-acp--finish-configure-model state session-id on-ready resumed))))
+     (t
+      (when current
+        (emagent-acp--progress
+         state
+         (format "model %s"
+                 (emagent-acp--model-display-name state models current)))
+        (emagent-acp--persist-model-id state current))
+      (emagent-acp--finish-configure-model state session-id on-ready resumed)))))
+
+;;;###autoload
+(defun emagent-set-model ()
+  "Set the ACP model for the current emagent session."
+  (interactive)
+  (let* ((state (emagent-acp--session))
+         (session-id (map-elt state :session-id))
+         (choices (emagent-acp--model-choices state nil))
+         (current (emagent-acp--current-model-id state nil))
+         (default-name (and current
+                            (emagent-acp--model-display-name state nil current)))
+         (selection (completing-read
+                     "Set emagent model: "
+                     (mapcar #'car choices)
+                     nil t nil nil
+                     (and default-name
+                          (car (seq-find (lambda (choice)
+                                           (string-prefix-p default-name (car choice)))
+                                         choices)))))
+         (model-id (cdr (assoc-string selection choices))))
+    (unless session-id
+      (user-error "No active session"))
+    (unless choices
+      (user-error "No models available"))
+    (unless model-id
+      (user-error "Unknown model: %s" selection))
+    (when (and current (string= model-id current))
+      (user-error "Model already %s"
+                  (emagent-acp--model-display-name state nil model-id)))
+    (emagent-acp--config-option-set-model-id
+     :state state
+     :session-id session-id
+     :model-id model-id)))
+
+(defun emagent-acp--notify-user (_state message)
+  "Append MESSAGE to `emagent-log-buffer-name'."
+  (emagent-log "%s" message))
+
+(defun emagent-acp--trace (format-string &rest args)
+  "Append a trace line when `emagent-acp-trace' is non-nil."
+  (when emagent-acp-trace
+    (apply #'emagent-log (cons (concat "acp: " format-string) args))))
+
+(defun emagent-acp--progress (state message)
+  "Show init stage MESSAGE in the minibuffer and refresh the mode line."
+  (emagent-acp--notify-user state (format "emagent: %s" message))
+  (emagent-acp--refresh-mode-line state))
+
+(defun emagent-acp--clear-prompt-watchdog (state)
+  "Cancel any pending prompt stall watchdog for STATE."
+  (map-put! state :prompt-watchdog nil))
+
+(defun emagent-acp--schedule-prompt-watchdog (state)
+  "Abort a prompt that stays busy without ACP progress."
+  (let ((token (cl-gensym "emagent-prompt-watchdog")))
+    (map-put! state :prompt-watchdog token)
+    (run-with-timer
+     120 nil
+     (lambda ()
+       (when (and (eq (map-elt state :prompt-watchdog) token)
+                  (map-elt state :busy))
+         (let* ((client (map-elt state :client))
+                (pending (and client (map-elt client :pending-requests))))
+           (emagent-log "emagent: prompt stalled (no ACP completion in 120s)")
+           (when pending
+             (emagent-log "emagent: pending ACP request count: %d"
+                         (length pending)))
+           (if (and (map-elt state :assistant-text)
+                    (not (string-empty-p (map-elt state :assistant-text))))
+               (progn
+                 (emagent-log "emagent: prompt stalled; finalizing partial response")
+                 (emagent-acp--complete-prompt state nil))
+             (emagent-acp--abort-prompt
+              state
+              "prompt stalled — reconnect with M-x emagent-claude-start or kill and reopen the buffer"))))))))
+
+(defun emagent-acp--stream-to-buffer-p (state)
+  "Return non-nil when agent chunks may update the chat buffer live."
+  (and emagent-acp-stream-to-buffer
+       (map-elt state :busy)
+       (not (map-elt state :prompt-finalized))
+       (not (map-elt state :prompt-finishing))))
+
+(defun emagent-acp--stream-thought-to-buffer-p (state)
+  "Return non-nil when reasoning may stream into the chat buffer live."
+  (and (memq emagent-acp-thought-progress '(buffer both))
+       (map-elt state :busy)
+       (not (map-elt state :prompt-finalized))
+       (not (map-elt state :prompt-finishing))))
+
+(defun emagent-acp--cancel-prompt-render (state)
+  "Cancel a pending debounced render for STATE."
+  (when-let ((timer (map-elt state :finish-timer)))
+    (cancel-timer timer))
+  (map-put! state :finish-timer nil)
+  (map-put! state :finish-token nil))
+
+(defun emagent-acp--schedule-prompt-render (state)
+  "Debounced render of the accumulated prompt into the chat buffer."
+  (let ((token (cl-gensym "emagent-finish")))
+    (emagent-acp--cancel-prompt-render state)
+    (map-put! state :finish-token token)
+    (map-put! state :finish-timer
+              (run-with-timer
+               emagent-acp-render-delay nil
+               (lambda ()
+                 (when (and (eq (map-elt state :finish-token) token)
+                            (map-elt state :prompt-finishing))
+                   (map-put! state :finish-timer nil)
+                   (emagent-acp--render-prompt-response state)))))))
+
+(defun emagent-acp--render-prompt-response (state)
+  "Render accumulated prompt text into the chat buffer for STATE."
+  (when (map-elt state :prompt-finishing)
+    (when-let ((buffer (emagent-acp--chat-buffer state)))
+      (condition-case err
+          (with-current-buffer buffer
+            (when (fboundp 'emagent-chat-finish-assistant)
+              (emagent-chat-finish-assistant (map-elt state :assistant-text)
+                                            (map-elt state :thought-text))))
+        (error
+         (emagent-log "emagent: finish failed: %s" (error-message-string err))
+         (with-current-buffer buffer
+           (when (fboundp 'emagent-chat-fail-assistant)
+             (emagent-chat-fail-assistant
+              (format "response finalize failed: %s"
+                      (error-message-string err))))))))
+    (map-put! state :prompt-finishing nil)
+    (map-put! state :prompt-finalized t)
+    (emagent-acp--refresh-mode-line state)
+    (when-let ((buffer (emagent-acp--chat-buffer state)))
+      (emagent-oauth-watch-assistant-text buffer (map-elt state :assistant-text))
+      (emagent-oauth-maybe-deliver-pending buffer))))
+
+(defun emagent-acp--complete-prompt (state response)
+  "Finalize the in-flight prompt for STATE and close the chat response."
+  (cond
+   ((map-elt state :prompt-finalized)
+    (when (map-elt state :busy)
+      (map-put! state :busy nil)
+      (emagent-acp--refresh-mode-line state)))
+   ((not (map-elt state :busy))
+    nil)
+   (t
+    (map-put! state :prompt-finishing t)
+    (map-put! state :busy nil)
+    (emagent-acp--clear-prompt-watchdog state)
+    (emagent-acp--trace "prompt done (%d chars, %d thought)"
+                       (length (or (map-elt state :assistant-text) ""))
+                       (length (or (map-elt state :thought-text) "")))
+    (emagent-acp--flush-thought-buffer state)
+    (when (and response (map-elt response 'usage))
+      (emagent-acp--save-usage-from-response state (map-elt response 'usage)))
+    (emagent-acp--refresh-mode-line state)
+    (emagent-acp--schedule-prompt-render state))))
+
+(defun emagent-acp--log-thought-line (mode text)
+  "Log one thought TEXT line according to MODE."
+  (let ((line (string-trim text)))
+    (unless (string-empty-p line)
+      (pcase mode
+        ('minimal
+         (emagent-log "… %s" (emagent-log-truncate-line line 80)))
+        ('trail
+         (emagent-log "… %s" (emagent-log-truncate-line line 72 t)))
+        (_ nil)))))
+
+(defun emagent-acp--clear-thought-buffer (state)
+  (map-put! state :thought-buffer ""))
+
+(defun emagent-acp--flush-thought-buffer (state)
+  "Log any trailing thought text for STATE and clear the buffer."
+  (when-let ((mode emagent-acp-thought-progress))
+    (when-let ((tail (string-trim (or (map-elt state :thought-buffer) ""))))
+      (unless (string-empty-p tail)
+        (emagent-acp--log-thought-line mode tail)))
+    (emagent-acp--clear-thought-buffer state)))
+
+(defun emagent-acp--thought-chunk (state text)
+  "Accumulate thought TEXT for display and optional logging."
+  (unless (string-empty-p text)
+    (map-put! state :thought-text
+              (concat (or (map-elt state :thought-text) "") text))
+    (when-let ((mode emagent-acp-thought-progress))
+      (when (map-elt state :prompt-finishing)
+        (emagent-acp--schedule-prompt-render state))
+      (when (memq mode '(buffer both))
+        (when (and (emagent-acp--stream-thought-to-buffer-p state)
+                   (buffer-live-p (emagent-acp--chat-buffer state)))
+          (with-current-buffer (emagent-acp--chat-buffer state)
+            (emagent-chat-append-thought text))))
+      (when (memq mode '(minimal trail both))
+        (let ((pending (concat (or (map-elt state :thought-buffer) "") text)))
+          (while (string-match "\\`\\(.+?[.!?]\\)\\(?:[[:space:]]\\|\\'\\)" pending)
+            (let ((end (match-end 0)))
+              (emagent-acp--log-thought-line
+             (if (eq mode 'both) 'minimal mode)
+             (substring pending 0 end))
+              (setq pending (substring pending end))))
+          (map-put! state :thought-buffer pending))))))
+
+(defun emagent-acp--run-reveal (reveal &optional now)
+  (when reveal
+    (if now
+        (funcall reveal)
+      (run-with-idle-timer 0 nil reveal))))
+
+(defun emagent-acp--reveal-buffer (state &optional now)
+  "Run the buffer reveal callback for STATE, if any.
+
+When NOW is non-nil, show the buffer immediately for interactive prompts."
+  (when-let ((reveal (map-elt state :on-reveal)))
+    (map-put! state :on-reveal nil)
+    (emagent-acp--run-reveal reveal now)))
+
+(defun emagent-acp--prepare-interactive-context (state)
+  "Show the chat buffer and select its window before a user prompt."
+  (emagent-acp--reveal-buffer state t)
+  (when-let ((buffer (emagent-acp--chat-buffer state)))
+    (unless (get-buffer-window buffer)
+      (pop-to-buffer buffer))
+    (when-let ((window (get-buffer-window buffer)))
+      (select-window window))))
+
+(defun emagent-acp--fail-connect (state message)
+  "Show MESSAGE, reveal the chat buffer, and stop connecting."
+  (map-put! state :ready nil)
+  (emagent-acp--notify-user state message)
+  (emagent-acp--reveal-buffer state))
+
+(defun emagent-acp--fatal-agent-error-p (message)
+  "Return non-nil when MESSAGE should abort the in-flight prompt."
+  (string-match-p "timed out\\|timeout\\|failed with status\\|ApiError\\|\\[31merror"
+                  message))
+
+(defun emagent-acp--abort-prompt (state message)
+  "Abort the in-flight prompt for STATE and show MESSAGE."
+  (when (or (map-elt state :busy) (map-elt state :prompt-finishing))
+    (emagent-acp--clear-prompt-watchdog state)
+    (emagent-acp--cancel-prompt-render state)
+    (map-put! state :busy nil)
+    (map-put! state :prompt-finishing nil)
+    (map-put! state :prompt-finalized nil)
+    (map-put! state :assistant-text "")
+    (emagent-acp--trace "prompt aborted: %s" message)
+    (emagent-acp--flush-thought-buffer state)
+    (when-let ((buffer (emagent-acp--chat-buffer state)))
+      (with-current-buffer buffer
+        (when (fboundp 'emagent-chat-fail-assistant)
+          (emagent-chat-fail-assistant message))))
+    (emagent-acp--refresh-mode-line state)))
+
+(cl-defun emagent-acp--send-request (&key state request on-success on-failure)
+  (let ((method (map-elt request :method)))
+    (emagent-acp--trace "send %s" method)
+    (acp-send-request
+     :client (map-elt state :client)
+     :request request
+     :buffer (emagent-acp--chat-buffer state)
+     :on-success
+     (lambda (response)
+       (emagent-acp--trace "recv %s ok" method)
+       (when on-success (funcall on-success response)))
+     :on-failure
+     (lambda (error raw)
+       (emagent-acp--trace "recv %s error: %s"
+                          method
+                          (or (map-elt error 'message) (format "%s" error)))
+       (when on-failure (funcall on-failure error raw))))))
+
+(defun emagent-acp--protected-fs-error (path)
+  (acp-make-error
+   :code -32603
+   :message (format "Refusing Emacs access to %s (iCloud or another app's container)"
+                    (emagent-tools--root-directory path))))
+
+(defun emagent-acp--fs-unavailable-response (method)
+  (acp-make-error
+   :code -32601
+   :message (format "%s disabled; use the external agent's project file tools"
+                    method)))
+
+(cl-defun emagent-acp--on-fs-read (&key state acp-request)
+  (let ((client (map-elt state :client))
+        (request-id (map-elt acp-request 'id))
+        (path (map-nested-elt acp-request '(params path))))
+    (if (not emagent-acp-file-access)
+        (acp-send-response
+         :client client
+         :response (acp-make-fs-read-text-file-response
+                    :request-id request-id
+                    :error (emagent-acp--fs-unavailable-response "fs/read_text_file")))
+      (if (emagent-tools--protected-fs-path-p path)
+          (acp-send-response
+           :client client
+           :response (acp-make-fs-read-text-file-response
+                      :request-id request-id
+                      :error (emagent-acp--protected-fs-error path)))
+        (condition-case err
+            (let* ((line (or (map-nested-elt acp-request '(params line)) 1))
+                   (limit (map-nested-elt acp-request '(params limit)))
+                   (content (emagent-tools--read-file-content path line limit)))
+              (acp-send-response
+               :client client
+               :response (acp-make-fs-read-text-file-response
+                          :request-id request-id
+                          :content content)))
+          (file-missing
+           (acp-send-response
+            :client client
+            :response (acp-make-fs-read-text-file-response
+                       :request-id request-id
+                       :error (acp-make-error :code -32002
+                                              :message "Resource not found"))))
+          (error
+           (acp-send-response
+            :client client
+            :response (acp-make-fs-read-text-file-response
+                       :request-id request-id
+                       :error (acp-make-error :code -32603
+                                              :message (error-message-string err))))))))))
+
+(cl-defun emagent-acp--on-fs-write (&key state acp-request)
+  (let ((client (map-elt state :client))
+        (request-id (map-elt acp-request 'id))
+        (path (map-nested-elt acp-request '(params path)))
+        (resolved (emagent-tools--root-directory
+                   (map-nested-elt acp-request '(params path)))))
+    (if (not emagent-acp-file-access)
+        (acp-send-response
+         :client client
+         :response (acp-make-fs-write-text-file-response
+                    :request-id request-id
+                    :error (emagent-acp--fs-unavailable-response "fs/write_text_file")))
+      (if (emagent-tools--protected-fs-path-p path)
+          (acp-send-response
+           :client client
+           :response (acp-make-fs-write-text-file-response
+                      :request-id request-id
+                      :error (emagent-acp--protected-fs-error path)))
+        (progn
+          (emagent-acp--prepare-interactive-context state)
+          (condition-case err
+              (if (y-or-n-p (format "Allow emagent to write %s? " resolved))
+                  (let ((written (emagent-tools--write-file-content
+                                   path (map-nested-elt acp-request '(params content)))))
+                    (emagent-acp--notify-user
+                     state (format "emagent: wrote %s (C-/ to undo in that buffer)"
+                                   written))
+                    (acp-send-response
+                     :client client
+                     :response (acp-make-fs-write-text-file-response
+                                :request-id request-id)))
+                (acp-send-response
+                 :client client
+                 :response (acp-make-fs-write-text-file-response
+                            :request-id request-id
+                            :error (acp-make-error :code -32603
+                                                   :message "Write denied by user"))))
+            (error
+             (acp-send-response
+              :client client
+              :response (acp-make-fs-write-text-file-response
+                         :request-id request-id
+                         :error (acp-make-error :code -32603
+                                                :message (error-message-string err)))))))))))
+
+(defun emagent-acp--permission-option-id (options)
+  "Return a permissive option id from OPTIONS."
+  (let ((prefer '("allow_once" "allow-once" "allow_always" "allow-always" "allow" "yes")))
+    (or (map-elt (seq-find (lambda (opt)
+                             (let ((id (map-elt opt 'optionId)))
+                               (and id (member id prefer))))
+                           options)
+                'optionId)
+        (map-elt (car options) 'optionId))))
+
+(cl-defun emagent-acp--on-permission (&key state acp-request)
+  (let* ((options (map-nested-elt acp-request '(params options)))
+         (title (or (map-nested-elt acp-request '(params toolCall title))
+                    (map-nested-elt acp-request '(params title))
+                    "Permission request"))
+         (choice
+          (if emagent-acp-auto-approve-permissions
+              (emagent-acp--permission-option-id options)
+            (progn
+              (emagent-acp--prepare-interactive-context state)
+              (completing-read
+               (format "emagent: %s " title)
+               (mapcar (lambda (opt)
+                         (cons (or (map-elt opt 'name) (map-elt opt 'optionId))
+                               (map-elt opt 'optionId)))
+                       (append options nil))
+               nil t)))))
+    (acp-send-response
+     :client (map-elt state :client)
+     :response (acp-make-session-request-permission-response
+                :request-id (map-elt acp-request 'id)
+                :option-id choice))))
+
+(cl-defun emagent-acp--on-request (&key state acp-request)
+  (pcase (map-elt acp-request 'method)
+    ("fs/read_text_file"
+     (emagent-acp--on-fs-read :state state :acp-request acp-request))
+    ("fs/write_text_file"
+     (emagent-acp--on-fs-write :state state :acp-request acp-request))
+    ("session/request_permission"
+     (emagent-acp--on-permission :state state :acp-request acp-request))
+    (_
+     (acp-send-response
+      :client (map-elt state :client)
+      :response `((:request-id . ,(map-elt acp-request 'id))
+                  (:error . ,(acp-make-error
+                              :code -32601
+                              :message (format "Unsupported method: %s"
+                                               (map-elt acp-request 'method)))))))))
+
+(defun emagent-acp--trace-update (update-type acp-notification)
+  "Log UPDATE-TYPE and a short payload summary when tracing."
+  (let ((text (or (map-nested-elt acp-notification '(params update content text)) ""))
+        (title (map-nested-elt acp-notification '(params update title))))
+    (pcase update-type
+      ((or "agent_message_chunk" "agent_thought_chunk")
+       (emagent-acp--trace "recv %s +%d" update-type (length text)))
+      ("tool_call"
+       (emagent-acp--trace "recv tool_call %s"
+                          (or title
+                              (map-nested-elt acp-notification '(params update toolCallId))
+                              "running")))
+      (_
+       (emagent-acp--trace "recv %s" (or update-type "session/update"))))))
+
+(cl-defun emagent-acp--on-notification (&key state acp-notification)
+  (when (equal (map-elt acp-notification 'method) "session/update")
+    (let ((update-type (map-nested-elt acp-notification '(params update sessionUpdate))))
+      (emagent-acp--trace-update update-type acp-notification)
+      (pcase update-type
+        ("agent_message_chunk"
+         (let ((text (or (map-nested-elt acp-notification '(params update content text)) "")))
+           (unless (map-elt state :replaying-history)
+             (map-put! state :assistant-text (concat (map-elt state :assistant-text) text))
+             (when (map-elt state :prompt-finishing)
+               (emagent-acp--schedule-prompt-render state))
+             (when (and (emagent-acp--stream-to-buffer-p state)
+                        (buffer-live-p (emagent-acp--chat-buffer state)))
+               (with-current-buffer (emagent-acp--chat-buffer state)
+                 (emagent-chat-append-assistant text)))
+             (when-let ((buffer (emagent-acp--chat-buffer state)))
+               (emagent-oauth-watch-assistant-text
+                buffer (map-elt state :assistant-text))))))
+        ("agent_thought_chunk"
+         (let ((text (or (map-nested-elt acp-notification '(params update content text)) "")))
+           (emagent-acp--thought-chunk state text)))
+        ("tool_call"
+         (let ((title (map-nested-elt acp-notification '(params update title))))
+           (emagent-acp--notify-user state (format "emagent: tool %s" (or title "running")))
+           (emagent-acp--schedule-prompt-watchdog state)))
+        ("config_option_update"
+         (emagent-acp--save-config-options
+          state
+          (map-nested-elt acp-notification '(params update configOptions)))
+         (when-let ((model-id (emagent-acp--current-model-id state nil)))
+           (emagent-acp--persist-model-id state model-id)))
+        ("usage_update"
+         (emagent-acp--update-usage-from-notification
+          state
+          (map-nested-elt acp-notification '(params update))))
+        ("available_commands_update"
+         (let ((commands (map-nested-elt acp-notification
+                                       '(params update availableCommands))))
+           (when-let ((buffer (emagent-acp--chat-buffer state)))
+             (with-current-buffer buffer
+               (emagent-chat-set-slash-commands commands)))))
+        (_ nil)))))
+
+(cl-defun emagent-acp--subscribe (&key state)
+  (let ((buffer (emagent-acp--chat-buffer state)))
+    (acp-subscribe-to-errors
+     :client (map-elt state :client)
+     :buffer buffer
+     :on-error
+     (lambda (acp-error)
+       (let ((message (or (map-elt acp-error 'message)
+                          (format "%s" acp-error))))
+         (emagent-acp--log-agent-stderr message)
+         (when (and (map-elt state :busy)
+                    (emagent-acp--fatal-agent-error-p message))
+           (emagent-acp--abort-prompt state message))
+         (when (emagent-acp--stderr-notify-p acp-error)
+           (emagent-acp--notify-user state (format "emagent error: %s" message))))))
+    (acp-subscribe-to-notifications
+     :client (map-elt state :client)
+     :buffer buffer
+     :on-notification
+     (lambda (notification)
+       (emagent-acp--on-notification :state state
+                                    :acp-notification notification)))
+    (acp-subscribe-to-requests
+     :client (map-elt state :client)
+     :buffer buffer
+     :on-request
+     (lambda (request)
+       (emagent-acp--on-request :state state :acp-request request)))))
+
+(cl-defun emagent-acp--initialize (&key state on-ready)
+  (emagent-acp--progress state "initializing ACP…")
+  (emagent-acp--send-request
+   :state state
+   :request (if emagent-acp-file-access
+               (acp-make-initialize-request
+                :protocol-version 1
+                :client-info `((name . "emagent")
+                               (title . "Emacs Emagent")
+                               (version . "0.1.0"))
+                :read-text-file-capability t
+                :write-text-file-capability t)
+             (acp-make-initialize-request
+              :protocol-version 1
+              :client-info `((name . "emagent")
+                             (title . "Emacs Emagent")
+                             (version . "0.1.0"))))
+   :on-success (lambda (response)
+                 (map-put! state :initialized t)
+                 (map-put! state :mcp-http (emagent-acp--mcp-http-capable-p response))
+                 (emagent-acp--connect-session :state state :on-ready on-ready))
+   :on-failure (lambda (error _raw)
+                 (emagent-acp--fail-connect
+                  state
+                  (format "emagent: initialize failed: %s"
+                          (or (map-elt error 'message) (format "%s" error)))))))
+
+(defun emagent-acp--mcp-http-capable-p (initialize-response)
+  "Return non-nil when INITIALIZE-RESPONSE advertises http MCP support."
+  (let ((value (map-nested-elt initialize-response
+                               '(agentCapabilities mcpCapabilities http))))
+    (and value (not (eq value :false)) (not (eq value :json-false)))))
+
+(defun emagent-acp--kv-array (object)
+  "Convert OBJECT (an alist of KEY . VALUE) to an ACP [{name,value}] vector.
+
+ACP expresses headers and env as arrays of name/value objects rather than as
+JSON objects, so a Claude-style `{\"K\": \"V\"}' block is reshaped here."
+  (vconcat
+   (mapcar (lambda (pair)
+             `((name . ,(let ((k (car pair)))
+                          (if (symbolp k) (symbol-name k) k)))
+               (value . ,(cdr pair))))
+           object)))
+
+(defun emagent-acp--convert-mcp-entry (name cfg)
+  "Convert a config-file MCP entry NAME/CFG to an ACP mcpServer alist.
+
+NAME is a string; CFG is the parsed alist from the file's `mcpServers' block.
+Returns nil when CFG lacks the fields its transport needs."
+  (let ((type (or (map-elt cfg 'type)
+                  (and (map-elt cfg 'url) "http"))))
+    (pcase type
+      ((or "http" "sse")
+       (when (map-elt cfg 'url)
+         `((type . ,type)
+           (name . ,name)
+           (url . ,(map-elt cfg 'url))
+           (headers . ,(emagent-acp--kv-array (map-elt cfg 'headers))))))
+      (_
+       (when (map-elt cfg 'command)
+         `((type . "stdio")
+           (name . ,name)
+           (command . ,(map-elt cfg 'command))
+           (args . ,(vconcat (map-elt cfg 'args)))
+           (env . ,(emagent-acp--kv-array (map-elt cfg 'env)))))))))
+
+(defun emagent-acp--config-file-mcp-servers ()
+  "Return ACP mcpServer specs read from `emagent-acp-extra-mcp-config-file'.
+
+Parses the file's top-level `mcpServers' object and converts each entry to
+ACP's schema.  The emagent server itself is skipped to avoid duplication.
+Returns nil (with a message) when the file is missing or unreadable."
+  (when-let* ((file emagent-acp-extra-mcp-config-file)
+              (path (expand-file-name file))
+              ((file-readable-p path)))
+    (condition-case err
+        (let* ((data (with-temp-buffer
+                       (insert-file-contents path)
+                       (json-parse-buffer :object-type 'alist
+                                          :array-type 'list
+                                          :null-object nil
+                                          :false-object :false)))
+               (servers (map-elt data 'mcpServers)))
+          (delq nil
+                (mapcar (lambda (pair)
+                          (let ((name (symbol-name (car pair))))
+                            (unless (equal name emagent-mcp-server-name)
+                              (emagent-acp--convert-mcp-entry name (cdr pair)))))
+                        servers)))
+      (error
+       (emagent-log "could not read MCP servers from %s: %s"
+                   path (error-message-string err))
+       nil))))
+
+(defun emagent-acp--mcp-servers (state)
+  "Return the mcpServers vector to advertise for STATE, or nil.
+
+Only agents that advertise http MCP support (e.g. Claude) get the in-Emacs
+server via ACP; Cursor is wired through its own ~/.cursor/mcp.json instead.
+Any servers from `emagent-acp-extra-mcp-config-file' are forwarded too."
+  (when (map-elt state :mcp-http)
+    (with-current-buffer (emagent-acp--chat-buffer state)
+      (let* ((url (emagent-mcp-session-url (emagent-mcp-buffer-token)))
+             (emagent-server `((type . "http")
+                              (name . ,emagent-mcp-server-name)
+                              (url . ,url)
+                              (headers . [])))
+             (extra (emagent-acp--config-file-mcp-servers)))
+        (vconcat (list emagent-server) extra)))))
+
+(cl-defun emagent-acp--session-ready (&key state session-id on-ready resumed)
+  (map-put! state :session-id session-id)
+  (map-put! state :ready t)
+  (emagent-acp--persist-session-id state session-id)
+  (emagent-tools-set-project-directory (emagent-acp--session-cwd state))
+  (emagent-acp--progress state (if resumed "resumed" "connected"))
+  (when-let ((buffer (emagent-acp--chat-buffer state)))
+    (with-current-buffer buffer
+      (when (and (eq emagent-chat-provider 'claude)
+                 (null emagent-chat-slash-commands))
+        (emagent-log "loading slash commands from agent…"))))
+  (emagent-acp--reveal-buffer state)
+  (when on-ready (funcall on-ready)))
+
+(cl-defun emagent-acp--new-session (&key state on-ready)
+  (emagent-acp--progress state "creating session…")
+  (emagent-acp--send-request
+   :state state
+   :request (acp-make-session-new-request
+             :cwd (emagent-acp--session-cwd state)
+             :mcp-servers (emagent-acp--mcp-servers state)
+             :meta `((systemPrompt . ((append . ,(emagent-acp--system-prompt))))))
+   :on-success (lambda (response)
+                 (emagent-acp--configure-model
+                  :state state
+                  :session-id (map-elt response 'sessionId)
+                  :response response
+                  :on-ready on-ready))
+   :on-failure (lambda (error _raw)
+                 (emagent-acp--fail-connect
+                  state
+                  (format "emagent: session/new failed: %s"
+                          (or (map-elt error 'message) (format "%s" error)))))))
+
+(cl-defun emagent-acp--load-session (&key state session-id on-ready)
+  (emagent-acp--progress state "resuming session…")
+  (map-put! state :replaying-history t)
+  (emagent-acp--send-request
+   :state state
+   :request (acp-make-session-load-request
+             :session-id session-id
+             :cwd (emagent-acp--session-cwd state)
+             :mcp-servers (emagent-acp--mcp-servers state))
+   :on-success (lambda (response)
+                 (map-put! state :replaying-history nil)
+                 (emagent-acp--configure-model
+                  :state state
+                  :session-id session-id
+                  :response response
+                  :on-ready on-ready
+                  :resumed t))
+   :on-failure (lambda (_error _raw)
+                 (map-put! state :replaying-history nil)
+                 (emagent-acp--progress state "resume failed, creating session…")
+                 (with-current-buffer (emagent-acp--chat-buffer state)
+                   (emagent-chat-clear-session-id))
+                 (emagent-acp--new-session :state state :on-ready on-ready))))
+
+(cl-defun emagent-acp--connect-session (&key state on-ready)
+  (emagent-acp--progress state "connecting session…")
+  (let ((saved (emagent-acp--saved-session-id state)))
+    (if (and saved (not (string-empty-p saved)))
+        (emagent-acp--load-session :state state :session-id saved :on-ready on-ready)
+      (emagent-acp--new-session :state state :on-ready on-ready))))
+
+(cl-defun emagent-acp-start (&key client chat-buffer on-ready on-reveal)
+  "Start an emagent ACP session in CHAT-BUFFER.
+
+ON-REVEAL is called once when the chat buffer should be shown, including
+after connection failures."
+  (when (and emagent-acp-prefer-emacs (not emagent-acp-file-access))
+    (emagent-log "prefer-Emacs mode works best with `emagent-acp-file-access'"))
+  (when emagent-acp-trace
+    (setq acp-logging-enabled t))
+  (unless (and (boundp 'emagent-acp-compat--installed)
+               emagent-acp-compat--installed)
+    (require 'emagent-acp-compat))
+  (when (and (boundp 'emagent-acp-compat--installed)
+             emagent-acp-compat--installed)
+    (emagent-log "emagent: ACP queue workaround active"))
+  (with-current-buffer chat-buffer
+    (emagent-chat-clear-slash-commands)
+    (setq emagent-acp--session (emagent-acp--make-state :client client
+                                                       :chat-buffer chat-buffer
+                                                       :on-reveal on-reveal))
+    (emagent-mcp-register-session :token (emagent-mcp-buffer-token)
+                                 :cwd (emagent-chat--session-directory)
+                                 :buffer chat-buffer
+                                 :prefer-emacs emagent-acp-prefer-emacs)
+    (emagent-acp--progress emagent-acp--session "starting agent…")
+    (emagent-acp--subscribe :state emagent-acp--session)
+    (emagent-acp--initialize :state emagent-acp--session :on-ready on-ready)
+    emagent-acp--session))
+
+(defun emagent-acp-attach-context (text)
+  "Attach TEXT to the next prompt in the current buffer."
+  (let ((state (emagent-acp--session)))
+    (map-put! state :extra-context
+              (append (or (map-elt state :extra-context) nil) (list text)))))
+
+(defun emagent-acp-send-prompt (user-text)
+  "Send USER-TEXT to the current buffer's ACP session."
+  (let* ((state (emagent-acp--session))
+         (session-id (map-elt state :session-id)))
+    (unless (map-elt state :ready)
+      (user-error "Emagent is still connecting"))
+    (when (map-elt state :busy)
+      (user-error "Emagent is busy"))
+    (let* ((extra (map-elt state :extra-context))
+           (prompt (emagent-context-build-prompt user-text extra))
+           (blocks `[((type . "text") (text . ,(substring-no-properties prompt)))]))
+      (map-put! state :extra-context nil)
+      (map-put! state :busy t)
+      (map-put! state :assistant-text "")
+      (map-put! state :thought-text "")
+      (map-put! state :prompt-finalized nil)
+      (map-put! state :prompt-finishing nil)
+      (emagent-acp--cancel-prompt-render state)
+      (emagent-acp--clear-thought-buffer state)
+      (emagent-acp--schedule-prompt-watchdog state)
+      (emagent-acp--send-request
+       :state state
+       :request (acp-make-session-prompt-request :session-id session-id :prompt blocks)
+       :on-success
+       (lambda (response)
+         (emagent-acp--complete-prompt state response))
+       :on-failure
+       (lambda (error _raw)
+         (let ((message (or (map-elt error 'message) (format "%s" error))))
+           (emagent-acp--abort-prompt state (format "prompt failed: %s" message))
+           (emagent-acp--notify-user state (format "emagent: prompt failed: %s" message))))))))
+
+(defun emagent-acp-shutdown-buffer ()
+  "Shut down the ACP session for the current buffer."
+  (emagent-chat-clear-slash-commands)
+  (emagent-oauth-shutdown-buffer (current-buffer))
+  (when emagent-mcp--token
+    (emagent-mcp-deregister-session emagent-mcp--token))
+  (when-let* ((state emagent-acp--session)
+              (client (map-elt state :client)))
+    (acp-shutdown :client client)
+    (setq emagent-acp--session nil)))
+
+(defun emagent-acp-shutdown ()
+  "Shut down the ACP session for the current buffer."
+  (emagent-acp-shutdown-buffer))
+
+(provide 'emagent-acp)
+
+;;; emagent-acp.el ends here

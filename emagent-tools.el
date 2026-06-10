@@ -1,0 +1,555 @@
+;;; emagent-tools.el --- Emacs tool handlers for emagent -*- lexical-binding: t; -*-
+
+;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Version: 0.1.0
+;; Package-Requires: ((emacs "29.1"))
+
+;;; Code:
+
+(eval-when-compile
+  (require 'cl-lib))
+
+(require 'org)
+(require 'org-element)
+
+;; Declared special so binding it to suppress auto-insert is a dynamic binding.
+(defvar auto-insert)
+
+(declare-function magit-diff-buffer-file "magit-diff")
+(declare-function magit-toplevel "magit-git")
+
+(defgroup emagent-tools nil
+  "Emacs tool handlers for emagent."
+  :group 'emagent)
+
+(defcustom emagent-allowed-tools nil
+  "Symbols naming tools that may run without confirmation."
+  :type '(repeat symbol)
+  :group 'emagent-tools)
+
+(defcustom emagent-tools-eval-blocked-symbols
+  '(delete-file delete-directory
+    rename-file rename-directory
+    shell-command shell-command-to-string
+    call-process start-process start-file-process process-file
+    kill-emacs pause-emacs
+    write-region write-file insert-file-contents
+    load load-file load-library)
+  "Symbols refused by `emagent-tool-eval'; use a dedicated emagent-tool-*."
+  :type '(repeat symbol)
+  :group 'emagent-tools)
+
+(defcustom emagent-tools-eval-dangerous-symbols
+  '(copy-file copy-directory kill-buffer kill-buffer-and-save)
+  "Symbols in `emagent-tool-eval' that require an extra confirmation prompt."
+  :type '(repeat symbol)
+  :group 'emagent-tools)
+
+(defvar emagent-tools--project-directory nil
+  "Project directory for the active emagent session.")
+
+(defvar emagent-tools--root-boundary nil
+  "When non-nil, the absolute directory emagent file tools must stay within.
+
+Bound per session by the emagent MCP dispatcher so a tool call cannot reach
+outside the session's project root.  Nil disables the check (the historical
+behaviour for non-MCP call sites).")
+
+(defun emagent-tools-set-project-directory (directory)
+  "Set the project directory used by emagent-tool-* when PATH is omitted."
+  (setq emagent-tools--project-directory
+        (and directory (expand-file-name directory))))
+
+(defun emagent-tools--within-boundary-p (resolved)
+  "Return non-nil when RESOLVED is inside `emagent-tools--root-boundary'."
+  (or (null emagent-tools--root-boundary)
+      (let ((root (file-name-as-directory
+                   (expand-file-name emagent-tools--root-boundary))))
+        (or (string-prefix-p root (file-name-as-directory resolved))
+            (string= (directory-file-name resolved)
+                     (directory-file-name root))))))
+
+(defun emagent-tools--root-directory (path)
+  "Return PATH resolved against the active emagent session project directory.
+
+A relative PATH is resolved against the session project directory (not the
+process `default-directory'), and an omitted PATH yields that directory.
+Signal an error when the result escapes `emagent-tools--root-boundary'."
+  (let* ((base (or emagent-tools--project-directory default-directory))
+         (resolved (expand-file-name (or path base) base)))
+    (unless (emagent-tools--within-boundary-p resolved)
+      (user-error "Path %s is outside the session root %s"
+                  resolved emagent-tools--root-boundary))
+    resolved))
+
+(defun emagent-tool-project-directory ()
+  "Return the emagent session project directory as a string."
+  (emagent-tools--root-directory nil))
+
+(defvar emagent-tools--session-allowed-tools nil
+  "Tools allowed without confirmation for the current session only.
+
+Bound by the MCP dispatcher from the chat buffer's persisted allow-list so a
+per-document choice (see `emagent-tools-allow-all-function') is honoured on the
+next call without touching the global `emagent-allowed-tools'.")
+
+(defvar emagent-tools-allow-all-function nil
+  "Function of one tool symbol, called when the user chooses \"allow all\".
+
+Bound by the MCP dispatcher to persist the choice for the session (emagent
+writes it to the chat buffer's =#+EMAGENT_ALLOWED_TOOLS= header).  Nil means the
+choice only lasts for the current call.")
+
+(defconst emagent-tools--permission-choices
+  '((?y "yes" "Allow this call only")
+    (?a "allow all" "Always allow this tool; save it to the document header")
+    (?n "no" "Decline this call"))
+  "Choices offered when confirming an emagent tool call.")
+
+(defun emagent-tools--read-permission (prompt)
+  "Ask the user PROMPT and return `yes', `all', or `no'."
+  (pcase (car (read-multiple-choice prompt emagent-tools--permission-choices))
+    (?y 'yes)
+    (?a 'all)
+    (_ 'no)))
+
+(defun emagent-tools--remember-allowed-tool (tool-name)
+  "Record TOOL-NAME as allowed for this session and persist it when possible."
+  (unless (memq tool-name emagent-tools--session-allowed-tools)
+    (push tool-name emagent-tools--session-allowed-tools))
+  (when (functionp emagent-tools-allow-all-function)
+    (funcall emagent-tools-allow-all-function tool-name)))
+
+(defun emagent-tools--allowed-p (tool-name)
+  "Return non-nil when TOOL-NAME is allowed without confirmation."
+  (or (memq tool-name emagent-allowed-tools)
+      (memq tool-name emagent-tools--session-allowed-tools)))
+
+(defun emagent-tools--confirm (tool-name prompt)
+  "Return non-nil when TOOL-NAME may run, prompting with PROMPT if needed.
+
+Offers yes / allow all / no; \"allow all\" remembers TOOL-NAME for the session
+and persists it via `emagent-tools-allow-all-function'."
+  (or (emagent-tools--allowed-p tool-name)
+      (pcase (emagent-tools--read-permission prompt)
+        ('yes t)
+        ('all (emagent-tools--remember-allowed-tool tool-name) t)
+        (_ nil))))
+
+(defun emagent-tools--confirm-p (tool-name)
+  "Return non-nil when TOOL-NAME may run without confirmation."
+  (emagent-tools--confirm tool-name (format "Run emagent tool %s? " tool-name)))
+
+(defun emagent-tools--confirm-action-p (tool-name detail)
+  "Like `emagent-tools--confirm-p' but include DETAIL in the prompt."
+  (emagent-tools--confirm
+   tool-name (format "Allow emagent tool %s: %s? " tool-name detail)))
+
+(defun emagent-tools--symbols-in-form (form symbols)
+  "Return symbols from SYMBOLS found anywhere in FORM."
+  (let (found stack)
+    (setq stack (list form))
+    (while stack
+      (let ((sexp (pop stack)))
+        (when sexp
+          (if (memq sexp symbols)
+              (push sexp found)
+            (when (consp sexp)
+              (push (cdr sexp) stack)
+              (push (car sexp) stack))))))
+    (delete-dups found)))
+
+(defcustom emagent-tools-show-written-buffer 'magit-diff
+  "How to reveal a file after emagent writes it.
+
+nil        — do nothing
+t          — display the buffer
+magit-diff — run `magit-diff-buffer-file' (falls back to `display-buffer'
+             when magit is unavailable or the file is outside a git repo)"
+  :type '(choice (const :tag "Don't show" nil)
+                 (const :tag "Display buffer" t)
+                 (const :tag "Magit diff" magit-diff))
+  :group 'emagent-tools)
+
+(defconst emagent-tools--icloud-dir
+  (expand-file-name "~/Library/Mobile Documents/"))
+
+(defconst emagent-tools--containers-dir
+  (expand-file-name "~/Library/Containers/"))
+
+(defconst emagent-tools--group-containers-dir
+  (expand-file-name "~/Library/Group Containers/"))
+
+(defun emagent-tools--protected-fs-path-p (path)
+  "Return non-nil when PATH must not be accessed via Emacs on macOS."
+  (let ((resolved (file-truename (emagent-tools--root-directory path))))
+    (or (string-prefix-p emagent-tools--icloud-dir resolved)
+        (string-prefix-p emagent-tools--containers-dir resolved)
+        (string-prefix-p emagent-tools--group-containers-dir resolved))))
+
+(defun emagent-tools--file-buffer (path)
+  "Return a buffer visiting PATH, visiting it if the file exists."
+  (let ((resolved (emagent-tools--root-directory path)))
+    (or (find-buffer-visiting resolved)
+        (when (file-exists-p resolved)
+          (find-file-noselect resolved)))))
+
+(defun emagent-tools--extract-buffer-text (buffer &optional line limit)
+  "Return text from BUFFER starting at LINE for LIMIT lines."
+  (with-current-buffer buffer
+    (save-restriction
+      (widen)
+      (save-excursion
+        (goto-char (point-min))
+        (when (and line (> line 1))
+          (forward-line (1- line)))
+        (let ((start (point)))
+          (if limit
+              (forward-line limit)
+            (goto-char (point-max)))
+          (buffer-substring-no-properties start (point)))))))
+
+(defun emagent-tools--read-file-content (path &optional line limit)
+  "Read PATH through Emacs, including unsaved buffer contents."
+  (let* ((resolved (emagent-tools--root-directory path))
+         (buffer (find-buffer-visiting resolved)))
+    (if buffer
+        (emagent-tools--extract-buffer-text buffer line limit)
+      (with-temp-buffer
+        (insert-file-contents resolved)
+        (emagent-tools--extract-buffer-text (current-buffer) line limit)))))
+
+(defun emagent-tool-read-file (path &optional line limit)
+  "Return contents of PATH as a string."
+  (when (emagent-tools--protected-fs-path-p path)
+    (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
+                (emagent-tools--root-directory path)))
+  (emagent-tools--read-file-content path line limit))
+
+(defun emagent-tools--write-file-content (path content)
+  "Write CONTENT to PATH through an Emacs buffer.
+Each call is recorded as a single undoable change in the target buffer."
+  (let* ((resolved (emagent-tools--root-directory path))
+         (dir (file-name-directory resolved))
+         (buffer (or (find-buffer-visiting resolved)
+                     (let ((auto-insert nil))
+                       (find-file-noselect resolved)))))
+    (when (and dir (not (file-exists-p dir)))
+      (make-directory dir t))
+    (with-temp-buffer
+      (insert content)
+      (let ((content-buffer (current-buffer))
+            (inhibit-read-only t))
+        (with-current-buffer buffer
+          (save-restriction
+            (widen)
+            (undo-boundary)
+            (replace-buffer-contents content-buffer 1.0)
+            (undo-boundary))
+          (basic-save-buffer))))
+    (pcase emagent-tools-show-written-buffer
+      ('magit-diff
+       (with-current-buffer buffer
+         (if (and (fboundp 'magit-diff-buffer-file) (magit-toplevel))
+             (magit-diff-buffer-file)
+           (display-buffer buffer))))
+      ((pred identity)
+       (display-buffer buffer)))
+    resolved))
+
+(defun emagent-tool-write-file (path content)
+  "Write CONTENT to PATH through Emacs after user confirmation."
+  (let ((resolved (emagent-tools--root-directory path)))
+    (when (emagent-tools--protected-fs-path-p path)
+      (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
+                  resolved))
+    (emagent-tools--write-file-content path content)
+    (format "Wrote %s" resolved)))
+
+(defun emagent-tools--with-stdout (fn)
+  "Capture stdout from FN and return it as a string."
+  (with-output-to-string
+    (princ (funcall fn))))
+
+(defun emagent-tool-describe-symbol (symbol)
+  "Return documentation for SYMBOL as a string."
+  (let ((symbol (if (stringp symbol) (intern symbol) symbol)))
+    (cond
+     ((fboundp symbol)
+      (emagent-tools--with-stdout
+       (lambda ()
+         (describe-function symbol)
+         (with-current-buffer (help-buffer)
+           (buffer-string)))))
+     ((boundp symbol)
+      (emagent-tools--with-stdout
+       (lambda ()
+         (describe-variable symbol)
+         (with-current-buffer (help-buffer)
+           (buffer-string)))))
+     (t
+      (format "No function or variable named %s" symbol)))))
+
+(defun emagent-tool-where-is (command)
+  "Return key bindings for COMMAND as a string."
+  (let ((command (if (stringp command) (intern-soft command) command)))
+    (if (commandp command)
+        (emagent-tools--with-stdout
+         (lambda ()
+           (where-is command)
+           (with-current-buffer (help-buffer)
+             (buffer-string))))
+      (format "Unknown command: %s" command))))
+
+(defconst emagent-tools--apropos-max-results 100)
+
+(defun emagent-tool-apropos (pattern)
+  "Return Emacs symbols matching PATTERN, one per line.
+Use to discover functions and variables before calling them."
+  (let* ((regexp (if (stringp pattern) pattern (format "%s" pattern)))
+         (matches (apropos-internal regexp)))
+    (if matches
+        (string-join
+         (mapcar #'symbol-name
+                 (seq-take (sort matches #'string-lessp)
+                           emagent-tools--apropos-max-results))
+         "\n")
+      "No matches")))
+
+(defun emagent-tool-find-function (symbol)
+  "Return the source location of SYMBOL as a string."
+  (let ((symbol (if (stringp symbol) (intern-soft symbol) symbol)))
+    (if (and symbol (fboundp symbol))
+        (emagent-tools--with-stdout
+         (lambda ()
+           (find-function symbol)
+           (with-current-buffer (help-buffer)
+             (buffer-string))))
+      (format "No function named %s" symbol))))
+
+(defun emagent-tool-eval (form)
+  "Evaluate Emacs Lisp FORM and return the result as a string.
+Use this for small utilities and text processing — not Python or shell.
+Blocked symbols must go through dedicated emagent-tool-* helpers."
+  (interactive)
+  (let* ((form (if (stringp form) (read form) form))
+         (blocked (emagent-tools--symbols-in-form form emagent-tools-eval-blocked-symbols))
+         (dangerous (emagent-tools--symbols-in-form form emagent-tools-eval-dangerous-symbols)))
+    (when blocked
+      (user-error
+       "Eval blocked (%s). Use emagent-tool-write-file, emagent-tool-delete-file, etc."
+       (mapconcat #'symbol-name blocked ", ")))
+    (when dangerous
+      (unless (y-or-n-p
+               (format "Eval contains sensitive ops (%s)? "
+                       (mapconcat #'symbol-name dangerous ", ")))
+        (user-error "Eval cancelled")))
+    (condition-case err
+        (let ((result (eval form)))
+          (if (null result)
+              "nil"
+            (prin1-to-string result)))
+      (error
+       (format "Eval error: %s" (error-message-string err))))))
+
+(defun emagent-tool-org-element ()
+  "Return structured org element at point as a string."
+  (if (derived-mode-p 'org-mode)
+      (let* ((element (org-element-at-point))
+             (type (org-element-type element))
+             (props (cond
+                     ((eq type 'headline)
+                      `((type . headline)
+                        (title . ,(org-element-property :raw-value element))
+                        (level . ,(org-element-property :level element))
+                        (tags . ,(org-element-property :tags element))))
+                     ((eq type 'paragraph)
+                      `((type . paragraph)
+                        (contents . ,(org-element-contents element))))
+                     (t
+                      `((type . ,type)
+                        (properties . ,element))))))
+        (prin1-to-string props))
+    "Not in org-mode"))
+
+(defconst emagent-tools--grep-max-results 50)
+
+(defun emagent-tools--grep-emacs (regexp root max)
+  "Search REGEXP under ROOT in Emacs, returning at most MAX lines."
+  (let ((lines nil)
+        (matches 0))
+    (dolist (file (directory-files-recursively root "[^.].*" nil t))
+      (when (< matches max)
+        (unless (string-match-p "/\\.git/" file)
+          (with-temp-buffer
+            (condition-case nil
+                (progn
+                  (insert-file-contents file)
+                  (goto-char (point-min))
+                  (while (and (< matches max)
+                              (re-search-forward regexp nil t))
+                    (push (format "%s:%s:%s"
+                                  (file-relative-name file root)
+                                  (line-number-at-pos)
+                                  (string-trim (buffer-substring-no-properties
+                                                (line-beginning-position)
+                                                (line-end-position))))
+                          lines)
+                    (setq matches (1+ matches))))
+              (file-missing nil))))))
+    (if lines
+        (string-join (nreverse lines) "\n")
+      "No matches")))
+
+(defconst emagent-tools--shell-output-limit 100000)
+
+(defun emagent-tool-undo-file (path &optional steps)
+  "Undo STEPS edits in PATH and save.
+Use to revert `emagent-tool-write-file' changes."
+  (let* ((resolved (emagent-tools--root-directory path))
+         (steps (max 1 (or steps 1)))
+         (buffer (emagent-tools--file-buffer path))
+         (done 0))
+    (unless buffer
+      (user-error "No buffer for %s" resolved))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (dotimes (_ steps)
+          (if (null (undo))
+              (user-error "Only %d undo step(s) available in %s" done resolved)
+            (setq done (1+ done))))
+        (when (buffer-file-name)
+          (basic-save-buffer))))
+    (format "Undid %d change(s) in %s" done resolved)))
+
+(defun emagent-tool-delete-file (path)
+  "Delete PATH after user confirmation."
+  (let ((resolved (emagent-tools--root-directory path)))
+    (delete-file resolved t)
+    (format "Deleted %s" resolved)))
+
+(defun emagent-tool-delete-directory (path &optional recursive)
+  "Delete directory PATH after user confirmation.
+When RECURSIVE is non-nil, delete contents as well."
+  (let ((resolved (emagent-tools--root-directory path)))
+    (delete-directory resolved recursive)
+    (format "Deleted %s" resolved)))
+
+(declare-function emagent-shell-run-command "emagent-shell")
+
+(defun emagent-tool-run-shell-command (command &optional directory)
+  "Run COMMAND in DIRECTORY through Emacs, not an agent terminal."
+  (require 'emagent-shell)
+  (emagent-shell-run-command command directory))
+
+(defun emagent-tool-grep (pattern &optional path)
+  "Search for PATTERN under PATH and return matching lines as a string.
+Uses pure Emacs search when `emagent-acp-prefer-emacs' is non-nil."
+  (let* ((root (emagent-tools--root-directory path))
+         (regexp (if (stringp pattern) pattern (format "%s" pattern))))
+    (if (and (boundp 'emagent-acp-prefer-emacs) emagent-acp-prefer-emacs)
+        (emagent-tools--grep-emacs regexp root emagent-tools--grep-max-results)
+      (if (executable-find "rg")
+          (with-temp-buffer
+            (let ((default-directory root))
+              (call-process
+               "rg" nil t nil "--no-heading" "--line-number"
+               "--max-count" (number-to-string emagent-tools--grep-max-results)
+               "--hidden" "--glob" "!/.git/*"
+               regexp "."))
+            (buffer-string))
+        (emagent-tools--grep-emacs regexp root emagent-tools--grep-max-results)))))
+
+(defun emagent-tool-list-files (&optional path)
+  "List files under PATH relative to PATH, one per line."
+  (let ((root (emagent-tools--root-directory path)))
+    (string-join
+     (mapcar (lambda (file)
+               (file-relative-name file root))
+             (seq-filter
+              (lambda (file)
+                (not (string-match-p "/\\.git/" file)))
+              (directory-files-recursively root "[^.].*" nil t)))
+     "\n")))
+
+(defun emagent-tools--glob-to-regexp (glob)
+  "Convert a simple shell GLOB to a regexp."
+  (let ((parts nil)
+        (i 0)
+        (len (length glob)))
+    (while (< i len)
+      (cond
+       ((and (< (1+ i) len)
+             (eq (aref glob i) ?*)
+             (eq (aref glob (1+ i)) ?*))
+        (push ".*" parts)
+        (setq i (+ i 2)))
+       ((eq (aref glob i) ?*)
+        (push "[^/]*" parts)
+        (setq i (1+ i)))
+       ((eq (aref glob i) ??)
+        (push "." parts)
+        (setq i (1+ i)))
+       (t
+        (let ((start i))
+          (while (and (< i len)
+                      (not (memq (aref glob i) '(?* ??))))
+            (setq i (1+ i)))
+          (push (regexp-quote (substring glob start i)) parts)))))
+    (concat (file-name-as-directory "") (string-join (nreverse parts) ""))))
+
+(defun emagent-tool-find-files (glob &optional path)
+  "List files under PATH matching shell GLOB, one relative path per line."
+  (let* ((root (emagent-tools--root-directory path))
+         (regexp (if (string-match-p "/" glob)
+                     (emagent-tools--glob-to-regexp glob)
+                   (concat ".*" (emagent-tools--glob-to-regexp glob))))
+         (files nil))
+    (dolist (file (directory-files-recursively root regexp nil t))
+      (unless (string-match-p "/\\.git/" file)
+        (push (file-relative-name file root) files)))
+    (if files
+        (string-join (sort files #'string<) "\n")
+      "No matches")))
+
+(defun emagent-tools--run-git (&rest args)
+  "Run git ARGS in `default-directory' and return stdout."
+  (unless (executable-find "git")
+    (user-error "git not found on PATH"))
+  (with-temp-buffer
+    (apply #'call-process "git" nil t nil args)
+    (buffer-string)))
+
+(defun emagent-tool-git-status ()
+  "Return git status for the session project directory."
+  (string-trim (apply #'emagent-tools--run-git "status" "--short" "--branch")))
+
+(defun emagent-tool-git-diff (&optional args)
+  "Return git diff output.  Optional ARGS is extra git diff arguments."
+  (string-trim
+   (if (and args (not (string-empty-p args)))
+       (apply #'emagent-tools--run-git "diff" (split-string args "[[:space:]]+" t))
+     (apply #'emagent-tools--run-git "diff"))))
+
+(defun emagent-tool-git-log (&optional args)
+  "Return git log output.  Optional ARGS is extra git log arguments."
+  (string-trim
+   (if (and args (not (string-empty-p args)))
+       (apply #'emagent-tools--run-git "log" (split-string args "[[:space:]]+" t))
+     (apply #'emagent-tools--run-git "log" "--oneline" "-n" "20"))))
+
+(defun emagent-tool-org-move-subtree-to-parent ()
+  "Move org subtree at point to its parent section after confirmation."
+  (interactive)
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Not in org-mode"))
+  (unless (emagent-tools--confirm-p 'emagent-tool-org-move-subtree-to-parent)
+    (user-error "Move cancelled"))
+  (org-cut-subtree)
+  (org-up-element)
+  (org-paste-subtree)
+  "Moved subtree to parent section")
+
+(provide 'emagent-tools)
+
+;;; emagent-tools.el ends here
