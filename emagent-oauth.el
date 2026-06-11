@@ -126,7 +126,7 @@ the redirect, breaking PKCE state validation.  This re-injects it."
 Retries up to 5 times at 0.5 s intervals when the port is in use.
 Port and buffer are captured in the filter closure — no process-get needed."
   (unless (emagent-oauth--server-entry port)
-    (condition-case err
+    (condition-case _
         (let* ((name (format "emagent-oauth-%d" port))
                (proc (make-network-process
                       :name name

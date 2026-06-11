@@ -666,7 +666,7 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
       (format "#+begin_quote Reasoning\n%s\n#+end_quote\n\n" trimmed))))
 
 (defun emagent-chat--reasoning-block-bounds ()
-  "Return (CONTENT-START . CONTENT-END) for a closed Reasoning quote block at point."
+  "Return (CONTENT-START . CONTENT-END) for a closed Reasoning block at point."
   (save-excursion
     (unless (looking-at emagent-chat--reasoning-begin-re)
       (re-search-backward emagent-chat--reasoning-begin-re nil t))
