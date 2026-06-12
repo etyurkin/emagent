@@ -1198,7 +1198,7 @@ returns the session to idle.  When idle, falls through to `keyboard-quit'."
               (size (map-elt usage :context-size))
               ((and (numberp used) (numberp size) (> size 0))))
     (let ((pct (* 100.0 (/ (float used) size))))
-      (propertize (format " %.0f%%" pct)
+      (propertize (format " ctx:%.0f%%" pct)
                   'face (cond
                           ((>= pct 85) 'error)
                           ((>= pct 60) 'warning)
@@ -1207,8 +1207,11 @@ returns the session to idle.  When idle, falls through to `keyboard-quit'."
 (defun emagent-mode-line ()
   "Return emagent status text for the mode line."
   (let* ((state (and (boundp 'emagent-acp--session) emagent-acp--session))
+         (tool (and state (map-elt state :current-tool)))
          (status (cond
-                  ((and state (map-elt state :busy)) "emagent:busy")
+                  ((and state (map-elt state :busy) tool)
+                   (format "emagent:%s" tool))
+                  ((and state (map-elt state :busy)) "emagent:thinking")
                   ((and state (map-elt state :ready)) "emagent:ready")
                   ((and state (not (map-elt state :ready))) "emagent:connecting")
                   (t "emagent")))

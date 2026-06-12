@@ -333,6 +333,7 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :prompt-watchdog nil state)
     (puthash :extra-context nil state)
     (puthash :replaying-history nil state)
+    (puthash :current-tool nil state)
     (puthash :on-reveal on-reveal state)
     state))
 
@@ -780,6 +781,7 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
    (t
     (map-put! state :prompt-finishing t)
     (map-put! state :busy nil)
+    (map-put! state :current-tool nil)
     (emagent-acp--clear-prompt-watchdog state)
     (emagent-acp--trace "prompt done (%d chars, %d thought)"
                        (length (or (map-elt state :assistant-text) ""))
@@ -1090,6 +1092,8 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
         ("tool_call"
          (let ((title (map-nested-elt acp-notification '(params update title))))
            (emagent-acp--notify-user state (format "emagent: tool %s" (or title "running")))
+           (map-put! state :current-tool (or title "running"))
+           (emagent-acp--refresh-mode-line state)
            (emagent-acp--schedule-prompt-watchdog state)))
         ("config_option_update"
          (emagent-acp--save-config-options
