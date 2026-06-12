@@ -1019,6 +1019,12 @@ folding the inner region only so incomplete parses never break the buffer."
     (setq result
           (replace-regexp-in-string
            "^## \\(.*\\)$" "** \\1" result))
+    ;; Strip trailing blank lines inside src blocks (agent often adds one).
+    (setq result
+          (replace-regexp-in-string
+           "\\(\n[ \t]*\\)+#\\+END_SRC"
+           "\n#+END_SRC"
+           result))
     (setq result
           (replace-regexp-in-string
            "#\\+END_SRC[ \t]*\n\\([^[:space:]\n]\\)"
