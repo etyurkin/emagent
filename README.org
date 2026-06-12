@@ -49,8 +49,7 @@ For a local clone, add =:load-path "~/path/to/emagent/lisp"= instead of =:ensure
 | =C-c C-n=                    | Insert a new =* user>= prompt heading         |
 | =C-c C-b=                    | Attach buffer summary to next prompt        |
 | =C-c C-v=                    | Set model                                   |
-| =TAB= on =* user>=             | Fold / unfold the whole exchange            |
-| =TAB= on =# --- emagent ---=   | Fold / unfold just the response             |
+| =TAB= on =# --- emagent ---=   | Fold / unfold the response block            |
 | =TAB= elsewhere              | =org-cycle= (headlines, Reasoning, etc.)      |
 | =C-g=                        | Interrupt agent response                    |
 | =C-x k=                      | Kill buffer and disconnect agent            |
