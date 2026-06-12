@@ -591,26 +591,42 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
               (start (car bounds))
               (end (cdr bounds))
               (prefix (buffer-substring-no-properties start end))
-              ((string-prefix-p "/" prefix))
-              (needle (substring prefix 1)))
-    (let* ((candidates
-            (mapcar (lambda (cmd) (concat "/" (map-elt cmd 'name))) commands))
-           (filtered
-            (seq-filter
-             (lambda (candidate)
-               (emagent-chat--command-matches-needle-p
-                (substring candidate 1) needle))
-             candidates)))
-      (list start end filtered
+              ((string-prefix-p "/" prefix)))
+    (let ((all (mapcar (lambda (cmd) (concat "/" (map-elt cmd 'name))) commands)))
+      (list start end
+            (lambda (str pred action)
+              (cond
+               ((eq action 'metadata)
+                '(metadata (category . emagent-slash-command)
+                           (display-sort-function . identity)))
+               ((and (consp action) (eq (car action) 'boundaries))
+                ;; Treat the whole token as one boundary so completion-basic
+                ;; doesn't split at "/" and call us with an empty needle.
+                (cons 'boundaries (cons 0 (length (cdr action)))))
+               (t
+                (let ((needle (if (string-prefix-p "/" str) (substring str 1) str)))
+                  (cond
+                   ((eq action t)
+                    (seq-filter
+                     (lambda (c)
+                       (and (or (null pred) (funcall pred c))
+                            (emagent-chat--command-matches-needle-p (substring c 1) needle)))
+                     all))
+                   ((null action)
+                    (car (seq-filter
+                          (lambda (c)
+                            (emagent-chat--command-matches-needle-p (substring c 1) needle))
+                          all)))
+                   ((eq action 'lambda)
+                    (member str all)))))))
             :annotation-function
             (lambda (candidate)
-              (truncate-string-to-width
-               (or (map-elt (cl-find (substring candidate 1) commands
-                                     :key (lambda (cmd) (map-elt cmd 'name))
-                                     :test #'string=)
-                            'description)
-                   "")
-               80))
+              (let ((desc (or (map-elt (cl-find (substring candidate 1) commands
+                                               :key (lambda (cmd) (map-elt cmd 'name))
+                                               :test #'string=)
+                                      'description)
+                             "")))
+                (concat "  " desc)))
             :exit-action (lambda (_status) 'finished)))))
 
 (defun emagent-chat-tab ()
