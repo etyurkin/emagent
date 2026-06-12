@@ -219,6 +219,15 @@ completes."
   :type 'boolean
   :group 'emagent)
 
+(defcustom emagent-acp-watchdog-timeout 300
+  "Seconds of inactivity before the prompt watchdog fires.
+
+The watchdog resets on each tool-call notification, so this measures idle
+time since the last tool call, not total prompt duration.  Increase if your
+agent regularly makes long chains of tool calls."
+  :type 'integer
+  :group 'emagent)
+
 (defcustom emagent-acp-trace nil
   "Log ACP wire events to `emagent-log-buffer-name'.
 
@@ -681,13 +690,14 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
   (let ((token (cl-gensym "emagent-prompt-watchdog")))
     (map-put! state :prompt-watchdog token)
     (run-with-timer
-     120 nil
+     emagent-acp-watchdog-timeout nil
      (lambda ()
        (when (and (eq (map-elt state :prompt-watchdog) token)
                   (map-elt state :busy))
          (let* ((client (map-elt state :client))
                 (pending (and client (map-elt client :pending-requests))))
-           (emagent-log "emagent: prompt stalled (no ACP completion in 120s)")
+           (emagent-log "emagent: prompt stalled (no ACP completion in %ds)"
+                        emagent-acp-watchdog-timeout)
            (when pending
              (emagent-log "emagent: pending ACP request count: %d"
                          (length pending)))

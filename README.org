@@ -86,7 +86,8 @@ id, model, and project directory are all restored from the =#+EMAGENT_*= header.
 | =emagent-shell-redirect=            | =t=            | Auto-redirect =cat=/=grep=/=git= to emagent tools     |
 | =emagent-shell-suggest=             | =t=            | Suggest emagent alternative for shell commands    |
 | =emagent-acp-extra-mcp-config-file= | ="~/.claude.json"= | Forward MCP servers from this file to the agent |
-| =emagent-oauth-auto-browse-url=     | =t=            | Auto-open OAuth authorize URLs in a browser       |
+| =emagent-oauth-auto-browse-url=     | =nil=          | Auto-open OAuth authorize URLs in a browser       |
+| =emagent-acp-watchdog-timeout=      | =300=          | Seconds of silence before aborting a stalled prompt |
 
 Destructive tool calls (=eval=, =write_file=, =delete_file=, shell commands,
 etc.) prompt before running.  Answer /allow all/ to remember a tool for the

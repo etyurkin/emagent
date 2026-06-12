@@ -133,7 +133,7 @@ hideblocks / `org-cycle-hide-block-startup'."
 # C-c C-c send line or active region (C-e is end-of-line)
 # C-c C-b attach buffer context to the next send
 # C-c C-v set ACP model
-# C-c C-l show emagent status log (*emagent messages*)
+# C-c C-l show emagent status log (*Emagent Log*)
 # C-g     interrupt agent response
 # C-x k   kill buffer and disconnect agent
 # M-x emagent-mode to reconnect a saved session
@@ -276,7 +276,7 @@ the newest begin delimiter through `point-max'."
 
 (defun emagent-chat--buffer-name-for-label (label)
   "Return a unique *emagent LABEL* buffer name."
-  (let ((base (format "*emagent %s*" label))
+  (let ((base (format "*Emagent %s*" label))
         (names (mapcar #'buffer-name (emagent-chat--buffers))))
     (if (not (member base names))
         base

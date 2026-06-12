@@ -16,7 +16,7 @@
 
 (require 'cl-lib)
 
-(defconst emagent-log-buffer-name "*emagent messages*"
+(defconst emagent-log-buffer-name "*Emagent Log*"
   "Name of the buffer that collects emagent status lines.")
 
 (defgroup emagent-log nil
