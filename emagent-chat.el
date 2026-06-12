@@ -558,6 +558,34 @@ Returns the buffer position after the formatted heading."
           (forward-line -1)))
       found)))
 
+(defun emagent-chat--user-block-bounds (zone-start)
+  "Return (START . END) for the '* username>' block enclosing point, or nil.
+Captures the heading line and all body lines up to the next heading or
+response delimiter."
+  (let ((user-re (emagent-chat--user-heading-re)))
+    (save-excursion
+      (let ((heading-pos
+             (or (and (looking-at "\\* ") (line-beginning-position))
+                 (and (re-search-backward "^\\* " zone-start t)
+                      (line-beginning-position)))))
+        (when (and heading-pos (>= heading-pos zone-start)
+                   (save-excursion
+                     (goto-char heading-pos)
+                     (looking-at user-re)))
+          (let* ((start heading-pos)
+                 (end (progn
+                        (goto-char heading-pos)
+                        (forward-line 1)
+                        (if (re-search-forward
+                             (concat "^\\* \\|" emagent-chat--response-begin-re)
+                             (point-max) t)
+                            (match-beginning 0)
+                          (point-max)))))
+            (cons start (save-excursion
+                          (goto-char end)
+                          (skip-chars-backward " \t\n")
+                          (point)))))))))
+
 (defun emagent-chat--send-bounds ()
   "Return (BEG . END) of text to send at point."
   (cond
@@ -568,7 +596,8 @@ Returns the buffer position after the formatted heading."
           (point0 (point)))
       (when (< (line-beginning-position) zone-start)
         (user-error "Move point below the latest emagent response"))
-      (or (emagent-chat--send-bounds-backward point0 zone-start)
+      (or (emagent-chat--user-block-bounds zone-start)
+          (emagent-chat--send-bounds-backward point0 zone-start)
           (user-error "No sendable text at point"))))))
 
 (defun emagent-chat--normalize-slash-commands (commands)
