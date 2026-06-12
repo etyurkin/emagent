@@ -128,9 +128,9 @@ hideblocks / `org-cycle-hide-block-startup'."
   "# -*- mode: emagent -*-
 # This buffer is a scratch pad for chatting with emagent.
 #
-# Type plain text below; agent replies appear in delimited response sections.
-# TAB    on # --- emagent --- fold/unfold the response; else org-cycle
-# C-c C-c send line or active region (C-e is end-of-line)
+# Type after '* username> ' and press C-c C-c to send.
+# TAB    on # --- emagent --- folds just the response
+# C-c C-c send (auto-formats as '* username>'; select region for multiline)
 # C-c C-b attach buffer context to the next send
 # C-c C-v set ACP model
 # C-c C-l show emagent status log (*Emagent Log*)
@@ -442,6 +442,52 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
   (string-trim (buffer-substring-no-properties
                 (line-beginning-position) (line-end-position))))
 
+(defun emagent-chat--user-heading-prefix ()
+  "Return the org heading prefix for user turns, e.g. \"* etyurkin> \"."
+  (format "* %s> " (user-login-name)))
+
+(defun emagent-chat--user-heading-re ()
+  "Return a regexp matching the user heading prefix at start of line."
+  (format "^\\* %s> ?" (regexp-quote (user-login-name))))
+
+(defun emagent-chat--strip-user-heading (text)
+  "Strip the '* username> ' prefix from the first line of TEXT."
+  (let* ((re (emagent-chat--user-heading-re))
+         (lines (split-string text "\n" nil))
+         (first (car lines)))
+    (if (string-match re first)
+        (string-join (cons (substring first (match-end 0)) (cdr lines)) "\n")
+      text)))
+
+(defun emagent-chat--format-as-user-heading (bounds raw)
+  "Replace text at BOUNDS with RAW formatted as a user org heading.
+Returns the buffer position after the formatted heading."
+  (let* ((inhibit-read-only t)
+         (prefix (emagent-chat--user-heading-prefix))
+         (already (string-match-p "^\\* " raw))
+         (lines (and (not already) (split-string raw "\n" t)))
+         (formatted (if already
+                        raw
+                      (if (cdr lines)
+                          (concat prefix (car lines) "\n"
+                                  (string-join (cdr lines) "\n"))
+                        (concat prefix (car lines))))))
+    (emagent-chat--writable)
+    (goto-char (car bounds))
+    (delete-region (car bounds) (cdr bounds))
+    (insert formatted)
+    (unless (= (char-before) ?\n)
+      (insert "\n"))
+    (point)))
+
+(defun emagent-chat--insert-user-heading-stub ()
+  "Insert an empty user heading at point to invite the next prompt."
+  (let ((inhibit-read-only t))
+    (emagent-chat--writable)
+    (unless (bolp) (insert "\n"))
+    (insert (emagent-chat--user-heading-prefix))
+    (point)))
+
 (defun emagent-chat--sendable-line-p (line)
   (or (string-empty-p line)
       (and (not (string-match-p "^#\\+" line))
@@ -450,7 +496,9 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
            (not (string-match-p emagent-chat--response-begin-re line))
            (not (string-match-p emagent-chat--response-end-re line))
            (not (string-match-p "^#\\+BEGIN_SRC" line))
-           (not (string-match-p "^#\\+END_SRC" line)))))
+           (not (string-match-p "^#\\+END_SRC" line))
+           ;; Bare stub "* user> " with no text after it is not sendable
+           (not (string-match-p (concat (emagent-chat--user-heading-re) "$") line)))))
 
 (defun emagent-chat--sendable-text-p (text)
   "Return non-nil when TEXT is user prompt material, not buffer metadata."
@@ -1142,6 +1190,7 @@ Optional THOUGHT-TEXT is rendered as a foldable Reasoning quote above the body."
           (emagent-chat--insert-response-end))
         (emagent-chat--reset-response-state)
         (emagent-chat--sync-user-zone-marker)
+        (emagent-chat--insert-user-heading-stub)
         (font-lock-flush))
       (goto-char (point-max)))))
 
@@ -1149,17 +1198,21 @@ Optional THOUGHT-TEXT is rendered as a foldable Reasoning quote above the body."
   "Send region or line at point to the agent (C-c C-c).
 
 With an active region, send the selection.  Otherwise send the current
-line (or nearest preceding sendable line in the user zone)."
+line (or nearest preceding sendable line in the user zone).  The text is
+formatted as a '* username> ' org heading in the buffer; the heading
+prefix is stripped before the text is sent to the agent."
   (interactive)
   (let* ((bounds (emagent-chat--send-bounds))
-         (input (string-trim (buffer-substring-no-properties
-                              (car bounds) (cdr bounds)))))
-    (when (string-empty-p input)
+         (raw (string-trim (buffer-substring-no-properties
+                            (car bounds) (cdr bounds)))))
+    (when (string-empty-p raw)
       (user-error "No sendable text at point"))
-    (emagent-log "send: %s" (emagent-log-truncate-line input 80))
-    (emagent-chat--begin-response (cdr bounds))
-    (when emagent-chat--on-send
-      (funcall emagent-chat--on-send input))))
+    (let* ((response-pos (emagent-chat--format-as-user-heading bounds raw))
+           (input (string-trim (emagent-chat--strip-user-heading raw))))
+      (emagent-log "send: %s" (emagent-log-truncate-line input 80))
+      (emagent-chat--begin-response response-pos)
+      (when emagent-chat--on-send
+        (funcall emagent-chat--on-send input)))))
 
 (declare-function emagent-acp-interrupt "emagent-acp")
 
