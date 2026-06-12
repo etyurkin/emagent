@@ -65,8 +65,10 @@ session, project, model, and allowed tools are saved in the buffer header as
 
 ** Saved sessions
 
-Save the buffer to a =.org= file and reopen it later with =M-x emagent-mode=.
-Emagent reconnects using the persisted agent and session id.
+Save the buffer to a =.org= file (=C-x C-s=).  Each buffer begins with
+=# -*- mode: emagent -*-=, so Emacs activates =emagent-mode= and reconnects
+automatically the next time the file is opened.  The persisted agent, session
+id, model, and project directory are all restored from the =#+EMAGENT_*= header.
 
 * Customization
 

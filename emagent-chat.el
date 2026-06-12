@@ -125,7 +125,8 @@ hideblocks / `org-cycle-hide-block-startup'."
   :group 'emagent-chat)
 
 (defconst emagent-chat-initial-comment
-  "# This buffer is a scratch pad for chatting with emagent.
+  "# -*- mode: emagent -*-
+# This buffer is a scratch pad for chatting with emagent.
 #
 # Type plain text below; agent replies appear in delimited response sections.
 # TAB    on # --- emagent --- fold/unfold the response; else org-cycle
