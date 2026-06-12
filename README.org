@@ -44,15 +44,21 @@ For a local clone, add =:load-path "~/path/to/emagent"= instead of =:ensure=.
 | =M-x emagent-claude-start=   | Start with the Claude ACP provider          |
 | =M-x emagent-mode=           | Reconnect a saved buffer (agent + session)  |
 | =M-x emagent-set-model=      | Change ACP model mid-session                |
-| =C-c C-c=                    | Send line or active region                  |
+| =C-c C-c=                    | Send the current =* user>= block (or region)  |
 | =C-c C-b=                    | Attach buffer summary to next prompt        |
 | =C-c C-v=                    | Set model                                   |
-| =TAB= on =# --- emagent ---=   | Fold / unfold the response block            |
+| =TAB= on =* user>=             | Fold / unfold the whole exchange            |
+| =TAB= on =# --- emagent ---=   | Fold / unfold just the response             |
 | =TAB= elsewhere              | =org-cycle= (headlines, Reasoning, etc.)      |
 | =C-g=                        | Interrupt agent response                    |
 | =C-x k=                      | Kill buffer and disconnect agent            |
 
 ** Project directory and agent
+
+Each prompt is formatted as a =* username>= org heading so you can fold an
+entire exchange (question + reply) with a single =TAB=.  Type after the
+=* username>= stub and press =C-c C-c=; multiline prompts work without selecting
+a region — the entire heading block is captured automatically.
 
 =M-x emagent= infers the project directory from the current buffer's
 =default-directory= (or =~/=).  Prefix argument (=C-u M-x emagent=) picks the
