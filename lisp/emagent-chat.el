@@ -480,6 +480,24 @@ Returns the buffer position after the formatted heading."
       (insert "\n"))
     (point)))
 
+(defun emagent-chat--delete-following-response (pos)
+  "Delete the response block (and trailing stub) that follows POS, if any.
+Used when re-evaluating an existing user heading to clear the old answer."
+  (save-excursion
+    (goto-char pos)
+    (skip-chars-forward " \t\n")
+    (when (looking-at emagent-chat--response-begin-re)
+      (let ((start (line-beginning-position))
+            (inhibit-read-only t))
+        (emagent-chat--writable)
+        (when (re-search-forward emagent-chat--response-end-re nil t)
+          (forward-line 1)
+          (skip-chars-forward " \t\n")
+          ;; Also remove the auto-inserted user stub that follows the response.
+          (when (looking-at (emagent-chat--user-heading-re))
+            (end-of-line))
+          (delete-region start (point)))))))
+
 (defun emagent-chat--insert-user-heading-stub ()
   "Insert an empty user heading at point to invite the next prompt."
   (let ((inhibit-read-only t))
@@ -1244,6 +1262,7 @@ prefix is stripped before the text is sent to the agent."
       (user-error "No sendable text at point"))
     (let* ((response-pos (emagent-chat--format-as-user-heading bounds raw))
            (input (string-trim (emagent-chat--strip-user-heading raw))))
+      (emagent-chat--delete-following-response response-pos)
       (emagent-log "send: %s" (emagent-log-truncate-line input 80))
       (emagent-chat--begin-response response-pos)
       (when emagent-chat--on-send
