@@ -1288,33 +1288,43 @@ returns the session to idle.  When idle, falls through to `keyboard-quit'."
     (let ((pct (* 100.0 (/ (float used) size))))
       (propertize (format " ctx:%.0f%%" pct)
                   'face (cond
-                          ((>= pct 85) 'error)
-                          ((>= pct 60) 'warning)
-                          (t 'success))))))
+                          ((>= pct 80) 'error)
+                          ((>= pct 50) 'warning)
+                          (t           'success))))))
 
 (defun emagent-mode-line ()
   "Return emagent status text for the mode line."
   (let* ((state (and (boundp 'emagent-acp--session) emagent-acp--session))
          (tool (and state (map-elt state :current-tool)))
-         (status (cond
-                  ((and state (map-elt state :busy) tool)
-                   (format "emagent:%s" tool))
-                  ((and state (map-elt state :busy)) "emagent:thinking")
-                  ((and state (map-elt state :ready)) "emagent:ready")
-                  ((and state (not (map-elt state :ready))) "emagent:connecting")
-                  (t "emagent")))
+         (busy (and state (map-elt state :busy)))
+         (ready (and state (map-elt state :ready)))
+         (status-str (cond
+                      ((and busy tool) (format "emagent:%s" tool))
+                      (busy            "emagent:thinking")
+                      (ready           "emagent:ready")
+                      (state           "emagent:connecting")
+                      (t               "emagent")))
+         (status (propertize status-str
+                             'face (cond
+                                    (busy  '(bold mode-line-emphasis))
+                                    (ready 'success)
+                                    (state 'warning)
+                                    (t     nil))))
          (model (emagent-chat-model))
+         (sep (propertize " | " 'face 'shadow))
+         (model-str (when (and model (not (string-empty-p model)))
+                      (propertize model 'face 'shadow)))
          (context (emagent-chat--mode-line-context-usage state))
          (rss (and state (map-elt state :agent-rss)))
-         (base (if (and model (not (string-empty-p model)))
-                   (format "%s [%s]" status model)
-                 status)))
-    (concat base (or context "")
-            (when rss
-              (propertize (format " mem:%dMB" rss)
-                          'face (cond ((>= rss 1000) 'error)
-                                      ((>= rss 500)  'warning)
-                                      (t             nil)))))))
+         (rss-str (when rss
+                    (propertize (format "mem:%dMB" rss)
+                                'face (cond ((>= rss 1000) 'error)
+                                            ((>= rss 500)  'warning)
+                                            (t             'success))))))
+    (concat status
+            (when model-str (concat sep model-str))
+            (when context   (concat sep (string-trim-left context)))
+            (when rss-str   (concat sep rss-str)))))
 
 (defvar emagent-chat--doom-modeline-registered-p nil)
 
