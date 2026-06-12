@@ -76,6 +76,10 @@ Save the buffer to a =.org= file (=C-x C-s=).  Each buffer begins with
 automatically the next time the file is opened.  The persisted agent, session
 id, model, and project directory are all restored from the =#+EMAGENT_*= header.
 
+*Note:* the agent can only resume a session that has at least one completed
+exchange.  A buffer saved before any prompt was sent will reconnect but start a
+fresh session — the agent has nothing stored yet to resume.
+
 * Customization
 
 | Variable                          | Default      | Description                                       |
