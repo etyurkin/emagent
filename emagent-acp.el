@@ -139,8 +139,9 @@ enabled so ACP file read/write route through Emacs buffers."
   "
 
 Forwarded MCP gateways from your Claude config are available in this session
-alongside emagent tools.  If OAuth authentication is requested, emagent opens
-the browser automatically; the agent handles the callback and token exchange."
+alongside emagent tools.  If OAuth authentication is requested, show the
+authorize URL as a clickable org link — the agent handles the browser and
+callback automatically.  Do not ask the user to paste a callback URL."
   "Appended when `emagent-acp-extra-mcp-config-file' forwards MCP servers.")
 
 (defun emagent-acp--gateway-system-prompt ()
