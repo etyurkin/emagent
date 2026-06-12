@@ -481,8 +481,10 @@ Returns the buffer position after the formatted heading."
     (point)))
 
 (defun emagent-chat--delete-following-response (pos)
-  "Delete the response block (and trailing stub) that follows POS, if any.
-Used when re-evaluating an existing user heading to clear the old answer."
+  "Delete the response block after POS, stopping before the next user heading.
+
+Deletes from the first '# --- emagent ---' after POS up to (but not
+including) the next '* user>' heading, whether bare or with content."
   (save-excursion
     (goto-char pos)
     (skip-chars-forward " \t\n")
@@ -493,17 +495,18 @@ Used when re-evaluating an existing user heading to clear the old answer."
         (when (re-search-forward emagent-chat--response-end-re nil t)
           (forward-line 1)
           (skip-chars-forward " \t\n")
-          ;; Also remove the auto-inserted user stub that follows the response.
-          (when (looking-at (emagent-chat--user-heading-re))
-            (end-of-line))
+          ;; Stop here — leave whatever follows (next heading, stub, or nothing).
           (delete-region start (point)))))))
 
 (defun emagent-chat--insert-user-heading-stub ()
-  "Insert an empty user heading at point to invite the next prompt."
+  "Insert a user heading stub unless one already follows the current position."
   (let ((inhibit-read-only t))
     (emagent-chat--writable)
-    (unless (bolp) (insert "\n"))
-    (insert (emagent-chat--user-heading-prefix))
+    (unless (save-excursion
+              (skip-chars-forward " \t\n")
+              (looking-at (emagent-chat--user-heading-re)))
+      (unless (bolp) (insert "\n"))
+      (insert (emagent-chat--user-heading-prefix)))
     (point)))
 
 (defun emagent-chat--sendable-line-p (line)
