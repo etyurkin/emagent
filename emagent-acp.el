@@ -291,6 +291,35 @@ session's current model instead.")
   (or emagent-acp--session
       (error "No active emagent session for this buffer")))
 
+(defun emagent-acp--agent-rss-mb (state)
+  "Return the agent process RSS in MB via `process-attributes', or nil."
+  (when-let* ((client (map-elt state :client))
+              (proc (and client (map-elt client :process)))
+              ((processp proc))
+              (pid (process-id proc))
+              ((> pid 0))
+              (attrs (ignore-errors (process-attributes pid)))
+              (rss-kb (alist-get 'rss attrs)))
+    (round (/ (float rss-kb) 1024))))
+
+(defun emagent-acp--start-rss-timer (state)
+  "Start a repeating timer that refreshes :agent-rss in STATE every 15 s."
+  (when-let ((old (map-elt state :agent-rss-timer)))
+    (cancel-timer old))
+  (map-put! state :agent-rss-timer
+            (run-with-timer
+             5 15
+             (lambda ()
+               (let ((mb (emagent-acp--agent-rss-mb state)))
+                 (map-put! state :agent-rss mb)
+                 (emagent-acp--refresh-mode-line state))))))
+
+(defun emagent-acp--stop-rss-timer (state)
+  "Cancel the RSS polling timer for STATE."
+  (when-let ((timer (and state (map-elt state :agent-rss-timer))))
+    (cancel-timer timer)
+    (map-put! state :agent-rss-timer nil)))
+
 (defun emagent-acp--connected-p ()
   "Return non-nil when the current buffer has a live, ready ACP session."
   (and emagent-acp--session
@@ -334,6 +363,8 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :extra-context nil state)
     (puthash :replaying-history nil state)
     (puthash :current-tool nil state)
+    (puthash :agent-rss nil state)
+    (puthash :agent-rss-timer nil state)
     (puthash :on-reveal on-reveal state)
     state))
 
@@ -1264,6 +1295,7 @@ Any servers from `emagent-acp-extra-mcp-config-file' are forwarded too."
       (when (and (eq emagent-chat-provider 'claude)
                  (null emagent-chat-slash-commands))
         (emagent-log "loading slash commands from agent…"))))
+  (emagent-acp--start-rss-timer state)
   (emagent-acp--reveal-buffer state)
   (when on-ready (funcall on-ready)))
 
@@ -1415,9 +1447,10 @@ request continues in the background but its result is ignored."
   (emagent-oauth-shutdown-buffer (current-buffer))
   (when emagent-mcp--token
     (emagent-mcp-deregister-session emagent-mcp--token))
-  (when-let* ((state emagent-acp--session)
-              (client (map-elt state :client)))
-    (acp-shutdown :client client)
+  (when-let ((state emagent-acp--session))
+    (emagent-acp--stop-rss-timer state)
+    (when-let ((client (map-elt state :client)))
+      (acp-shutdown :client client))
     (setq emagent-acp--session nil)))
 
 (defun emagent-acp-shutdown ()

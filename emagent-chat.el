@@ -1217,10 +1217,16 @@ returns the session to idle.  When idle, falls through to `keyboard-quit'."
                   (t "emagent")))
          (model (emagent-chat-model))
          (context (emagent-chat--mode-line-context-usage state))
+         (rss (and state (map-elt state :agent-rss)))
          (base (if (and model (not (string-empty-p model)))
                    (format "%s [%s]" status model)
                  status)))
-    (concat base (or context ""))))
+    (concat base (or context "")
+            (when rss
+              (propertize (format " mem:%dMB" rss)
+                          'face (cond ((>= rss 1000) 'error)
+                                      ((>= rss 500)  'warning)
+                                      (t             nil)))))))
 
 (defvar emagent-chat--doom-modeline-registered-p nil)
 
