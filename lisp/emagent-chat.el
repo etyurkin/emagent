@@ -37,6 +37,7 @@
     (define-key map (kbd "TAB") #'emagent-chat-tab)
     (define-key map (kbd "<backtab>") #'org-shifttab)
     (define-key map (kbd "C-g") #'emagent-chat-interrupt)
+    (define-key map (kbd "C-c C-n") #'emagent-chat-new-prompt)
     map)
   "Keymap for `emagent-mode'.")
 
@@ -129,8 +130,10 @@ hideblocks / `org-cycle-hide-block-startup'."
 # This buffer is a scratch pad for chatting with emagent.
 #
 # Type after '* username> ' and press C-c C-c to send.
-# TAB    on # --- emagent --- folds just the response
 # C-c C-c send (auto-formats as '* username>'; select region for multiline)
+# C-c C-n insert a new '* username>' prompt heading
+# TAB    on # --- emagent --- folds just the response
+# Edit any previous '* username>' and C-c C-c to re-evaluate it
 # C-c C-b attach buffer context to the next send
 # C-c C-v set ACP model
 # C-c C-l show emagent status log (*Emagent Log*)
@@ -1289,6 +1292,20 @@ returns the session to idle.  When idle, falls through to `keyboard-quit'."
         (emagent-acp-interrupt)
         (message "emagent: interrupted"))
     (keyboard-quit)))
+
+(defun emagent-chat-new-prompt ()
+  "Insert a '* username>' heading at point for a new prompt (C-c C-n).
+
+Useful when the heading stub was accidentally deleted.  If point is
+above the user zone, jumps to the end of the buffer first."
+  (interactive)
+  (let ((inhibit-read-only t)
+        (zone-start (emagent-chat--user-zone-start)))
+    (when (< (point) zone-start)
+      (goto-char (point-max)))
+    (emagent-chat--writable)
+    (unless (bolp) (insert "\n"))
+    (insert (emagent-chat--user-heading-prefix))))
 
 (defun emagent-chat-attach-buffer ()
   "Attach a buffer summary to the next prompt."

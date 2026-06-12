@@ -46,6 +46,7 @@ For a local clone, add =:load-path "~/path/to/emagent/lisp"= instead of =:ensure
 | =M-x emagent-mode=           | Reconnect a saved buffer (agent + session)  |
 | =M-x emagent-set-model=      | Change ACP model mid-session                |
 | =C-c C-c=                    | Send the current =* user>= block (or region)  |
+| =C-c C-n=                    | Insert a new =* user>= prompt heading         |
 | =C-c C-b=                    | Attach buffer summary to next prompt        |
 | =C-c C-v=                    | Set model                                   |
 | =TAB= on =* user>=             | Fold / unfold the whole exchange            |
@@ -60,6 +61,10 @@ Each prompt is formatted as a =* username>= org heading so you can fold an
 entire exchange (question + reply) with a single =TAB=.  Type after the
 =* username>= stub and press =C-c C-c=; multiline prompts work without selecting
 a region — the entire heading block is captured automatically.
+
+To re-evaluate a previous prompt, edit its =* username>= heading and press
+=C-c C-c= again — the old response is removed and the agent is called with the
+updated text.  Use =C-c C-n= to insert a fresh heading if the stub was deleted.
 
 =M-x emagent= infers the project directory from the current buffer's
 =default-directory= (or =~/=).  Prefix argument (=C-u M-x emagent=) picks the
