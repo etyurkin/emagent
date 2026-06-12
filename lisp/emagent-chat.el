@@ -498,13 +498,18 @@ including) the next '* user>' heading, whether bare or with content."
           ;; Stop here — leave whatever follows (next heading, stub, or nothing).
           (delete-region start (point)))))))
 
+(defun emagent-chat--user-heading-follows-p ()
+  "Return non-nil when a '* user>' heading immediately follows point."
+  (save-excursion
+    (end-of-line)
+    (skip-chars-forward " \t\n")
+    (looking-at (emagent-chat--user-heading-re))))
+
 (defun emagent-chat--insert-user-heading-stub ()
   "Insert a user heading stub unless one already follows the current position."
   (let ((inhibit-read-only t))
     (emagent-chat--writable)
-    (unless (save-excursion
-              (skip-chars-forward " \t\n")
-              (looking-at (emagent-chat--user-heading-re)))
+    (unless (emagent-chat--user-heading-follows-p)
       (unless (bolp) (insert "\n"))
       (insert (emagent-chat--user-heading-prefix)))
     (point)))
