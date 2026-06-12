@@ -693,6 +693,96 @@ cursor-agent invocation to its own session.  Existing servers are preserved."
       (insert (emagent-mcp--json-encode (emagent-mcp--lists-to-vectors data))))
     file))
 
+;;;; External MCP gateway forwarding
+
+(defcustom emagent-acp-extra-mcp-config-file "~/.claude.json"
+  "JSON file whose top-level `mcpServers' block is forwarded to ACP agents.
+
+Emagent reads the `mcpServers' object from this file and advertises those
+servers, alongside the in-Emacs emagent server, to agents that support http MCP
+over ACP (e.g. Claude).  This reuses an existing Claude gateway without
+re-declaring it for emagent.
+
+Only agents wired through ACP `mcpServers' are affected; Cursor discovers MCP
+servers from its own ~/.cursor/mcp.json and ignores this option.
+Set to nil to forward only the emagent server."
+  :type '(choice (const :tag "None" nil) (file :tag "JSON config"))
+  :group 'emagent)
+
+(defun emagent-mcp--kv-array (object)
+  "Convert OBJECT (alist of KEY . VALUE) to an ACP [{name,value}] vector."
+  (vconcat
+   (mapcar (lambda (pair)
+             `((name . ,(let ((k (car pair)))
+                          (if (symbolp k) (symbol-name k) k)))
+               (value . ,(cdr pair))))
+           object)))
+
+(defun emagent-mcp--convert-gateway-entry (name cfg)
+  "Convert config-file MCP entry NAME/CFG to an ACP mcpServer alist, or nil."
+  (let ((type (or (map-elt cfg 'type)
+                  (and (map-elt cfg 'url) "http"))))
+    (pcase type
+      ((or "http" "sse")
+       (when (map-elt cfg 'url)
+         `((type . ,type)
+           (name . ,name)
+           (url . ,(map-elt cfg 'url))
+           (headers . ,(emagent-mcp--kv-array (map-elt cfg 'headers))))))
+      (_
+       (when (map-elt cfg 'command)
+         `((type . "stdio")
+           (name . ,name)
+           (command . ,(map-elt cfg 'command))
+           (args . ,(vconcat (map-elt cfg 'args)))
+           (env . ,(emagent-mcp--kv-array (map-elt cfg 'env)))))))))
+
+(defun emagent-mcp-config-file-servers ()
+  "Return ACP mcpServer specs from `emagent-acp-extra-mcp-config-file', or nil."
+  (when-let* ((file emagent-acp-extra-mcp-config-file)
+              (path (expand-file-name file))
+              ((file-readable-p path)))
+    (condition-case err
+        (let* ((data (with-temp-buffer
+                       (insert-file-contents path)
+                       (json-parse-buffer :object-type 'alist
+                                          :array-type 'list
+                                          :null-object nil
+                                          :false-object :false)))
+               (servers (map-elt data 'mcpServers)))
+          (delq nil
+                (mapcar (lambda (pair)
+                          (let ((name (symbol-name (car pair))))
+                            (unless (equal name emagent-mcp-server-name)
+                              (emagent-mcp--convert-gateway-entry name (cdr pair)))))
+                        servers)))
+      (error
+       (require 'emagent-log)
+       (emagent-log "could not read MCP servers from %s: %s"
+                   path (error-message-string err))
+       nil))))
+
+(defun emagent-mcp-session-servers (mcp-http chat-buffer)
+  "Return the mcpServers vector to advertise, or nil.
+
+MCP-HTTP is non-nil when the agent advertised http MCP capability.
+CHAT-BUFFER is the emagent chat buffer (for the per-buffer token)."
+  (when mcp-http
+    (with-current-buffer chat-buffer
+      (let* ((url (emagent-mcp-session-url (emagent-mcp-buffer-token)))
+             (emagent-server `((type . "http")
+                              (name . ,emagent-mcp-server-name)
+                              (url . ,url)
+                              (headers . [])))
+             (extra (emagent-mcp-config-file-servers)))
+        (vconcat (list emagent-server) extra)))))
+
+(defun emagent-mcp-gateway-system-prompt ()
+  "Return gateway guidance when extra MCP servers are configured, or nil."
+  (when (and emagent-acp-extra-mcp-config-file
+             (emagent-mcp-config-file-servers))
+    (bound-and-true-p emagent-acp-system-prompt-gateway)))
+
 (provide 'emagent-mcp)
 
 ;;; emagent-mcp.el ends here

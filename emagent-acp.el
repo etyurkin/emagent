@@ -16,109 +16,9 @@
 (require 'emagent-chat)
 (require 'emagent-context)
 (require 'emagent-mcp)
-(require 'emagent-oauth)
+(require 'emagent-prompts)
 
-(declare-function emagent-chat-set-slash-commands "emagent-chat")
 (declare-function emagent-chat-clear-slash-commands "emagent-chat")
-(declare-function emagent-chat-begin-thought "emagent-chat")
-(declare-function emagent-chat-append-thought "emagent-chat")
-(declare-function emagent-chat-close-thought "emagent-chat")
-
-(defvar emagent-acp-extra-mcp-config-file)
-
-(defconst emagent-acp-system-prompt
-  "You are emagent, an Emacs assistant focused on Emacs internals, elisp, and org-mode operations.
-
-The user chats in an org-mode scratch buffer (already org-mode). Write org markup
-directly in your reply — headings, paragraphs, lists, and tables. Never wrap
-your whole reply in #+BEGIN_SRC org; the buffer is already org-mode and prose
-would be hidden inside a src block. Use #+BEGIN_SRC only for executable or
-syntax-highlighted code snippets (lisp, java, shell, ...).
-
-Write org markup, not markdown:
-
-- Use *bold* and /italic/ (not ** or _)
-- Use org links: [[https://example.com][label]]
-- Use org headings (*, **), not markdown ## headings.
-- For code snippets only, use #+BEGIN_SRC / #+END_SRC with the language tag
-  (java, python, shell, lisp, elisp, ...). Use elisp (not emacs-lisp) for Emacs
-  Lisp. Never wrap prose, headings, or tables in src blocks.
-  Never use markdown ``` fences or line-number file citations like 597:623:file.el.
-  Leave a blank line after every #+END_SRC before the next paragraph or heading.
-- For tables, use org pipe tables with a separator row (hline) after the header.
-  Example:
-  | Module | Role |
-  |--------+------|
-  | emagent.el | entry |
-  Leave a blank line before and after every table.
-
-Example for Java:
-
-#+BEGIN_SRC java
-public class Example { public static void main(String[] args) {} }
-#+END_SRC
-
-Example for Emacs Lisp:
-
-#+BEGIN_SRC elisp
-(defun example () 42)
-#+END_SRC
-
-Another paragraph starts after a blank line.
-
-You have emagent tools (read_file, write_file, grep, find_files, git_status,
-git_diff, git_log, list_files, eval, apropos, run_shell_command, ...) that
-execute inside the live Emacs process. Prefer them — and the user's installed
-Emacs packages — over Bash, zsh, or the agent's built-in terminal tools.
-run_shell_command runs through Emacs; reach for elisp and emagent tools first.
-
-If you do not know how to do something in Emacs, discover the API first — never guess.
-Describe what you found before suggesting changes. Ask for confirmation before mutating buffers.")
-
-(defconst emagent-acp-system-prompt-prefer-emacs
-  "
-
-Tool preference: prefer emagent tools and the live Emacs when they can do the job.
-Before Bash, zsh, Python, jq, or the agent's built-in file/terminal tools, check
-whether an emagent tool or Emacs Lisp can handle it.
-
-Substitution guide (use the emagent tool, not shell):
-
-| Instead of              | Use                                      |
-|-------------------------+------------------------------------------|
-| cat, head, tail         | read_file (optional line, limit)         |
-| grep, rg, ag            | grep                                     |
-| find -name GLOB         | find_files                               |
-| find / list tree        | list_files                               |
-| git status              | git_status                               |
-| git diff                | git_diff                                 |
-| git log                 | git_log                                  |
-| jq                      | eval with json-parse-string / json-read  |
-| open URL                | eval with browse-url                     |
-| interactive bash/zsh    | run_shell_command only when unavoidable  |
-
-run_shell_command auto-redirects simple cat/grep/git/find commands to the tools
-above and blocks git --no-verify and push to merged PR branches.
-
-Use external tools — Bash, plugin slash commands (/workflow:dev, /quality:*, …),
-gateway MCP backends, mvn, curl — only when:
-- A Claude Code plugin or workflow requires them
-- The task cannot reasonably be done inside Emacs
-- No emagent or Emacs alternative exists for that specific step
-
-Discover Emacs APIs before guessing: apropos, describe_symbol, find_function,
-where_is, then eval a small test.
-
-emagent tools: read_file, write_file, undo_file, delete_file, delete_directory,
-list_files, find_files, grep, git_status, git_diff, git_log, project_directory,
-eval, apropos, describe_symbol, find_function, where_is, run_shell_command.
-
-Omit a path to use the session project directory; relative paths resolve against
-it. File tools are confined to the session root. To revert a mistake, call
-undo_file — do not rewrite files from memory. delete-file, write-file,
-shell-command, call-process and similar are blocked inside eval; use the
-dedicated tools (they prompt the user). Do not read iCloud paths or other apps'
-container directories.")
 
 ;; Backward compatibility (aliases before their referents).
 (define-obsolete-variable-alias 'emagent-acp-emacs-native 'emagent-acp-prefer-emacs "0.1.0")
@@ -135,25 +35,10 @@ enabled so ACP file read/write route through Emacs buffers."
   :type 'boolean
   :group 'emagent)
 
-(defconst emagent-acp-system-prompt-gateway
-  "
-
-Forwarded MCP gateways from your Claude config are available in this session
-alongside emagent tools.  If OAuth authentication is requested, show the
-authorize URL as a clickable org link — the agent handles the browser and
-callback automatically.  Do not ask the user to paste a callback URL."
-  "Appended when `emagent-acp-extra-mcp-config-file' forwards MCP servers.")
-
-(defun emagent-acp--gateway-system-prompt ()
-  "Return gateway guidance when extra MCP servers are forwarded."
-  (when (and emagent-acp-extra-mcp-config-file
-             (emagent-acp--config-file-mcp-servers))
-    emagent-acp-system-prompt-gateway))
-
 (defun emagent-acp--system-prompt ()
   "Return the system prompt for new ACP sessions."
   (concat emagent-acp-system-prompt
-          (emagent-acp--gateway-system-prompt)
+          (emagent-mcp-gateway-system-prompt)
           (when emagent-acp-prefer-emacs
             emagent-acp-system-prompt-prefer-emacs)))
 
@@ -235,21 +120,6 @@ Shows outgoing methods, each `session/update' type with payload size, and
 when `session/prompt' completes.  Also enables `acp-logging-enabled' for
 the full wire log in the ACP logs buffer (`acp-logs-buffer')."
   :type 'boolean
-  :group 'emagent)
-
-(defcustom emagent-acp-extra-mcp-config-file "~/.claude.json"
-  "JSON file whose top-level `mcpServers' block is forwarded to ACP agents.
-
-Emagent reads the `mcpServers' object from this file and advertises those
-servers, alongside the in-Emacs emagent server, to agents that support http MCP
-over ACP (e.g. Claude).  This reuses an existing Claude gateway (Jira,
-Confluence, Git, …) without re-declaring it for emagent.
-
-Only agents wired through ACP `mcpServers' are affected; Cursor discovers MCP
-servers from its own ~/.cursor/mcp.json and ignores this option.  Servers that
-require interactive OAuth may still need credentials supplied via their headers.
-Set to nil to forward only the emagent server."
-  :type '(choice (const :tag "None" nil) (file :tag "JSON config"))
   :group 'emagent)
 
 (defconst emagent-acp-auto-model-id "auto"
@@ -363,10 +233,47 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :extra-context nil state)
     (puthash :replaying-history nil state)
     (puthash :current-tool nil state)
+    ;; Rendering callbacks — set by the integration layer (emagent.el).
+    ;; :cb-chunk fn(text)       — streaming assistant text chunk
+    ;; :cb-thought fn(text)     — streaming reasoning text chunk
+    ;; :cb-finish fn(text,thought) — complete response rendered
+    ;; :cb-fail fn(message)     — error/abort rendered
+    ;; :cb-slash-commands fn(commands) — available-commands list received
+    (puthash :cb-chunk nil state)
+    (puthash :cb-thought nil state)
+    (puthash :cb-finish nil state)
+    (puthash :cb-fail nil state)
+    (puthash :cb-slash-commands nil state)
     (puthash :agent-rss nil state)
     (puthash :agent-rss-timer nil state)
     (puthash :on-reveal on-reveal state)
     state))
+
+;;;; Public session state accessors (for use by emagent-chat.el)
+
+(defun emagent-acp-busy-p ()
+  "Return non-nil when the current buffer's ACP session is processing a prompt."
+  (and emagent-acp--session (map-elt emagent-acp--session :busy)))
+
+(defun emagent-acp-ready-p ()
+  "Return non-nil when the current buffer's ACP session is connected and idle."
+  (and emagent-acp--session (map-elt emagent-acp--session :ready)))
+
+(defun emagent-acp-current-tool ()
+  "Return the name of the tool currently running, or nil."
+  (and emagent-acp--session (map-elt emagent-acp--session :current-tool)))
+
+(defun emagent-acp-agent-rss ()
+  "Return the agent process RSS in MB, or nil."
+  (and emagent-acp--session (map-elt emagent-acp--session :agent-rss)))
+
+(defun emagent-acp-context-usage ()
+  "Return (USED . SIZE) context token counts for the current session, or nil."
+  (when-let* ((state emagent-acp--session)
+              (usage (map-elt state :usage))
+              (used (map-elt usage :context-used))
+              (size (map-elt usage :context-size)))
+    (cons used size)))
 
 (defun emagent-acp--chat-buffer (state)
   (map-elt state :chat-buffer))
@@ -783,22 +690,18 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
     (when-let ((buffer (emagent-acp--chat-buffer state)))
       (condition-case err
           (with-current-buffer buffer
-            (when (fboundp 'emagent-chat-finish-assistant)
-              (emagent-chat-finish-assistant (map-elt state :assistant-text)
-                                            (map-elt state :thought-text))))
+            (when-let ((cb (map-elt state :cb-finish)))
+              (funcall cb (map-elt state :assistant-text)
+                       (map-elt state :thought-text))))
         (error
          (emagent-log "emagent: finish failed: %s" (error-message-string err))
          (with-current-buffer buffer
-           (when (fboundp 'emagent-chat-fail-assistant)
-             (emagent-chat-fail-assistant
-              (format "response finalize failed: %s"
-                      (error-message-string err))))))))
+           (when-let ((cb (map-elt state :cb-fail)))
+             (funcall cb (format "response finalize failed: %s"
+                                 (error-message-string err))))))))
     (map-put! state :prompt-finishing nil)
     (map-put! state :prompt-finalized t)
-    (emagent-acp--refresh-mode-line state)
-    (when-let ((buffer (emagent-acp--chat-buffer state)))
-      (emagent-oauth-watch-assistant-text buffer (map-elt state :assistant-text))
-      (emagent-oauth-maybe-deliver-pending buffer))))
+    (emagent-acp--refresh-mode-line state)))
 
 (defun emagent-acp--complete-prompt (state response)
   "Finalize the in-flight prompt for STATE and close the chat response."
@@ -857,7 +760,8 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
         (when (and (emagent-acp--stream-thought-to-buffer-p state)
                    (buffer-live-p (emagent-acp--chat-buffer state)))
           (with-current-buffer (emagent-acp--chat-buffer state)
-            (emagent-chat-append-thought text))))
+            (when-let ((cb (map-elt state :cb-thought)))
+              (funcall cb text)))))
       (when (memq mode '(minimal trail both))
         (let ((pending (concat (or (map-elt state :thought-buffer) "") text)))
           (while (string-match "\\`\\(.+?[.!?]\\)\\(?:[[:space:]]\\|\\'\\)" pending)
@@ -915,8 +819,8 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
     (emagent-acp--flush-thought-buffer state)
     (when-let ((buffer (emagent-acp--chat-buffer state)))
       (with-current-buffer buffer
-        (when (fboundp 'emagent-chat-fail-assistant)
-          (emagent-chat-fail-assistant message))))
+        (when-let ((cb (map-elt state :cb-fail)))
+          (funcall cb message))))
     (emagent-acp--refresh-mode-line state)))
 
 (cl-defun emagent-acp--send-request (&key state request on-success on-failure)
@@ -1113,10 +1017,8 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
              (when (and (emagent-acp--stream-to-buffer-p state)
                         (buffer-live-p (emagent-acp--chat-buffer state)))
                (with-current-buffer (emagent-acp--chat-buffer state)
-                 (emagent-chat-append-assistant text)))
-             (when-let ((buffer (emagent-acp--chat-buffer state)))
-               (emagent-oauth-watch-assistant-text
-                buffer (map-elt state :assistant-text))))))
+                 (when-let ((cb (map-elt state :cb-chunk)))
+                   (funcall cb text))))))
         ("agent_thought_chunk"
          (let ((text (or (map-nested-elt acp-notification '(params update content text)) "")))
            (emagent-acp--thought-chunk state text)))
@@ -1139,9 +1041,10 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
         ("available_commands_update"
          (let ((commands (map-nested-elt acp-notification
                                        '(params update availableCommands))))
-           (when-let ((buffer (emagent-acp--chat-buffer state)))
+           (when-let* ((buffer (emagent-acp--chat-buffer state))
+                       (cb (map-elt state :cb-slash-commands)))
              (with-current-buffer buffer
-               (emagent-chat-set-slash-commands commands)))))
+               (funcall cb commands)))))
         (_ nil)))))
 
 (cl-defun emagent-acp--subscribe (&key state)
@@ -1206,84 +1109,6 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
                                '(agentCapabilities mcpCapabilities http))))
     (and value (not (eq value :false)) (not (eq value :json-false)))))
 
-(defun emagent-acp--kv-array (object)
-  "Convert OBJECT (an alist of KEY . VALUE) to an ACP [{name,value}] vector.
-
-ACP expresses headers and env as arrays of name/value objects rather than as
-JSON objects, so a Claude-style `{\"K\": \"V\"}' block is reshaped here."
-  (vconcat
-   (mapcar (lambda (pair)
-             `((name . ,(let ((k (car pair)))
-                          (if (symbolp k) (symbol-name k) k)))
-               (value . ,(cdr pair))))
-           object)))
-
-(defun emagent-acp--convert-mcp-entry (name cfg)
-  "Convert a config-file MCP entry NAME/CFG to an ACP mcpServer alist.
-
-NAME is a string; CFG is the parsed alist from the file's `mcpServers' block.
-Returns nil when CFG lacks the fields its transport needs."
-  (let ((type (or (map-elt cfg 'type)
-                  (and (map-elt cfg 'url) "http"))))
-    (pcase type
-      ((or "http" "sse")
-       (when (map-elt cfg 'url)
-         `((type . ,type)
-           (name . ,name)
-           (url . ,(map-elt cfg 'url))
-           (headers . ,(emagent-acp--kv-array (map-elt cfg 'headers))))))
-      (_
-       (when (map-elt cfg 'command)
-         `((type . "stdio")
-           (name . ,name)
-           (command . ,(map-elt cfg 'command))
-           (args . ,(vconcat (map-elt cfg 'args)))
-           (env . ,(emagent-acp--kv-array (map-elt cfg 'env)))))))))
-
-(defun emagent-acp--config-file-mcp-servers ()
-  "Return ACP mcpServer specs read from `emagent-acp-extra-mcp-config-file'.
-
-Parses the file's top-level `mcpServers' object and converts each entry to
-ACP's schema.  The emagent server itself is skipped to avoid duplication.
-Returns nil (with a message) when the file is missing or unreadable."
-  (when-let* ((file emagent-acp-extra-mcp-config-file)
-              (path (expand-file-name file))
-              ((file-readable-p path)))
-    (condition-case err
-        (let* ((data (with-temp-buffer
-                       (insert-file-contents path)
-                       (json-parse-buffer :object-type 'alist
-                                          :array-type 'list
-                                          :null-object nil
-                                          :false-object :false)))
-               (servers (map-elt data 'mcpServers)))
-          (delq nil
-                (mapcar (lambda (pair)
-                          (let ((name (symbol-name (car pair))))
-                            (unless (equal name emagent-mcp-server-name)
-                              (emagent-acp--convert-mcp-entry name (cdr pair)))))
-                        servers)))
-      (error
-       (emagent-log "could not read MCP servers from %s: %s"
-                   path (error-message-string err))
-       nil))))
-
-(defun emagent-acp--mcp-servers (state)
-  "Return the mcpServers vector to advertise for STATE, or nil.
-
-Only agents that advertise http MCP support (e.g. Claude) get the in-Emacs
-server via ACP; Cursor is wired through its own ~/.cursor/mcp.json instead.
-Any servers from `emagent-acp-extra-mcp-config-file' are forwarded too."
-  (when (map-elt state :mcp-http)
-    (with-current-buffer (emagent-acp--chat-buffer state)
-      (let* ((url (emagent-mcp-session-url (emagent-mcp-buffer-token)))
-             (emagent-server `((type . "http")
-                              (name . ,emagent-mcp-server-name)
-                              (url . ,url)
-                              (headers . [])))
-             (extra (emagent-acp--config-file-mcp-servers)))
-        (vconcat (list emagent-server) extra)))))
-
 (cl-defun emagent-acp--session-ready (&key state session-id on-ready resumed)
   (map-put! state :session-id session-id)
   (map-put! state :ready t)
@@ -1305,7 +1130,8 @@ Any servers from `emagent-acp-extra-mcp-config-file' are forwarded too."
    :state state
    :request (acp-make-session-new-request
              :cwd (emagent-acp--session-cwd state)
-             :mcp-servers (emagent-acp--mcp-servers state)
+             :mcp-servers (emagent-mcp-session-servers (map-elt state :mcp-http)
+                                              (emagent-acp--chat-buffer state))
              :meta `((systemPrompt . ((append . ,(emagent-acp--system-prompt))))))
    :on-success (lambda (response)
                  (emagent-acp--configure-model
@@ -1327,7 +1153,8 @@ Any servers from `emagent-acp-extra-mcp-config-file' are forwarded too."
    :request (acp-make-session-load-request
              :session-id session-id
              :cwd (emagent-acp--session-cwd state)
-             :mcp-servers (emagent-acp--mcp-servers state))
+             :mcp-servers (emagent-mcp-session-servers (map-elt state :mcp-http)
+                                              (emagent-acp--chat-buffer state)))
    :on-success (lambda (response)
                  (map-put! state :replaying-history nil)
                  (emagent-acp--configure-model
@@ -1350,11 +1177,12 @@ Any servers from `emagent-acp-extra-mcp-config-file' are forwarded too."
         (emagent-acp--load-session :state state :session-id saved :on-ready on-ready)
       (emagent-acp--new-session :state state :on-ready on-ready))))
 
-(cl-defun emagent-acp-start (&key client chat-buffer on-ready on-reveal)
+(cl-defun emagent-acp-start (&key client chat-buffer on-ready on-reveal callbacks)
   "Start an emagent ACP session in CHAT-BUFFER.
 
-ON-REVEAL is called once when the chat buffer should be shown, including
-after connection failures."
+ON-REVEAL is called once when the chat buffer should be shown.
+CALLBACKS is an alist of rendering callbacks keyed by:
+  :cb-chunk, :cb-thought, :cb-finish, :cb-fail, :cb-slash-commands."
   (when (and emagent-acp-prefer-emacs (not emagent-acp-file-access))
     (emagent-log "prefer-Emacs mode works best with `emagent-acp-file-access'"))
   (when emagent-acp-trace
@@ -1370,6 +1198,8 @@ after connection failures."
     (setq emagent-acp--session (emagent-acp--make-state :client client
                                                        :chat-buffer chat-buffer
                                                        :on-reveal on-reveal))
+    (dolist (cb callbacks)
+      (map-put! emagent-acp--session (car cb) (cdr cb)))
     (emagent-mcp-register-session :token (emagent-mcp-buffer-token)
                                  :cwd (emagent-chat--session-directory)
                                  :buffer chat-buffer
@@ -1444,8 +1274,7 @@ request continues in the background but its result is ignored."
 (defun emagent-acp-shutdown-buffer ()
   "Shut down the ACP session for the current buffer."
   (emagent-chat-clear-slash-commands)
-  (emagent-oauth-shutdown-buffer (current-buffer))
-  (when emagent-mcp--token
+(when emagent-mcp--token
     (emagent-mcp-deregister-session emagent-mcp--token))
   (when-let ((state emagent-acp--session))
     (emagent-acp--stop-rss-timer state)

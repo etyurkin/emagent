@@ -72,7 +72,13 @@ once the session is ready; ON-REVEAL runs when the chat buffer should be shown."
       (emagent-acp-start :client client
                         :chat-buffer (current-buffer)
                         :on-ready on-ready
-                        :on-reveal on-reveal))))
+                        :on-reveal on-reveal
+                        :callbacks
+                        `((:cb-chunk          . ,#'emagent-chat-append-assistant)
+                          (:cb-thought        . ,#'emagent-chat-append-thought)
+                          (:cb-finish         . ,#'emagent-chat-finish-assistant)
+                          (:cb-fail           . ,#'emagent-chat-fail-assistant)
+                          (:cb-slash-commands . ,#'emagent-chat-set-slash-commands))))))
 
 (defun emagent--send-prompt (user-text)
   "Ensure connection and send USER-TEXT from the current buffer."

@@ -1257,12 +1257,11 @@ prefix is stripped before the text is sent to the agent."
 When the agent is busy, closes the response block with a stop notice and
 returns the session to idle.  When idle, falls through to `keyboard-quit'."
   (interactive)
-  (let ((state (and (boundp 'emagent-acp--session) emagent-acp--session)))
-    (if (and state (or (map-elt state :busy) (map-elt state :prompt-finishing)))
-        (progn
-          (emagent-acp-interrupt)
-          (message "emagent: interrupted"))
-      (keyboard-quit))))
+  (if (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
+      (progn
+        (emagent-acp-interrupt)
+        (message "emagent: interrupted"))
+    (keyboard-quit)))
 
 (defun emagent-chat-attach-buffer ()
   "Attach a buffer summary to the next prompt."
@@ -1279,11 +1278,12 @@ returns the session to idle.  When idle, falls through to `keyboard-quit'."
     (funcall emagent-chat--on-quit))
   (bury-buffer))
 
-(defun emagent-chat--mode-line-context-usage (state)
-  "Return a propertized context fill percentage for STATE, or nil."
-  (when-let* ((usage (and state (map-elt state :usage)))
-              (used (map-elt usage :context-used))
-              (size (map-elt usage :context-size))
+(defun emagent-chat--mode-line-context-usage ()
+  "Return a propertized context fill percentage string, or nil."
+  (when-let* ((pair (and (fboundp 'emagent-acp-context-usage)
+                         (emagent-acp-context-usage)))
+              (used (car pair))
+              (size (cdr pair))
               ((and (numberp used) (numberp size) (> size 0))))
     (let ((pct (* 100.0 (/ (float used) size))))
       (propertize (format " ctx:%.0f%%" pct)
@@ -1294,28 +1294,28 @@ returns the session to idle.  When idle, falls through to `keyboard-quit'."
 
 (defun emagent-mode-line ()
   "Return emagent status text for the mode line."
-  (let* ((state (and (boundp 'emagent-acp--session) emagent-acp--session))
-         (tool (and state (map-elt state :current-tool)))
-         (busy (and state (map-elt state :busy)))
-         (ready (and state (map-elt state :ready)))
+  (let* ((busy  (and (fboundp 'emagent-acp-busy-p)  (emagent-acp-busy-p)))
+         (ready (and (fboundp 'emagent-acp-ready-p) (emagent-acp-ready-p)))
+         (tool  (and (fboundp 'emagent-acp-current-tool) (emagent-acp-current-tool)))
+         (rss   (and (fboundp 'emagent-acp-agent-rss) (emagent-acp-agent-rss)))
+         (connected (or busy ready))
          (status-str (cond
                       ((and busy tool) (format "emagent:%s" tool))
                       (busy            "emagent:thinking")
                       (ready           "emagent:ready")
-                      (state           "emagent:connecting")
+                      (connected       "emagent:connecting")
                       (t               "emagent")))
          (status (propertize status-str
                              'face (cond
-                                    (busy  '(bold mode-line-emphasis))
-                                    (ready 'success)
-                                    (state 'warning)
-                                    (t     nil))))
+                                    (busy      '(bold mode-line-emphasis))
+                                    (ready     'success)
+                                    (connected 'warning)
+                                    (t         nil))))
          (model (emagent-chat-model))
          (sep (propertize " | " 'face 'shadow))
          (model-str (when (and model (not (string-empty-p model)))
                       (propertize model 'face 'shadow)))
-         (context (emagent-chat--mode-line-context-usage state))
-         (rss (and state (map-elt state :agent-rss)))
+         (context (emagent-chat--mode-line-context-usage))
          (rss-str (when rss
                     (propertize (format "mem:%dMB" rss)
                                 'face (cond ((>= rss 1000) 'error)
