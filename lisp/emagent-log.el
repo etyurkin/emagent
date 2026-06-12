@@ -101,17 +101,11 @@ the end of STRING visible."
       (message "%s" text))))
 
 ;;;###autoload
-(defun emagent-log-show ()
+(defun emagent-log-view ()
   "Display the emagent status log buffer."
   (interactive)
   (pop-to-buffer (emagent-log--get-buffer))
   (goto-char (point-max)))
-
-;;;###autoload
-(defun emagent-messages ()
-  "Display the emagent status log buffer."
-  (interactive)
-  (emagent-log-show))
 
 (defun emagent-log-refresh ()
   "Go to the end of the emagent log buffer."

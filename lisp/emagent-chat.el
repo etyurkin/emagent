@@ -33,7 +33,7 @@
     (define-key map (kbd "C-c C-c") #'emagent-chat-send)
     (define-key map (kbd "C-c C-b") #'emagent-chat-attach-buffer)
     (define-key map (kbd "C-c C-m") #'emagent-set-model)
-    (define-key map (kbd "C-c C-l") #'emagent-messages)
+    (define-key map (kbd "C-c C-l") #'emagent-log-view)
     (define-key map (kbd "TAB") #'emagent-chat-tab)
     (define-key map (kbd "<backtab>") #'org-shifttab)
     (define-key map (kbd "C-g") #'emagent-chat-interrupt)
@@ -136,7 +136,7 @@ hideblocks / `org-cycle-hide-block-startup'."
 # Edit any previous '* username>' and C-c C-c to re-evaluate it
 # C-c C-b attach buffer context to the next send
 # C-c C-m set ACP model
-# C-c C-l show emagent status log (*Emagent Log*)
+# C-c C-l show emagent log (*Emagent Log*)
 # C-g     interrupt agent response
 # C-x k   kill buffer and disconnect agent
 # M-x emagent-mode to reconnect a saved session
