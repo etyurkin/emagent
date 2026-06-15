@@ -438,10 +438,11 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
     (remove-text-properties (point-min) (point-max) '(read-only t))))
 
 (defun emagent-chat--insert-initial-comment ()
-  "Insert the scratch-style intro at the top of a new buffer."
+  "Insert the scratch-style intro and initial user heading in a new buffer."
   (when (= (point-min) (point-max))
     (insert emagent-chat-initial-comment)
-    (goto-char (point-max))))
+    (goto-char (point-max))
+    (insert (emagent-chat--user-heading-prefix))))
 
 (defun emagent-chat--line-text ()
   (string-trim (buffer-substring-no-properties
@@ -1423,7 +1424,8 @@ above the user zone, jumps to the end of the buffer first."
   (setq-local org-src-fontify-natively t
               org-ellipsis "…"
               org-fontify-quote-and-verse-blocks t
-              org-cycle-hide-block-startup t))
+              org-cycle-hide-block-startup t
+              truncate-lines t))
 
 ;;;###autoload
 (define-derived-mode emagent-mode org-mode "Emagent"
