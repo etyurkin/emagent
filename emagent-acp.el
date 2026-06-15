@@ -226,6 +226,7 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :thought-buffer "" state)
     (puthash :prompt-finalized nil state)
     (puthash :prompt-finishing nil state)
+    (puthash :prompt-generation 0 state)
     (puthash :finish-token nil state)
     (puthash :finish-timer nil state)
     (puthash :prompt-watchdog nil state)
@@ -340,10 +341,10 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (:type . ,(map-elt acp-option 'type))
     (:current-value . ,(map-elt acp-option 'currentValue))
     (:options . ,(mapcar (lambda (acp-value)
-                            `((:value . ,(map-elt acp-value 'value))
-                              (:name . ,(map-elt acp-value 'name))
-                              (:description . ,(map-elt acp-value 'description))))
-                          (append (map-elt acp-option 'options) nil)))))
+                           `((:value . ,(map-elt acp-value 'value))
+                             (:name . ,(map-elt acp-value 'name))
+                             (:description . ,(map-elt acp-value 'description))))
+                         (append (map-elt acp-option 'options) nil)))))
 
 (defun emagent-acp--normalize-config-options (acp-config-options)
   (mapcar #'emagent-acp--normalize-config-option
@@ -372,7 +373,7 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
   (or (map-elt (seq-find (lambda (candidate)
                            (equal value (map-elt candidate :value)))
                          (map-elt option :options))
-              :name)
+               :name)
       value))
 
 (defun emagent-acp--config-option-set-value (state config-id value)
@@ -480,7 +481,7 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
      (t nil))))
 
 (cl-defun emagent-acp--config-option-set-model-id (&key state session-id model-id
-                                                      on-success on-failure)
+                                                        on-success on-failure)
   (if-let ((model-option (emagent-acp--model-config-option state)))
       (emagent-acp--send-request
        :state state
@@ -491,10 +492,10 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
        :on-success (lambda (response)
                      (if (map-elt response 'configOptions)
                          (emagent-acp--save-config-options state
-                                                          (map-elt response 'configOptions))
+                                                           (map-elt response 'configOptions))
                        (emagent-acp--config-option-set-value state
-                                                            (map-elt model-option :id)
-                                                            model-id))
+                                                             (map-elt model-option :id)
+                                                             model-id))
                      (emagent-acp--persist-model-id state model-id)
                      (emagent-acp--progress
                       state
@@ -540,7 +541,7 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
   (let* ((models (emagent-acp--models-from-response response))
          (current (emagent-acp--current-model-id state models))
          (choice (emagent-acp--resolve-model-id state models
-                                               (emagent-acp--saved-model-id state))))
+                                                (emagent-acp--saved-model-id state))))
     (cond
      ((and choice session-id (not (string-empty-p choice))
            current (string= choice current))
@@ -562,7 +563,7 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
        :on-success (lambda ()
                      (emagent-acp--finish-configure-model state session-id on-ready resumed))
        :on-failure (lambda ()
-                    (emagent-acp--finish-configure-model state session-id on-ready resumed))))
+                     (emagent-acp--finish-configure-model state session-id on-ready resumed))))
      (t
       (when current
         (emagent-acp--progress
@@ -638,7 +639,7 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
                         emagent-acp-watchdog-timeout)
            (when pending
              (emagent-log "emagent: pending ACP request count: %d"
-                         (length pending)))
+                          (length pending)))
            (if (and (map-elt state :assistant-text)
                     (not (string-empty-p (map-elt state :assistant-text))))
                (progn
@@ -717,8 +718,8 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
     (map-put! state :current-tool nil)
     (emagent-acp--clear-prompt-watchdog state)
     (emagent-acp--trace "prompt done (%d chars, %d thought)"
-                       (length (or (map-elt state :assistant-text) ""))
-                       (length (or (map-elt state :thought-text) "")))
+                        (length (or (map-elt state :assistant-text) ""))
+                        (length (or (map-elt state :thought-text) "")))
     (emagent-acp--flush-thought-buffer state)
     (when (and response (map-elt response 'usage))
       (emagent-acp--save-usage-from-response state (map-elt response 'usage)))
@@ -766,8 +767,8 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
           (while (string-match "\\`\\(.+?[.!?]\\)\\(?:[[:space:]]\\|\\'\\)" pending)
             (let ((end (match-end 0)))
               (emagent-acp--log-thought-line
-             (if (eq mode 'both) 'minimal mode)
-             (substring pending 0 end))
+               (if (eq mode 'both) 'minimal mode)
+               (substring pending 0 end))
               (setq pending (substring pending end))))
           (map-put! state :thought-buffer pending))))))
 
@@ -836,8 +837,8 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
      :on-failure
      (lambda (error raw)
        (emagent-acp--trace "recv %s error: %s"
-                          method
-                          (or (map-elt error 'message) (format "%s" error)))
+                           method
+                           (or (map-elt error 'message) (format "%s" error)))
        (when on-failure (funcall on-failure error raw))))))
 
 (defun emagent-acp--protected-fs-error (path)
@@ -915,7 +916,7 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
           (condition-case err
               (if (y-or-n-p (format "Allow emagent to write %s? " resolved))
                   (let ((written (emagent-tools--write-file-content
-                                   path (map-nested-elt acp-request '(params content)))))
+                                  path (map-nested-elt acp-request '(params content)))))
                     (emagent-acp--notify-user
                      state (format "emagent: wrote %s (C-/ to undo in that buffer)"
                                    written))
@@ -944,7 +945,7 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
                              (let ((id (map-elt opt 'optionId)))
                                (and id (member id prefer))))
                            options)
-                'optionId)
+                 'optionId)
         (map-elt (car options) 'optionId))))
 
 (cl-defun emagent-acp--on-permission (&key state acp-request)
@@ -996,9 +997,9 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
        (emagent-acp--trace "recv %s +%d" update-type (length text)))
       ("tool_call"
        (emagent-acp--trace "recv tool_call %s"
-                          (or title
-                              (map-nested-elt acp-notification '(params update toolCallId))
-                              "running")))
+                           (or title
+                               (map-nested-elt acp-notification '(params update toolCallId))
+                               "running")))
       (_
        (emagent-acp--trace "recv %s" (or update-type "session/update"))))))
 
@@ -1039,7 +1040,7 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
           (map-nested-elt acp-notification '(params update))))
         ("available_commands_update"
          (let ((commands (map-nested-elt acp-notification
-                                       '(params update availableCommands))))
+                                         '(params update availableCommands))))
            (when-let* ((buffer (emagent-acp--chat-buffer state))
                        (cb (map-elt state :cb-slash-commands)))
              (with-current-buffer buffer
@@ -1067,7 +1068,7 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
      :on-notification
      (lambda (notification)
        (emagent-acp--on-notification :state state
-                                    :acp-notification notification)))
+                                     :acp-notification notification)))
     (acp-subscribe-to-requests
      :client (map-elt state :client)
      :buffer buffer
@@ -1080,18 +1081,18 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
   (emagent-acp--send-request
    :state state
    :request (if emagent-acp-file-access
-               (acp-make-initialize-request
-                :protocol-version 1
-                :client-info `((name . "emagent")
-                               (title . "Emacs Emagent")
-                               (version . "0.1.0"))
-                :read-text-file-capability t
-                :write-text-file-capability t)
-             (acp-make-initialize-request
-              :protocol-version 1
-              :client-info `((name . "emagent")
-                             (title . "Emacs Emagent")
-                             (version . "0.1.0"))))
+                (acp-make-initialize-request
+                 :protocol-version 1
+                 :client-info `((name . "emagent")
+                                (title . "Emacs Emagent")
+                                (version . "0.1.0"))
+                 :read-text-file-capability t
+                 :write-text-file-capability t)
+              (acp-make-initialize-request
+               :protocol-version 1
+               :client-info `((name . "emagent")
+                              (title . "Emacs Emagent")
+                              (version . "0.1.0"))))
    :on-success (lambda (response)
                  (map-put! state :initialized t)
                  (map-put! state :mcp-http (emagent-acp--mcp-http-capable-p response))
@@ -1130,7 +1131,7 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
    :request (acp-make-session-new-request
              :cwd (emagent-acp--session-cwd state)
              :mcp-servers (emagent-mcp-session-servers (map-elt state :mcp-http)
-                                              (emagent-acp--chat-buffer state))
+                                                       (emagent-acp--chat-buffer state))
              :meta `((systemPrompt . ((append . ,(emagent-acp--system-prompt))))))
    :on-success (lambda (response)
                  (emagent-acp--configure-model
@@ -1153,7 +1154,7 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
              :session-id session-id
              :cwd (emagent-acp--session-cwd state)
              :mcp-servers (emagent-mcp-session-servers (map-elt state :mcp-http)
-                                              (emagent-acp--chat-buffer state))
+                                                       (emagent-acp--chat-buffer state))
              :meta `((systemPrompt . ((append . ,(emagent-acp--system-prompt))))))
    :on-success (lambda (response)
                  (map-put! state :replaying-history nil)
@@ -1190,14 +1191,14 @@ CALLBACKS is an alist of rendering callbacks keyed by:
   (with-current-buffer chat-buffer
     (emagent-chat-clear-slash-commands)
     (setq emagent-acp--session (emagent-acp--make-state :client client
-                                                       :chat-buffer chat-buffer
-                                                       :on-reveal on-reveal))
+                                                        :chat-buffer chat-buffer
+                                                        :on-reveal on-reveal))
     (dolist (cb callbacks)
       (map-put! emagent-acp--session (car cb) (cdr cb)))
     (emagent-mcp-register-session :token (emagent-mcp-buffer-token)
-                                 :cwd (emagent-chat--session-directory)
-                                 :buffer chat-buffer
-                                 :prefer-emacs emagent-acp-prefer-emacs)
+                                  :cwd (emagent-chat--session-directory)
+                                  :buffer chat-buffer
+                                  :prefer-emacs emagent-acp-prefer-emacs)
     (emagent-acp--progress emagent-acp--session "starting agent…")
     (emagent-acp--subscribe :state emagent-acp--session)
     (emagent-acp--initialize :state emagent-acp--session :on-ready on-ready)
@@ -1275,18 +1276,21 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
       (emagent-acp--cancel-prompt-render state)
       (emagent-acp--clear-thought-buffer state)
       (emagent-acp--schedule-prompt-watchdog state)
-      (emagent-acp--send-request
-       :state state
-       :request (acp-make-session-prompt-request
-                 :session-id session-id :prompt blocks :images images)
-       :on-success
-       (lambda (response)
-         (emagent-acp--complete-prompt state response))
-       :on-failure
-       (lambda (error _raw)
-         (let ((message (or (map-elt error 'message) (format "%s" error))))
-           (emagent-acp--abort-prompt state (format "prompt failed: %s" message))
-           (emagent-acp--notify-user state (format "emagent: prompt failed: %s" message))))))))
+      (let ((gen (map-elt state :prompt-generation)))
+        (emagent-acp--send-request
+         :state state
+         :request (acp-make-session-prompt-request
+                   :session-id session-id :prompt blocks :images images)
+         :on-success
+         (lambda (response)
+           (when (eq (map-elt state :prompt-generation) gen)
+             (emagent-acp--complete-prompt state response)))
+         :on-failure
+         (lambda (error _raw)
+           (when (eq (map-elt state :prompt-generation) gen)
+             (let ((message (or (map-elt error 'message) (format "%s" error))))
+               (emagent-acp--abort-prompt state (format "prompt failed: %s" message))
+               (emagent-acp--notify-user state (format "emagent: prompt failed: %s" message))))))))))
 
 (defun emagent-acp-interrupt ()
   "Interrupt the in-flight prompt and close the response block cleanly.
@@ -1306,6 +1310,13 @@ request continues in the background but its result is ignored."
                      notice
                    (concat text "\n\n" notice))))
       (map-put! state :assistant-text full))
+    (map-put! state :prompt-generation (1+ (or (map-elt state :prompt-generation) 0)))
+    (when-let ((client (map-elt state :client))
+               (session-id (map-elt state :session-id)))
+      (ignore-errors
+        (acp-send-notification
+         :client client
+         :notification (acp-make-session-cancel-notification :session-id session-id))))
     (map-put! state :busy nil)
     (map-put! state :prompt-finishing t)
     (map-put! state :prompt-finalized nil)
@@ -1315,7 +1326,7 @@ request continues in the background but its result is ignored."
 (defun emagent-acp-shutdown-buffer ()
   "Shut down the ACP session for the current buffer."
   (emagent-chat-clear-slash-commands)
-(when emagent-mcp--token
+  (when emagent-mcp--token
     (emagent-mcp-deregister-session emagent-mcp--token))
   (when-let ((state emagent-acp--session))
     (emagent-acp--stop-rss-timer state)
