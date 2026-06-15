@@ -32,6 +32,7 @@
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'emagent-chat-send)
     (define-key map (kbd "C-c a")   #'emagent-chat-attach-buffer)
+    (define-key map (kbd "C-c i")   #'emagent-chat-attach-image)
     (define-key map (kbd "C-c m")   #'emagent-set-model)
     (define-key map (kbd "C-c l")   #'emagent-log-view)
     (define-key map (kbd "TAB") #'emagent-chat-tab)
@@ -133,6 +134,7 @@ hideblocks / `org-cycle-hide-block-startup'."
 # C-c C-c send (auto-formats as '* username>'; select region for multiline)
 # C-c p   insert a new '* username>' prompt heading
 # C-c a   attach buffer context to the next send
+# C-c i   attach an image file to the next send (PNG/JPEG/GIF/WebP)
 # C-c l   show emagent log (*Emagent Log*)
 # TAB    on # --- emagent --- folds just the response
 # Edit any previous '* username>' and C-c C-c to re-evaluate it
@@ -1313,6 +1315,18 @@ above the user zone, jumps to the end of the buffer first."
     (emagent-log "attached buffer summary to next prompt")
     (when emagent-chat--on-attach
       (funcall emagent-chat--on-attach text))))
+
+(declare-function emagent-acp-attach-image "emagent-acp")
+
+(defun emagent-chat-attach-image (file)
+  "Attach image FILE to the next prompt (C-c i).
+
+Supported formats: PNG, JPEG, GIF, WebP."
+  (interactive "fAttach image: ")
+  (emagent-acp-ensure-connected
+   :on-ready (lambda ()
+               (emagent-acp-attach-image file)
+               (message "emagent: image attached — send your prompt with C-c C-c"))))
 
 (defun emagent-chat-quit ()
   "Disconnect this buffer's ACP agent and bury the window."

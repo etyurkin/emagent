@@ -2,7 +2,7 @@
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1") (acp "0.12.2"))
+;; Package-Requires: ((emacs "29.1"))
 
 ;;; Code:
 
@@ -10,8 +10,7 @@
   (require 'cl-lib))
 
 (require 'cl-lib)
-(require 'acp)
-(require 'emagent-acp-compat)
+(require 'emagent-acp-protocol)
 (require 'emagent-log)
 (require 'emagent-chat)
 (require 'emagent-context)
@@ -231,6 +230,7 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :finish-timer nil state)
     (puthash :prompt-watchdog nil state)
     (puthash :extra-context nil state)
+    (puthash :extra-images nil state)
     (puthash :replaying-history nil state)
     (puthash :current-tool nil state)
     ;; Rendering callbacks — set by the integration layer (emagent.el).
@@ -1188,12 +1188,6 @@ CALLBACKS is an alist of rendering callbacks keyed by:
     (emagent-log "prefer-Emacs mode works best with `emagent-acp-file-access'"))
   (when emagent-acp-trace
     (setq acp-logging-enabled t))
-  (unless (and (boundp 'emagent-acp-compat--installed)
-               emagent-acp-compat--installed)
-    (require 'emagent-acp-compat))
-  (when (and (boundp 'emagent-acp-compat--installed)
-             emagent-acp-compat--installed)
-    (emagent-log "emagent: ACP queue workaround active"))
   (with-current-buffer chat-buffer
     (emagent-chat-clear-slash-commands)
     (setq emagent-acp--session (emagent-acp--make-state :client client
@@ -1216,6 +1210,33 @@ CALLBACKS is an alist of rendering callbacks keyed by:
     (map-put! state :extra-context
               (append (or (map-elt state :extra-context) nil) (list text)))))
 
+(defun emagent-acp-attach-image (file)
+  "Attach image FILE to the next prompt in the current buffer.
+
+The image is base64-encoded and sent as a content block alongside the text.
+Supported formats: PNG, JPEG, GIF, WebP."
+  (interactive "fAttach image: ")
+  (let* ((state (emagent-acp--session))
+         (ext (downcase (or (file-name-extension file) "")))
+         (media-type (pcase ext
+                       ("png"  "image/png")
+                       ("jpg"  "image/jpeg")
+                       ("jpeg" "image/jpeg")
+                       ("gif"  "image/gif")
+                       ("webp" "image/webp")
+                       (_      "image/png")))
+         (data (with-temp-buffer
+                 (set-buffer-multibyte nil)
+                 (insert-file-contents-literally file)
+                 (base64-encode-region (point-min) (point-max) t)
+                 (buffer-string)))
+         (img `((media-type . ,media-type) (data . ,data)))
+         (current (or (map-elt state :extra-images) '())))
+    (map-put! state :extra-images (append current (list img)))
+    (emagent-log "attached image: %s (%s, %d bytes)"
+                 (file-name-nondirectory file) media-type
+                 (file-attribute-size (file-attributes file)))))
+
 (defun emagent-acp-send-prompt (user-text)
   "Send USER-TEXT to the current buffer's ACP session."
   (let* ((state (emagent-acp--session))
@@ -1225,9 +1246,11 @@ CALLBACKS is an alist of rendering callbacks keyed by:
     (when (map-elt state :busy)
       (user-error "Emagent is busy"))
     (let* ((extra (map-elt state :extra-context))
+           (images (map-elt state :extra-images))
            (prompt (emagent-context-build-prompt user-text extra))
            (blocks `[((type . "text") (text . ,(substring-no-properties prompt)))]))
       (map-put! state :extra-context nil)
+      (map-put! state :extra-images nil)
       (map-put! state :busy t)
       (map-put! state :assistant-text "")
       (map-put! state :thought-text "")
@@ -1238,7 +1261,8 @@ CALLBACKS is an alist of rendering callbacks keyed by:
       (emagent-acp--schedule-prompt-watchdog state)
       (emagent-acp--send-request
        :state state
-       :request (acp-make-session-prompt-request :session-id session-id :prompt blocks)
+       :request (acp-make-session-prompt-request
+                 :session-id session-id :prompt blocks :images images)
        :on-success
        (lambda (response)
          (emagent-acp--complete-prompt state response))

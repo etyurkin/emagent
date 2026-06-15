@@ -2,14 +2,14 @@
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1") (acp "0.12.2"))
+;; Package-Requires: ((emacs "29.1"))
 
 ;;; Code:
 
 (eval-when-compile
   (require 'cl-lib))
 
-(require 'acp)
+(require 'emagent-acp-protocol)
 (require 'emagent-mcp)
 
 (defgroup emagent-cursor nil
