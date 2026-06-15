@@ -230,7 +230,6 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :finish-timer nil state)
     (puthash :prompt-watchdog nil state)
     (puthash :extra-context nil state)
-    (puthash :extra-images nil state)
     (puthash :replaying-history nil state)
     (puthash :current-tool nil state)
     ;; Rendering callbacks — set by the integration layer (emagent.el).
@@ -1210,32 +1209,47 @@ CALLBACKS is an alist of rendering callbacks keyed by:
     (map-put! state :extra-context
               (append (or (map-elt state :extra-context) nil) (list text)))))
 
-(defun emagent-acp-attach-image (file)
-  "Attach image FILE to the next prompt in the current buffer.
+(defun emagent-acp--image-media-type (ext)
+  "Return the MIME type string for image extension EXT, or nil if not an image."
+  (pcase (downcase (or ext ""))
+    ("png"  "image/png")
+    ("jpg"  "image/jpeg")
+    ("jpeg" "image/jpeg")
+    ("gif"  "image/gif")
+    ("webp" "image/webp")
+    (_      nil)))
 
-The image is base64-encoded and sent as a content block alongside the text.
-Supported formats: PNG, JPEG, GIF, WebP."
-  (interactive "fAttach image: ")
-  (let* ((state (emagent-acp--session))
-         (ext (downcase (or (file-name-extension file) "")))
-         (media-type (pcase ext
-                       ("png"  "image/png")
-                       ("jpg"  "image/jpeg")
-                       ("jpeg" "image/jpeg")
-                       ("gif"  "image/gif")
-                       ("webp" "image/webp")
-                       (_      "image/png")))
-         (data (with-temp-buffer
-                 (set-buffer-multibyte nil)
-                 (insert-file-contents-literally file)
-                 (base64-encode-region (point-min) (point-max) t)
-                 (buffer-string)))
-         (img `((media-type . ,media-type) (data . ,data)))
-         (current (or (map-elt state :extra-images) '())))
-    (map-put! state :extra-images (append current (list img)))
-    (emagent-log "attached image: %s (%s, %d bytes)"
-                 (file-name-nondirectory file) media-type
-                 (file-attribute-size (file-attributes file)))))
+(defun emagent-acp--extract-image-links (text)
+  "Extract [[file:...]] image links from TEXT.
+
+Scans for org file links whose paths end in PNG/JPEG/GIF/WebP, reads and
+base64-encodes each file, and removes the link from the text.  Non-image
+links and unreadable paths are left in place.
+
+Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
+ ((media-type . TYPE) (data . BASE64)) plists."
+  (let ((link-re "\\[\\[file:\\([^]\n]+\\)\\]\\(?:\\[[^]]*\\]\\)?\\]")
+        images parts (pos 0))
+    (while (string-match link-re text pos)
+      (let* ((link-beg (match-beginning 0))
+             (link-end (match-end 0))
+             (path (match-string 1 text))
+             (expanded (expand-file-name path))
+             (media-type (emagent-acp--image-media-type
+                          (file-name-extension expanded))))
+        (push (substring text pos link-beg) parts)
+        (if (and media-type (file-readable-p expanded))
+            (let ((data (with-temp-buffer
+                          (set-buffer-multibyte nil)
+                          (insert-file-contents-literally expanded)
+                          (base64-encode-region (point-min) (point-max) t)
+                          (buffer-string))))
+              (push `((media-type . ,media-type) (data . ,data)) images))
+          (push (substring text link-beg link-end) parts))
+        (setq pos link-end)))
+    (push (substring text pos) parts)
+    (cons (string-trim (apply #'concat (nreverse parts)))
+          (nreverse images))))
 
 (defun emagent-acp-send-prompt (user-text)
   "Send USER-TEXT to the current buffer's ACP session."
@@ -1246,11 +1260,13 @@ Supported formats: PNG, JPEG, GIF, WebP."
     (when (map-elt state :busy)
       (user-error "Emagent is busy"))
     (let* ((extra (map-elt state :extra-context))
-           (images (map-elt state :extra-images))
-           (prompt (emagent-context-build-prompt user-text extra))
-           (blocks `[((type . "text") (text . ,(substring-no-properties prompt)))]))
+           (full-prompt (emagent-context-build-prompt user-text extra))
+           (extracted (emagent-acp--extract-image-links
+                       (substring-no-properties full-prompt)))
+           (clean-text (car extracted))
+           (images (cdr extracted))
+           (blocks `[((type . "text") (text . ,clean-text))]))
       (map-put! state :extra-context nil)
-      (map-put! state :extra-images nil)
       (map-put! state :busy t)
       (map-put! state :assistant-text "")
       (map-put! state :thought-text "")

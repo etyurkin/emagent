@@ -35,6 +35,7 @@
     (define-key map (kbd "C-c i")   #'emagent-chat-attach-image)
     (define-key map (kbd "C-c m")   #'emagent-set-model)
     (define-key map (kbd "C-c l")   #'emagent-log-view)
+    (define-key map (kbd "C-y")     #'emagent-chat-yank)
     (define-key map (kbd "TAB") #'emagent-chat-tab)
     (define-key map (kbd "<backtab>") #'org-shifttab)
     (define-key map (kbd "C-g") #'emagent-chat-interrupt)
@@ -134,7 +135,8 @@ hideblocks / `org-cycle-hide-block-startup'."
 # C-c C-c send (auto-formats as '* username>'; select region for multiline)
 # C-c p   insert a new '* username>' prompt heading
 # C-c a   attach buffer context to the next send
-# C-c i   attach an image file to the next send (PNG/JPEG/GIF/WebP)
+# C-y     paste text normally; if clipboard has image, inserts [[file:...]] link
+# C-c i   pick an image file and insert [[file:...]] link at point
 # C-c l   show emagent log (*Emagent Log*)
 # TAB    on # --- emagent --- folds just the response
 # Edit any previous '* username>' and C-c C-c to re-evaluate it
@@ -1316,17 +1318,87 @@ above the user zone, jumps to the end of the buffer first."
     (when emagent-chat--on-attach
       (funcall emagent-chat--on-attach text))))
 
-(declare-function emagent-acp-attach-image "emagent-acp")
+(defun emagent-chat-yank (&optional arg)
+  "Yank text or paste a clipboard image (C-y).
 
-(defun emagent-chat-attach-image (file)
-  "Attach image FILE to the next prompt (C-c i).
+If the clipboard contains an image, saves it to a temp file under
+`emagent-chat--image-dir' and inserts a [[file:...]] org link at point.
+Otherwise behaves exactly like `yank' (ARG is forwarded)."
+  (interactive "*P")
+  (let ((clip (emagent-chat--clipboard-image)))
+    (if clip
+        (let ((file (emagent-chat--save-clipboard-image (car clip) (cdr clip))))
+          (insert (format "[[file:%s]]" file))
+          (message "emagent: clipboard image → %s" (file-name-nondirectory file)))
+      (yank arg))))
 
-Supported formats: PNG, JPEG, GIF, WebP."
-  (interactive "fAttach image: ")
-  (emagent-acp-ensure-connected
-   :on-ready (lambda ()
-               (emagent-acp-attach-image file)
-               (message "emagent: image attached — send your prompt with C-c C-c"))))
+(defvar emagent-chat--image-dir
+  (expand-file-name "emagent/images" (or (getenv "XDG_CACHE_HOME") "~/.cache"))
+  "Directory where clipboard images pasted into emagent buffers are saved.")
+
+(defun emagent-chat--ensure-image-dir ()
+  "Ensure `emagent-chat--image-dir' exists and return its path."
+  (unless (file-directory-p emagent-chat--image-dir)
+    (make-directory emagent-chat--image-dir t))
+  emagent-chat--image-dir)
+
+(defun emagent-chat--clipboard-image ()
+  "Return (MIME-TYPE-STRING . RAW-BYTES) for a clipboard image, or nil.
+
+Tries PNG, JPEG, GIF, WebP in order and returns the first available type."
+  (when (fboundp 'gui-get-selection)
+    (let ((targets (ignore-errors (gui-get-selection 'CLIPBOARD 'TARGETS))))
+      (when targets
+        (let ((target-list (cond ((vectorp targets) (append targets nil))
+                                 ((listp targets)   targets)
+                                 (t                 nil))))
+          (cl-some
+           (lambda (mime)
+             (when (memq (intern mime) target-list)
+               (let ((data (ignore-errors (gui-get-selection 'CLIPBOARD (intern mime)))))
+                 (when (and data (not (equal data "")))
+                   (cons mime data)))))
+           '("image/png" "image/jpeg" "image/gif" "image/webp")))))))
+
+(defun emagent-chat--save-clipboard-image (mime data)
+  "Write clipboard image DATA (raw bytes) of MIME type to a temp file.
+Returns the file path."
+  (let* ((ext (pcase mime
+                ("image/jpeg" "jpg")
+                ("image/gif"  "gif")
+                ("image/webp" "webp")
+                (_            "png")))
+         (file (expand-file-name
+                (format "img-%s.%s" (format-time-string "%Y%m%d-%H%M%S") ext)
+                (emagent-chat--ensure-image-dir))))
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (insert data)
+      (write-region (point-min) (point-max) file nil 'silent))
+    file))
+
+(defun emagent-chat-attach-image ()
+  "Insert an image link at point for the next prompt (C-c i).
+
+If the clipboard contains an image, saves it to a temp file under
+`emagent-chat--image-dir' and inserts a [[file:...]] org link at point.
+Otherwise opens a file picker.
+
+On C-c C-c emagent finds all [[file:...]] image links in the heading,
+base64-encodes them, and sends them as multimodal content blocks alongside
+the prompt text."
+  (interactive)
+  (let ((clip (emagent-chat--clipboard-image)))
+    (if clip
+        (let ((file (emagent-chat--save-clipboard-image (car clip) (cdr clip))))
+          (insert (format "[[file:%s]]" file))
+          (message "emagent: clipboard image → %s (C-c C-c to send)"
+                   (file-name-nondirectory file)))
+      (let ((file (expand-file-name
+                   (read-file-name "Attach image: " nil nil t))))
+        (insert (format "[[file:%s]]" file))
+        (message "emagent: %s attached (C-c C-c to send)"
+                 (file-name-nondirectory file))))))
 
 (defun emagent-chat-quit ()
   "Disconnect this buffer's ACP agent and bury the window."
