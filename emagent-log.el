@@ -1,0 +1,124 @@
+;;; emagent-log.el --- Emagent status log buffer -*- lexical-binding: t; -*-
+
+;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Version: 0.1.0
+;; Package-Requires: ((emacs "29.1"))
+
+;;; Commentary:
+;;
+;; Emagent session progress, tool activity, OAuth, and agent stderr are
+;; appended to `emagent-log-buffer-name' instead of *Messages*.
+
+;;; Code:
+
+(eval-when-compile
+  (require 'cl-lib))
+
+(require 'cl-lib)
+
+(defconst emagent-log-buffer-name "*Emagent Log*"
+  "Name of the buffer that collects emagent status lines.")
+
+(defgroup emagent-log nil
+  "Emagent status log buffer."
+  :group 'emagent
+  :prefix "emagent-log-")
+
+(defcustom emagent-log-max-lines 2000
+  "Maximum lines to keep in `emagent-log-buffer-name'.
+
+Set to nil to disable trimming."
+  :type '(choice (const :tag "Unlimited" nil) integer)
+  :group 'emagent-log)
+
+(defcustom emagent-log-echo-minibuffer nil
+  "When non-nil, also mirror emagent log lines to the echo area.
+
+By default emagent writes only to `emagent-log-buffer-name'."
+  :type 'boolean
+  :group 'emagent-log)
+
+(defvar emagent-log--mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") #'bury-buffer)
+    (define-key map (kbd "g") #'emagent-log-refresh)
+    map)
+  "Keymap for `emagent-log-mode'.")
+
+(defun emagent-log--get-buffer ()
+  "Return the emagent log buffer, creating it when needed."
+  (let ((buffer (get-buffer-create emagent-log-buffer-name)))
+    (with-current-buffer buffer
+      (unless (eq major-mode 'emagent-log-mode)
+        (emagent-log-mode)))
+    buffer))
+
+(defun emagent-log--truncate (buffer)
+  "Drop oldest lines in BUFFER when over `emagent-log-max-lines'."
+  (when (and emagent-log-max-lines (> emagent-log-max-lines 0))
+    (with-current-buffer buffer
+      (let ((total (count-lines (point-min) (point-max))))
+        (when (> total emagent-log-max-lines)
+          (save-excursion
+            (goto-char (point-min))
+            (forward-line (- total emagent-log-max-lines))
+            (delete-region (point-min) (point))))))))
+
+(defun emagent-log-truncate-line (string width &optional keep-tail)
+  "Truncate STRING for logging to display WIDTH.
+
+Emacs 30 changed `truncate-string-to-width': the fourth argument is a
+padding character, and ellipsis is the fifth.  KEEP-TAIL non-nil keeps
+the end of STRING visible."
+  (setq string (string-trim string))
+  (if (<= (string-width string) width)
+      string
+    (if keep-tail
+        (let* ((ellipsis "…")
+               (chars (max 1 (- width (string-width ellipsis)))))
+          (concat ellipsis
+                  (substring string (max 0 (- (length string) chars)))))
+      (if (>= emacs-major-version 30)
+          (truncate-string-to-width string width nil nil "…")
+        (truncate-string-to-width string width nil "…")))))
+
+(defun emagent-log (format-string &rest args)
+  "Append a timestamped line to `emagent-log-buffer-name'."
+  (let* ((text (apply #'format format-string args))
+         (buffer (emagent-log--get-buffer)))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (unless (bolp)
+          (insert "\n"))
+        (insert (format-time-string "[%H:%M:%S] ") text)
+        (emagent-log--truncate buffer))
+      (when-let ((window (get-buffer-window buffer t)))
+        (with-selected-window window
+          (goto-char (point-max))
+          (recenter -1))))
+    (when emagent-log-echo-minibuffer
+      (message "%s" text))))
+
+;;;###autoload
+(defun emagent-log-view ()
+  "Display the emagent status log buffer."
+  (interactive)
+  (pop-to-buffer (emagent-log--get-buffer))
+  (goto-char (point-max)))
+
+(defun emagent-log-refresh ()
+  "Go to the end of the emagent log buffer."
+  (interactive)
+  (goto-char (point-max))
+  (recenter -1))
+
+(define-derived-mode emagent-log-mode special-mode "Emagent-Log"
+  "Major mode for the emagent status log."
+  (setq buffer-read-only t)
+  (setq truncate-lines t)
+  (setq-local revert-buffer-function #'emagent-log-refresh))
+
+(provide 'emagent-log)
+
+;;; emagent-log.el ends here

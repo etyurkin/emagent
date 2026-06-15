@@ -1,0 +1,6 @@
+*.elc
+*~
+.DS_Store
+.eln-cache/
+.beacon/
+.claude/

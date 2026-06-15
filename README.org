@@ -1,0 +1,123 @@
+#+TITLE: emagent
+#+AUTHOR: Evgeniy Tyurkin
+#+OPTIONS: toc:t num:nil
+
+Emacs-native ACP chat assistant for Emacs internals, elisp, and org-mode work.
+
+Emagent opens an org-mode scratch buffer per project, sends prompts to an external
+ACP agent (Cursor or Claude).
+
+* Requirements
+
+- Emacs 29.1+
+- [[https://github.com/xenodium/acp-el][acp]] 0.12.2+
+- An ACP agent on =PATH=:
+  - *Cursor* (default): [[https://cursor.com/cli][Cursor CLI]] → =cursor-agent acp=
+  - *Claude*: =npm install -g @agentclientprotocol/claude-agent-acp= and =ANTHROPIC_API_KEY=
+
+* Install
+
+#+BEGIN_SRC emacs-lisp
+;; Tested with acp 0.12.2 (commit 3ddfa90). Check emagent-acp-compat--acp-version before upgrading.
+(use-package acp
+  :ensure t
+  :demand t)
+
+(use-package emagent
+  :ensure (:host github :repo "etyurkin/emagent" :depth 1)
+  :commands (emagent emagent-cursor-start emagent-claude-start emagent-mode emagent-set-model)
+  :custom (emagent-default-provider (if (equal (getenv "EMAGENT_AGENT") "claude")
+                                       'claude
+                                     'cursor)))
+#+END_SRC
+
+Set =EMAGENT_AGENT= to =claude= or =cursor= to pick the default provider when
+Emacs starts.
+
+For a local clone, add =:load-path "~/path/to/emagent"= instead of =:ensure=.
+
+* Usage
+
+| Key / command              | Action                                      |
+|----------------------------+---------------------------------------------|
+| =M-x emagent=                | Start a session (infers cwd, selects agent) |
+| =M-x emagent-cursor-start=   | Start with the Cursor provider              |
+| =M-x emagent-claude-start=   | Start with the Claude ACP provider          |
+| =M-x emagent-mode=           | Reconnect a saved buffer (agent + session)  |
+| =M-x emagent-set-model=      | Change ACP model mid-session                |
+| =C-c C-c=                    | Send the current =* user>= block (or region)  |
+| =C-c p=                      | Insert a new =* user>= prompt heading         |
+| =C-c a=                      | Attach buffer summary to next prompt        |
+| =C-c m=                      | Set model                                   |
+| =C-c l=                      | Show emagent log (=*Emagent Log*=)            |
+| =TAB= on =/command= line       | Complete slash commands (skills / built-ins) |
+| =TAB= on =# --- emagent ---=   | Fold / unfold the response block            |
+| =TAB= elsewhere              | =org-cycle= (headlines, Reasoning, etc.)      |
+| =C-g=                        | Interrupt agent response                    |
+| =C-x k=                      | Kill buffer and disconnect agent            |
+
+** Project directory and agent
+
+Each prompt is formatted as a =* username>= org heading so you can fold an
+entire exchange (question + reply) with a single =TAB=.  Type after the
+=* username>= stub and press =C-c C-c=; multiline prompts work without selecting
+a region — the entire heading block is captured automatically.
+
+To re-evaluate a previous prompt, edit its =* username>= heading and press
+=C-c C-c= again — the old response is removed and the agent is called with the
+updated text.  Use =C-c C-n= to insert a fresh heading if the stub was deleted.
+
+=M-x emagent= infers the project directory from the current buffer's
+=default-directory= (or =~/=).  Prefix argument (=C-u M-x emagent=) picks the
+directory interactively.
+
+If both =cursor-agent= and =claude-agent-acp= are installed, emagent prompts
+which to use (defaulting to =emagent-default-provider=).  The chosen provider,
+session, project, model, and allowed tools are saved in the buffer header as
+=#+EMAGENT_*= properties.
+
+** Saved sessions
+
+Save the buffer to a =.org= file (=C-x C-s=).  Each buffer begins with
+=# -*- mode: emagent -*-=, so Emacs activates =emagent-mode= and reconnects
+automatically the next time the file is opened.  The persisted agent, session
+id, model, and project directory are all restored from the =#+EMAGENT_*= header.
+
+*Note:* the agent can only resume a session that has at least one completed
+exchange.  A buffer saved before any prompt was sent will reconnect but start a
+fresh session — the agent has nothing stored yet to resume.
+
+* Customization
+
+| Variable                          | Default      | Description                                       |
+|-----------------------------------+--------------+---------------------------------------------------|
+| =emagent-default-provider=          | ='cursor=      | =cursor= or =claude=                                  |
+| =emagent-cursor-acp-command=        | =("cursor-agent" "acp")= | Cursor spawn command                  |
+| =emagent-claude-acp-command=        | =("claude-agent-acp")=   | Claude spawn command                  |
+| =emagent-acp-file-access=           | =t=            | Route file I/O through Emacs                      |
+| =emagent-acp-prefer-emacs=          | =t=            | Prefer Emacs tools over agent defaults            |
+| =emagent-allowed-tools=             | =nil=          | Tools that skip confirmation                      |
+| =emagent-tools-show-written-buffer= | ='magit-diff=  | Show file after write: =nil=, =t=, or ='magit-diff=   |
+| =emagent-shell-block-no-verify=     | =t=            | Refuse =git --no-verify=                            |
+| =emagent-shell-guard-push=          | =t=            | Block push when branch PR is already merged       |
+| =emagent-shell-redirect=            | =t=            | Auto-redirect =cat=/=grep=/=git= to emagent tools     |
+| =emagent-shell-suggest=             | =t=            | Suggest emagent alternative for shell commands    |
+| =emagent-acp-extra-mcp-config-file= | ="~/.claude.json"= | Forward MCP servers from this file to the agent |
+| =emagent-oauth-auto-browse-url=     | =nil=          | Auto-open OAuth authorize URLs in a browser       |
+| =emagent-acp-watchdog-timeout=      | =300=          | Seconds of silence before aborting a stalled prompt |
+
+Destructive tool calls (=eval=, =write_file=, =delete_file=, shell commands,
+etc.) prompt before running.  Answer /allow all/ to remember a tool for the
+current buffer.
+
+** MCP gateway forwarding
+
+Emagent reads the =mcpServers= block from =emagent-acp-extra-mcp-config-file=
+(default =~/.claude.json=) and forwards those servers to the ACP agent alongside
+the built-in emagent tools.  This lets Claude-compatible agents use any MCP
+gateway you have configured — no separate setup required.  Set to =nil= to
+disable forwarding.
+
+* License
+
+MIT.  See [[file:LICENSE][LICENSE]].  Copyright © 2026 Evgeniy Tyurkin.
