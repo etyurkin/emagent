@@ -57,7 +57,7 @@ That is the `cdr' of `emagent-claude-acp-command'."
 (cl-defun emagent-claude-make-client (&key context-buffer)
   "Create an ACP client for Claude using CONTEXT-BUFFER."
   (emagent-claude-check-command)
-  (acp-make-client :context-buffer context-buffer
+  (emagent-acp-make-client :context-buffer context-buffer
                    :command (emagent-claude-command)
                    :command-params (emagent-claude-command-params)
                    :environment-variables emagent-claude-environment))

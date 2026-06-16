@@ -10,7 +10,6 @@ ACP agent (Cursor or Claude).
 * Requirements
 
 - Emacs 29.1+
-- [[https://github.com/xenodium/acp-el][acp]] 0.12.2+
 - An ACP agent on =PATH=:
   - *Cursor* (default): [[https://cursor.com/cli][Cursor CLI]] → =cursor-agent acp=
   - *Claude*: =npm install -g @agentclientprotocol/claude-agent-acp= and =ANTHROPIC_API_KEY=
@@ -18,11 +17,6 @@ ACP agent (Cursor or Claude).
 * Install
 
 #+BEGIN_SRC emacs-lisp
-;; Tested with acp 0.12.2 (commit 3ddfa90). Check emagent-acp-compat--acp-version before upgrading.
-(use-package acp
-  :ensure t
-  :demand t)
-
 (use-package emagent
   :ensure (:host github :repo "etyurkin/emagent" :depth 1)
   :commands (emagent emagent-cursor-start emagent-claude-start emagent-mode emagent-set-model)

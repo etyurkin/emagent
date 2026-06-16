@@ -5,7 +5,7 @@
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; URL: https://github.com/etyurkin/emagent
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1") (acp "0.12.2"))
+;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: comm tools
 
 ;;; Commentary:
@@ -22,7 +22,7 @@
 (eval-when-compile
   (require 'cl-lib))
 
-(require 'acp)
+(require 'emagent-acp-protocol)
 (require 'emagent-log)
 (require 'emagent-tools)
 (require 'emagent-mcp)
@@ -152,22 +152,22 @@ prompting; when both are installed prompt (defaulting to
                 (let ((client (emagent--make-client provider buffer)))
                   (unwind-protect
                       (progn
-                        (acp-send-request
+                        (emagent-acp-send-request
                          :client client
-                         :request (acp-make-initialize-request
+                         :request (emagent-acp-make-initialize-request
                                    :protocol-version 1
                                    :client-info `((name . "emagent")
                                                   (title . "Emagent")
                                                   (version . "0.1.0")))
                          :sync t)
                         (emagent-acp--model-entries-from-response
-                         (acp-send-request
+                         (emagent-acp-send-request
                           :client client
-                          :request (acp-make-session-new-request
+                          :request (emagent-acp-make-session-new-request
                                     :cwd default-directory
                                     :mcp-servers [])
                           :sync t)))
-                    (acp-shutdown :client client)))
+                    (emagent-acp-shutdown :client client)))
               (error
                (emagent-log "could not probe %s: %s"
                            (symbol-name provider)

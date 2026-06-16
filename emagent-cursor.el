@@ -62,7 +62,7 @@ invocation to its own in-Emacs MCP session."
   "Create an ACP client for Cursor using CONTEXT-BUFFER."
   (emagent-cursor-check-command)
   (emagent-mcp-ensure-cursor-config)
-  (acp-make-client :context-buffer context-buffer
+  (emagent-acp-make-client :context-buffer context-buffer
                    :command (emagent-cursor-command)
                    :command-params (emagent-cursor-command-params)
                    :environment-variables (emagent-cursor--environment context-buffer)))

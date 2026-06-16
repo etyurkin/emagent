@@ -7,15 +7,14 @@
 ;;; Commentary:
 ;;
 ;; Self-contained implementation of the Agent Communication Protocol (ACP)
-;; for emagent.  Provides the same public API surface as xenodium/acp.el so
-;; that callers need no changes, but incorporates all workarounds that were
-;; previously handled by emagent-acp-compat.el:
+;; for emagent.  Symbols use the emagent-acp- prefix so this file can
+;; coexist with xenodium/acp.el in the same Emacs session.
 ;;
 ;;   - Client is created as a hash table so map-put! works on Emacs 30+.
 ;;   - Incoming message queue drains synchronously and reschedules when a
 ;;     drain is already in progress (fixes the stall in acp.el 0.12.2).
-;;   - acp-make-session-load-request accepts an optional :meta keyword.
-;;   - acp-make-session-prompt-request accepts an optional :images keyword
+;;   - emagent-acp-make-session-load-request accepts an optional :meta keyword.
+;;   - emagent-acp-make-session-prompt-request accepts an optional :images keyword
 ;;     (list of ((media-type . TYPE) (data . BASE64)) plists) to send
 ;;     multimodal content alongside text.
 ;;
@@ -32,29 +31,29 @@
 
 ;;;; Configuration
 
-(defgroup acp nil
+(defgroup emagent-acp nil
   "ACP (Agent Client Protocol) implementation."
   :group 'tools
-  :prefix "acp-")
+  :prefix "emagent-acp-")
 
-(defcustom acp-logging-enabled nil
+(defcustom emagent-acp-logging-enabled nil
   "When non-nil, log ACP wire traffic to the client log buffer."
   :type 'boolean
-  :group 'acp)
+  :group 'emagent-acp)
 
-(defconst acp--jsonrpc-version "2.0")
+(defconst emagent-acp--jsonrpc-version "2.0")
 
-(defvar acp-instance-count 0)
+(defvar emagent-acp-instance-count 0)
 
 ;;;; Client construction
 
-(defun acp--increment-instance-count ()
-  "Return an incremented `acp-instance-count', wrapping at fixnum max."
-  (if (= acp-instance-count most-positive-fixnum)
-      (setq acp-instance-count 0)
-    (setq acp-instance-count (1+ acp-instance-count))))
+(defun emagent-acp--increment-instance-count ()
+  "Return an incremented `emagent-acp-instance-count', wrapping at fixnum max."
+  (if (= emagent-acp-instance-count most-positive-fixnum)
+      (setq emagent-acp-instance-count 0)
+    (setq emagent-acp-instance-count (1+ emagent-acp-instance-count))))
 
-(cl-defun acp-make-client (&key context-buffer command command-params
+(cl-defun emagent-acp-make-client (&key context-buffer command command-params
                                 environment-variables
                                 request-sender notification-sender
                                 request-resolver response-sender
@@ -72,7 +71,7 @@ modify each outgoing JSON-RPC request before it is sent."
     (error ":command is required"))
   (let ((client (make-hash-table :test 'eq)))
     (puthash :context-buffer context-buffer client)
-    (puthash :instance-count (acp--increment-instance-count) client)
+    (puthash :instance-count (emagent-acp--increment-instance-count) client)
     (puthash :process nil client)
     (puthash :command command client)
     (puthash :command-params command-params client)
@@ -82,19 +81,19 @@ modify each outgoing JSON-RPC request before it is sent."
     (puthash :notification-handlers () client)
     (puthash :request-handlers () client)
     (puthash :error-handlers () client)
-    (puthash :request-sender (or request-sender #'acp--request-sender) client)
-    (puthash :notification-sender (or notification-sender #'acp--notification-sender) client)
-    (puthash :request-resolver (or request-resolver #'acp--request-resolver) client)
-    (puthash :response-sender (or response-sender #'acp--response-sender) client)
+    (puthash :request-sender (or request-sender #'emagent-acp--request-sender) client)
+    (puthash :notification-sender (or notification-sender #'emagent-acp--notification-sender) client)
+    (puthash :request-resolver (or request-resolver #'emagent-acp--request-resolver) client)
+    (puthash :response-sender (or response-sender #'emagent-acp--response-sender) client)
     (puthash :outgoing-request-decorator outgoing-request-decorator client)
     client))
 
-(defun acp--client-started-p (client)
+(defun emagent-acp--client-started-p (client)
   "Return non-nil when the CLIENT process is live."
   (and (map-elt client :process)
        (process-live-p (map-elt client :process))))
 
-(cl-defun acp--start-client (&key client)
+(cl-defun emagent-acp--start-client (&key client)
   "Start the CLIENT process with a synchronous, rescheduling message-queue drain.
 
 Unlike the vanilla acp.el implementation, messages are routed immediately
@@ -105,7 +104,7 @@ messages arrive while a drain is already in progress."
   (unless (executable-find (map-elt client :command)
                            (file-remote-p default-directory))
     (error "\"%s\" not found; please install it" (map-elt client :command)))
-  (when (acp--client-started-p client)
+  (when (emagent-acp--client-started-p client)
     (error "Client already started"))
   (let* ((coding-system-for-read  'utf-8-unix)
          (coding-system-for-write 'utf-8-unix)
@@ -122,32 +121,32 @@ messages arrive while a drain is already in progress."
       (add-hook 'after-change-functions
                 (lambda (beg end _len)
                   (let ((raw (buffer-substring-no-properties beg end)))
-                    (acp--log client "STDERR" "%s" (string-trim raw))
-                    (when-let ((err (or (acp--parse-stderr-api-error raw)
+                    (emagent-acp--log client "STDERR" "%s" (string-trim raw))
+                    (when-let ((err (or (emagent-acp--parse-stderr-api-error raw)
                                         (and (not (string-empty-p (string-trim raw)))
-                                             (acp--make-internal-error raw)))))
-                      (acp--log client "API-ERROR" "%s" (string-trim raw))
+                                             (emagent-acp--make-internal-error raw)))))
+                      (emagent-acp--log client "API-ERROR" "%s" (string-trim raw))
                       (dolist (h (map-elt client :error-handlers))
                         (funcall h err)))))
                 nil t))
     (cl-labels
         ((route (incoming)
            (let ((print-circle t) (print-level 25) (print-length 200))
-             (acp--route-incoming-message
+             (emagent-acp--route-incoming-message
               :message incoming :client client
               :on-notification
               (lambda (notif)
                 (dolist (h (map-elt client :notification-handlers))
                   (condition-case-unless-debug err
                       (funcall h notif)
-                    (error (acp--log client "NOTIFICATION HANDLER ERROR"
+                    (error (emagent-acp--log client "NOTIFICATION HANDLER ERROR"
                                      "Failed: %S" err)))))
               :on-request
               (lambda (req)
                 (dolist (h (map-elt client :request-handlers))
                   (condition-case-unless-debug err
                       (funcall h req)
-                    (error (acp--log client "REQUEST HANDLER ERROR"
+                    (error (emagent-acp--log client "REQUEST HANDLER ERROR"
                                      "Failed: %S" err))))))))
          (drain ()
            (unless message-queue-busy
@@ -175,19 +174,19 @@ messages arrive while a drain is already in progress."
               :file-handler (file-remote-p default-directory)
               :filter
               (lambda (_proc input)
-                (acp--log client "INCOMING TEXT" "%s" input)
+                (emagent-acp--log client "INCOMING TEXT" "%s" input)
                 (setq pending-input (concat pending-input input))
                 (let ((start 0) pos)
                   (while (setq pos (string-search "\n" pending-input start))
                     (let ((json (substring pending-input start pos)))
-                      (acp--log client "INCOMING LINE" "%s" json)
+                      (emagent-acp--log client "INCOMING LINE" "%s" json)
                       (when-let* ((obj (condition-case nil
-                                           (acp--parse-json json)
+                                           (emagent-acp--parse-json json)
                                          (error
-                                          (acp--log client "JSON PARSE ERROR"
+                                          (emagent-acp--log client "JSON PARSE ERROR"
                                                     "Invalid JSON: %s" json)
                                           nil))))
-                        (enqueue (acp--make-message :json json :object obj))))
+                        (enqueue (emagent-acp--make-message :json json :object obj))))
                     (setq start (1+ pos)))
                   (setq pending-input (substring pending-input start))))
               :sentinel
@@ -195,21 +194,21 @@ messages arrive while a drain is already in progress."
                 (when (buffer-live-p stderr-buffer)
                   (kill-buffer stderr-buffer))
                 (when (memq (process-status process) '(exit signal))
-                  (acp--fail-pending-requests :client client :event event))))))
+                  (emagent-acp--fail-pending-requests :client client :event event))))))
         (map-put! client :process proc)))))
 
-(cl-defun acp-shutdown (&key client)
+(cl-defun emagent-acp-shutdown (&key client)
   "Shut down ACP CLIENT and release resources."
   (unless client (error ":client is required"))
   (when (and (map-elt client :process)
              (process-live-p (map-elt client :process)))
     (delete-process (map-elt client :process)))
-  (when (buffer-live-p (acp-logs-buffer :client client))
-    (kill-buffer (acp-logs-buffer :client client))))
+  (when (buffer-live-p (emagent-acp-logs-buffer :client client))
+    (kill-buffer (emagent-acp-logs-buffer :client client))))
 
 ;;;; Subscriptions
 
-(cl-defun acp-subscribe-to-notifications (&key client on-notification buffer)
+(cl-defun emagent-acp-subscribe-to-notifications (&key client on-notification buffer)
   "Subscribe to incoming CLIENT notifications via ON-NOTIFICATION callback."
   (unless client (error ":client is required"))
   (unless on-notification (error ":on-notification is required"))
@@ -224,7 +223,7 @@ messages arrive while a drain is already in progress."
           handlers)
     (map-put! client :notification-handlers handlers)))
 
-(cl-defun acp-subscribe-to-requests (&key client on-request buffer)
+(cl-defun emagent-acp-subscribe-to-requests (&key client on-request buffer)
   "Subscribe to incoming CLIENT requests via ON-REQUEST callback."
   (unless client (error ":client is required"))
   (unless on-request (error ":on-request is required"))
@@ -239,7 +238,7 @@ messages arrive while a drain is already in progress."
           handlers)
     (map-put! client :request-handlers handlers)))
 
-(cl-defun acp-subscribe-to-errors (&key client on-error buffer)
+(cl-defun emagent-acp-subscribe-to-errors (&key client on-error buffer)
   "Subscribe to agent process errors via ON-ERROR callback."
   (unless client (error ":client is required"))
   (unless on-error (error ":on-error is required"))
@@ -256,7 +255,7 @@ messages arrive while a drain is already in progress."
 
 ;;;; Sending
 
-(cl-defun acp-send-request (&key client request buffer on-success on-failure sync)
+(cl-defun emagent-acp-send-request (&key client request buffer on-success on-failure sync)
   "Send REQUEST from CLIENT.
 
 ON-SUCCESS is (lambda (response)), ON-FAILURE is (lambda (error)).
@@ -264,42 +263,42 @@ BUFFER overrides the context buffer for callbacks.
 When SYNC is non-nil, block until the response arrives."
   (unless client (error ":client is required"))
   (unless request (error ":request is required"))
-  (unless (acp--client-started-p client)
-    (acp--start-client :client client))
+  (unless (emagent-acp--client-started-p client)
+    (emagent-acp--start-client :client client))
   (funcall (map-elt client :request-sender)
            :client client :request request :buffer buffer
            :on-success on-success :on-failure on-failure :sync sync))
 
-(cl-defun acp-send-response (&key client response)
+(cl-defun emagent-acp-send-response (&key client response)
   "Send a request RESPONSE from CLIENT."
   (unless client (error ":client is required"))
   (unless response (error ":response is required"))
   (funcall (map-elt client :response-sender) :client client :response response))
 
-(cl-defun acp-send-notification (&key client notification sync)
+(cl-defun emagent-acp-send-notification (&key client notification sync)
   "Send NOTIFICATION from CLIENT."
   (unless client (error ":client is required"))
   (unless notification (error ":notification is required"))
-  (unless (acp--client-started-p client)
-    (acp--start-client :client client))
+  (unless (emagent-acp--client-started-p client)
+    (emagent-acp--start-client :client client))
   (funcall (map-elt client :notification-sender)
            :client client :notification notification :sync sync))
 
-(cl-defun acp--request-sender (&key client request buffer on-success on-failure sync)
+(cl-defun emagent-acp--request-sender (&key client request buffer on-success on-failure sync)
   "Default implementation of the ACP request sender."
-  (unless (acp--client-started-p client)
-    (acp--start-client :client client))
+  (unless (emagent-acp--client-started-p client)
+    (emagent-acp--start-client :client client))
   (when-let ((decorator (map-elt client :outgoing-request-decorator)))
     (if-let ((decorated (funcall decorator request)))
         (setq request decorated)
-      (acp--log client "DECORATOR ERROR"
+      (emagent-acp--log client "DECORATOR ERROR"
                 "Decorator returned nil for \"%s\", sending original"
                 (map-elt request :method))))
   (let* ((method (map-elt request :method))
          (params (map-elt request :params))
          (proc (map-elt client :process))
          (request-id (1+ (map-elt client :request-id)))
-         (wire-request `((jsonrpc . ,acp--jsonrpc-version)
+         (wire-request `((jsonrpc . ,emagent-acp--jsonrpc-version)
                          (method  . ,method)
                          (id      . ,request-id)
                          ,@(when params `((params . ,params)))))
@@ -317,9 +316,9 @@ When SYNC is non-nil, block until the response arrives."
                 (lambda (data) (setq result data done t)))
       (map-put! (map-nested-elt client `(:pending-requests ,request-id)) :on-failure
                 (lambda (data) (setq result data done 'error))))
-    (acp--log client "OUTGOING OBJECT" "%s" wire-request)
-    (let ((json (acp--serialize-json wire-request)))
-      (acp--log client "OUTGOING TEXT" "%s" json)
+    (emagent-acp--log client "OUTGOING OBJECT" "%s" wire-request)
+    (let ((json (emagent-acp--serialize-json wire-request)))
+      (emagent-acp--log client "OUTGOING TEXT" "%s" json)
       (process-send-string proc json))
     (when sync
       (while (not done)
@@ -328,48 +327,48 @@ When SYNC is non-nil, block until the response arrives."
           (error "ACP request failed: %s" result)
         result))))
 
-(cl-defun acp--response-sender (&key client response)
+(cl-defun emagent-acp--response-sender (&key client response)
   "Default implementation of the ACP response sender."
   (let* ((request-id  (map-elt response :request-id))
          (result-data (map-elt response :result))
          (error-data  (map-elt response :error))
          (proc (map-elt client :process))
          (wire (if error-data
-                   `((jsonrpc . ,acp--jsonrpc-version)
+                   `((jsonrpc . ,emagent-acp--jsonrpc-version)
                      (id      . ,request-id)
                      (error   . ,error-data))
-                 `((jsonrpc . ,acp--jsonrpc-version)
+                 `((jsonrpc . ,emagent-acp--jsonrpc-version)
                    (id      . ,request-id)
                    (result  . ,result-data)))))
-    (let ((json (acp--serialize-json wire)))
-      (acp--log client "OUTGOING RESPONSE" "%s" json)
+    (let ((json (emagent-acp--serialize-json wire)))
+      (emagent-acp--log client "OUTGOING RESPONSE" "%s" json)
       (process-send-string proc json))))
 
-(cl-defun acp--notification-sender (&key client notification &allow-other-keys)
+(cl-defun emagent-acp--notification-sender (&key client notification &allow-other-keys)
   "Default implementation of the ACP notification sender."
-  (unless (acp--client-started-p client)
-    (acp--start-client :client client))
+  (unless (emagent-acp--client-started-p client)
+    (emagent-acp--start-client :client client))
   (let* ((method (map-elt notification :method))
          (params (map-elt notification :params))
          (proc (map-elt client :process))
-         (wire `((jsonrpc . ,acp--jsonrpc-version)
+         (wire `((jsonrpc . ,emagent-acp--jsonrpc-version)
                  (method  . ,method)
                  ,@(when params `((params . ,params))))))
-    (acp--log client "OUTGOING NOTIFICATION" "%s" wire)
-    (let ((json (acp--serialize-json wire)))
+    (emagent-acp--log client "OUTGOING NOTIFICATION" "%s" wire)
+    (let ((json (emagent-acp--serialize-json wire)))
       (process-send-string proc json))))
 
-(cl-defun acp--request-resolver (&key client id)
+(cl-defun emagent-acp--request-resolver (&key client id)
   "Resolve pending request by ID in CLIENT."
   (map-nested-elt client `(:pending-requests ,id)))
 
 ;;;; Message routing
 
-(cl-defun acp--make-message (&key json object)
+(cl-defun emagent-acp--make-message (&key json object)
   "Wrap JSON string and parsed OBJECT into a message alist."
   (list (cons :object object) (cons :json json)))
 
-(cl-defun acp--route-incoming-message (&key client message on-notification on-request)
+(cl-defun emagent-acp--route-incoming-message (&key client message on-notification on-request)
   "Route a CLIENT MESSAGE to the appropriate handler.
 
 ON-NOTIFICATION receives notification objects; ON-REQUEST receives incoming
@@ -384,7 +383,7 @@ request objects (when the agent initiates a request to emagent)."
                            (map-contains-key (map-elt message :object) 'result)
                            (funcall (map-elt client :request-resolver)
                                     :client client :id .id))))
-       (acp--log client nil "↳ Routing as response (result)")
+       (emagent-acp--log client nil "↳ Routing as response (result)")
        (map-put! client :pending-requests
                  (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt resp :on-success)
@@ -393,39 +392,39 @@ request objects (when the agent initiates a request to emagent)."
                                       (map-elt client :context-buffer)
                                       (current-buffer))
                (funcall (map-elt resp :on-success) .result)))
-         (acp--log client nil "Unhandled result: %s" message))
+         (emagent-acp--log client nil "Unhandled result: %s" message))
        t)
 
      ;; Error response to our outgoing request
      (when-let ((resp (and .error .id
                            (funcall (map-elt client :request-resolver)
                                     :client client :id .id))))
-       (acp--log client nil "↳ Routing as response (error)")
+       (emagent-acp--log client nil "↳ Routing as response (error)")
        (map-put! client :pending-requests
                  (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt resp :on-failure)
-           (acp--call-request-failure
+           (emagent-acp--call-request-failure
             :client client :incoming-response resp
             :error-data .error :message message)
-         (acp--log client nil "Unhandled error: %s" message))
+         (emagent-acp--log client nil "Unhandled error: %s" message))
        t)
 
      ;; Incoming request from agent (e.g. fs/read_text_file)
      (when (and .method .id)
-       (acp--log client nil "↳ Routing as incoming request")
+       (emagent-acp--log client nil "↳ Routing as incoming request")
        (when on-request (funcall on-request (map-elt message :object)))
        t)
 
      ;; Notification (no id)
      (when (not .id)
-       (acp--log client nil "↳ Routing as notification")
+       (emagent-acp--log client nil "↳ Routing as notification")
        (when on-notification (funcall on-notification (map-elt message :object)))
        t)
 
      ;; Unrecognized
-     (acp--log client nil "↳ Unrecognized message: %s" (map-elt message :object)))))
+     (emagent-acp--log client nil "↳ Unrecognized message: %s" (map-elt message :object)))))
 
-(cl-defun acp--call-request-failure (&key client incoming-response error-data message)
+(cl-defun emagent-acp--call-request-failure (&key client incoming-response error-data message)
   "Invoke the failure callback of INCOMING-RESPONSE with ERROR-DATA."
   (with-temp-buffer
     (with-current-buffer (or (map-elt incoming-response :buffer)
@@ -436,12 +435,12 @@ request objects (when the agent initiates a request to emagent)."
             (funcall callback error-data message)
           (funcall callback error-data))))))
 
-(cl-defun acp--fail-pending-requests (&key client event)
+(cl-defun emagent-acp--fail-pending-requests (&key client event)
   "Fail all pending requests in CLIENT with a process-ended error."
   (let* ((pending (map-elt client :pending-requests))
          (trimmed (string-trim event))
          (msg "Agent process ended before completing request")
-         (err (acp--make-internal-error
+         (err (emagent-acp--make-internal-error
                (if (string-empty-p trimmed) msg
                  (format "%s: %s" msg trimmed)))))
     (map-put! client :pending-requests nil)
@@ -449,29 +448,29 @@ request objects (when the agent initiates a request to emagent)."
       (when-let ((resp (cdr entry))
                  ((map-elt resp :on-failure)))
         (condition-case-unless-debug e
-            (acp--call-request-failure
+            (emagent-acp--call-request-failure
              :client client :incoming-response resp :error-data err
-             :message (acp--make-message
-                       :object `((jsonrpc . ,acp--jsonrpc-version)
+             :message (emagent-acp--make-message
+                       :object `((jsonrpc . ,emagent-acp--jsonrpc-version)
                                  (id      . ,(car entry))
                                  (error   . ,err))
                        :json nil))
-          (error (acp--log client "REQUEST FAILURE CALLBACK ERROR"
+          (error (emagent-acp--log client "REQUEST FAILURE CALLBACK ERROR"
                            "Failed: %S" e)))))))
 
 ;;;; JSON helpers
 
-(defun acp--parse-json (json)
+(defun emagent-acp--parse-json (json)
   "Parse JSON string into an alist."
   (json-parse-string json :object-type 'alist :null-object nil :false-object nil))
 
-(defun acp--serialize-json (object)
+(defun emagent-acp--serialize-json (object)
   "Serialize OBJECT to a JSON string with trailing newline."
   (concat (json-serialize object) "\n"))
 
 ;;;; Error helpers
 
-(cl-defun acp-make-error (&key code message data)
+(cl-defun emagent-acp-make-error (&key code message data)
   "Create a JSON-RPC error object with CODE and MESSAGE."
   (unless code (error ":code is required"))
   (unless message (error ":message is required"))
@@ -479,26 +478,26 @@ request objects (when the agent initiates a request to emagent)."
     (when data (nconc err `((data . ,data))))
     err))
 
-(defun acp--make-internal-error (message)
+(defun emagent-acp--make-internal-error (message)
   "Create a synthetic internal error (JSON-RPC code -32603) with MESSAGE."
-  (acp-make-error :code -32603 :message message))
+  (emagent-acp-make-error :code -32603 :message message))
 
-(defun acp--parse-stderr-api-error (raw-output)
+(defun emagent-acp--parse-stderr-api-error (raw-output)
   "Parse RAW-OUTPUT from stderr; return a structured error alist or nil."
   (when (string-match
          "Attempt [0-9]+ failed with status [0-9]+\\. Retrying.*ApiError: \\({.*}\\)"
          raw-output)
     (let ((json (match-string 1 raw-output)))
       (condition-case nil
-          (let-alist (acp--parse-json json)
+          (let-alist (emagent-acp--parse-json json)
             (condition-case nil
-                (map-elt (acp--parse-json .error.message) 'error)
+                (map-elt (emagent-acp--parse-json .error.message) 'error)
               (error nil)))
         (error nil)))))
 
 ;;;; Logging
 
-(cl-defun acp-logs-buffer (&key client)
+(cl-defun emagent-acp-logs-buffer (&key client)
   "Return (creating if needed) the log buffer for CLIENT."
   (let ((name (format "*acp-(%s)-%s log*"
                       (map-elt client :command)
@@ -508,10 +507,10 @@ request objects (when the agent initiates a request to emagent)."
           (buffer-disable-undo)
           (current-buffer)))))
 
-(defun acp--log (client label format-string &rest args)
-  "Log a message to CLIENT's log buffer when `acp-logging-enabled' is non-nil."
-  (when acp-logging-enabled
-    (with-current-buffer (acp-logs-buffer :client client)
+(defun emagent-acp--log (client label format-string &rest args)
+  "Log to CLIENT's log buffer when `emagent-acp-logging-enabled' is set."
+  (when emagent-acp-logging-enabled
+    (with-current-buffer (emagent-acp-logs-buffer :client client)
       (goto-char (point-max))
       (if label
           (insert (format "%s >\n\n%s\n\n" label (apply #'format format-string args)))
@@ -519,7 +518,7 @@ request objects (when the agent initiates a request to emagent)."
 
 ;;;; Request constructors
 
-(cl-defun acp-make-initialize-request (&key protocol-version client-info
+(cl-defun emagent-acp-make-initialize-request (&key protocol-version client-info
                                             read-text-file-capability
                                             write-text-file-capability)
   "Build an \"initialize\" request.
@@ -535,14 +534,14 @@ READ-TEXT-FILE-CAPABILITY and WRITE-TEXT-FILE-CAPABILITY are booleans."
                  . ((fs . ((readTextFile  . ,(if read-text-file-capability  t :false))
                            (writeTextFile . ,(if write-text-file-capability t :false))))))))))
 
-(cl-defun acp-make-authenticate-request (&key method-id method)
+(cl-defun emagent-acp-make-authenticate-request (&key method-id method)
   "Build an \"authenticate\" request."
   (unless method-id (error ":method-id is required"))
   `((:method . "authenticate")
     (:params . ,(append `((methodId . ,method-id))
                         (when method `((authMethod . ,method)))))))
 
-(cl-defun acp-make-session-new-request (&key cwd mcp-servers meta)
+(cl-defun emagent-acp-make-session-new-request (&key cwd mcp-servers meta)
   "Build a \"session/new\" request.
 
 CWD is required.  MCP-SERVERS is a list of MCP server configs.
@@ -553,7 +552,7 @@ META is an optional alist; a `systemPrompt' key is supported."
                 (mcpServers . ,(or mcp-servers []))
                 ,@(when meta `((_meta . ,meta)))))))
 
-(cl-defun acp-make-session-prompt-request (&key session-id prompt images)
+(cl-defun emagent-acp-make-session-prompt-request (&key session-id prompt images)
   "Build a \"session/prompt\" request.
 
 SESSION-ID and PROMPT are required.  PROMPT may be a string or a vector
@@ -582,7 +581,7 @@ This allows sending multimodal prompts to vision-capable agents."
       (:params . ((sessionId . ,session-id)
                   (prompt    . ,all-blocks))))))
 
-(cl-defun acp-make-session-load-request (&key session-id cwd mcp-servers meta)
+(cl-defun emagent-acp-make-session-load-request (&key session-id cwd mcp-servers meta)
   "Build a \"session/load\" request.
 
 SESSION-ID and CWD are required.  MCP-SERVERS is an optional list.
@@ -596,7 +595,7 @@ system-prompt injection on load)."
                 (mcpServers . ,(or mcp-servers []))
                 ,@(when meta `((_meta . ,meta)))))))
 
-(cl-defun acp-make-session-resume-request (&key session-id cwd mcp-servers)
+(cl-defun emagent-acp-make-session-resume-request (&key session-id cwd mcp-servers)
   "Build a \"session/resume\" request."
   (unless session-id (error ":session-id is required"))
   (unless cwd        (error ":cwd is required"))
@@ -605,7 +604,7 @@ system-prompt injection on load)."
                 (cwd        . ,(directory-file-name (expand-file-name cwd)))
                 (mcpServers . ,(or mcp-servers []))))))
 
-(cl-defun acp-make-session-fork-request (&key session-id cwd mcp-servers)
+(cl-defun emagent-acp-make-session-fork-request (&key session-id cwd mcp-servers)
   "Build a \"session/fork\" request."
   (unless session-id (error ":session-id is required"))
   (unless cwd        (error ":cwd is required"))
@@ -614,19 +613,19 @@ system-prompt injection on load)."
                 (cwd        . ,(directory-file-name (expand-file-name cwd)))
                 (mcpServers . ,(or mcp-servers []))))))
 
-(cl-defun acp-make-session-list-request (&key cwd)
+(cl-defun emagent-acp-make-session-list-request (&key cwd)
   "Build a \"session/list\" request."
   (unless cwd (error ":cwd is required"))
   `((:method . "session/list")
     (:params . ((cwd . ,(directory-file-name (expand-file-name cwd)))))))
 
-(cl-defun acp-make-session-delete-request (&key session-id)
+(cl-defun emagent-acp-make-session-delete-request (&key session-id)
   "Build a \"session/delete\" request."
   (unless session-id (error ":session-id is required"))
   `((:method . "session/delete")
     (:params . ((sessionId . ,session-id)))))
 
-(cl-defun acp-make-session-set-model-request (&key session-id model-id)
+(cl-defun emagent-acp-make-session-set-model-request (&key session-id model-id)
   "Build a \"session/set_model\" request (Claude Code ACP extension)."
   (unless session-id (error ":session-id is required"))
   (unless model-id   (error ":model-id is required"))
@@ -634,7 +633,7 @@ system-prompt injection on load)."
     (:params . ((sessionId . ,session-id)
                 (modelId   . ,model-id)))))
 
-(cl-defun acp-make-session-set-mode-request (&key session-id mode-id)
+(cl-defun emagent-acp-make-session-set-mode-request (&key session-id mode-id)
   "Build a \"session/set_mode\" request."
   (unless session-id (error ":session-id is required"))
   (unless mode-id    (error ":mode-id is required"))
@@ -642,7 +641,7 @@ system-prompt injection on load)."
     (:params . ((sessionId . ,session-id)
                 (modeId    . ,mode-id)))))
 
-(cl-defun acp-make-session-set-config-option-request (&key session-id config-id value)
+(cl-defun emagent-acp-make-session-set-config-option-request (&key session-id config-id value)
   "Build a \"session/set_config_option\" request."
   (unless session-id (error ":session-id is required"))
   (unless config-id  (error ":config-id is required"))
@@ -652,7 +651,7 @@ system-prompt injection on load)."
                 (configId  . ,config-id)
                 (value     . ,value)))))
 
-(cl-defun acp-make-session-cancel-notification (&key session-id reason)
+(cl-defun emagent-acp-make-session-cancel-notification (&key session-id reason)
   "Build a \"session/cancel\" notification."
   (unless session-id (error ":session-id is required"))
   `((:method . "session/cancel")
@@ -661,7 +660,7 @@ system-prompt injection on load)."
 
 ;;;; Response constructors
 
-(cl-defun acp-make-session-request-permission-response (&key request-id option-id cancelled)
+(cl-defun emagent-acp-make-session-request-permission-response (&key request-id option-id cancelled)
   "Build a \"session/request_permission\" response.
 
 Provide either OPTION-ID (selected option) or CANCELLED (non-nil)."
@@ -676,7 +675,7 @@ Provide either OPTION-ID (selected option) or CANCELLED (non-nil)."
                   `((outcome  . "selected")
                     (optionId . ,option-id))))))
 
-(cl-defun acp-make-fs-read-text-file-response (&key request-id content error)
+(cl-defun emagent-acp-make-fs-read-text-file-response (&key request-id content error)
   "Build a \"fs/read_text_file\" response with CONTENT or ERROR."
   (unless request-id (error ":request-id is required"))
   (cond
@@ -685,7 +684,7 @@ Provide either OPTION-ID (selected option) or CANCELLED (non-nil)."
    (content `((:request-id . ,request-id) (:result . ((content . ,content)))))
    (t       (error "Must provide :content or :error"))))
 
-(cl-defun acp-make-fs-write-text-file-response (&key request-id error)
+(cl-defun emagent-acp-make-fs-write-text-file-response (&key request-id error)
   "Build a \"fs/write_text_file\" response."
   (unless request-id (error ":request-id is required"))
   (if error
