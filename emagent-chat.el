@@ -688,16 +688,20 @@ check is skipped so the user can re-evaluate any previous prompt."
 
 (defun emagent-chat--slash-token-bounds ()
   "Return (START . END) for the slash command token at point, or nil."
-  (let ((zone (emagent-chat--user-zone-start)))
-    (when (>= (point) zone)
+  (let ((zone (emagent-chat--user-zone-start))
+        (user-point (point)))
+    (when (>= user-point zone)
       (save-excursion
         (beginning-of-line)
+        ;; Skip past user heading prefix when the line is a heading.
+        (when (looking-at (emagent-chat--user-heading-re))
+          (goto-char (match-end 0)))
         (when (looking-at "/")
           (let ((start (point))
                 (end (or (and (search-forward-regexp "[ \t]" (line-end-position) t)
                               (match-beginning 0))
                          (line-end-position))))
-            (when (and (>= (point) start) (<= (point) end))
+            (when (<= start user-point end)
               (cons start end))))))))
 
 (defun emagent-chat-slash-command-completion-at-point ()
