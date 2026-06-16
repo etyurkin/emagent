@@ -1537,7 +1537,7 @@ Run \\[emagent-mode] to reconnect a saved session."
   (emagent-chat--ensure-org-startup)
   (emagent-chat--sync-user-zone-marker)
   (add-hook 'completion-at-point-functions
-            #'emagent-chat-slash-command-completion-at-point nil t))
+            #'emagent-chat-slash-command-completion-at-point -90 t))
 
 (cl-defun emagent-chat-open (&key project-dir)
   "Open or create an emagent buffer for PROJECT-DIR.
