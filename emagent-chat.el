@@ -364,8 +364,9 @@ the newest begin delimiter through `point-max'."
 
 (defun emagent-chat-set-model (model)
   "Store ACP MODEL id in the current buffer."
-  (setq emagent-chat-model model)
-  (emagent-chat--write-top-property "EMAGENT_MODEL" model)
+  (unless (equal emagent-chat-model model)
+    (setq emagent-chat-model model)
+    (emagent-chat--write-top-property "EMAGENT_MODEL" model))
   (force-mode-line-update t))
 
 (defun emagent-chat-model ()
@@ -374,8 +375,9 @@ the newest begin delimiter through `point-max'."
 
 (defun emagent-chat-set-session-id (session-id)
   "Store ACP SESSION-ID in the current buffer."
-  (setq emagent-chat-session-id session-id)
-  (emagent-chat--write-top-property "EMAGENT_SESSION" session-id))
+  (unless (equal emagent-chat-session-id session-id)
+    (setq emagent-chat-session-id session-id)
+    (emagent-chat--write-top-property "EMAGENT_SESSION" session-id)))
 
 (defun emagent-chat-clear-session-id ()
   "Remove the ACP session id from the current buffer."
@@ -665,7 +667,7 @@ check is skipped so the user can re-evaluate any previous prompt."
   (when (and emagent-chat-notify-slash-commands
              emagent-chat-slash-commands)
     (emagent-log "%d slash commands from agent"
-                (length emagent-chat-slash-commands))))
+                 (length emagent-chat-slash-commands))))
 
 (defun emagent-chat--command-needle-base (needle)
   "Return NEEDLE with a trailing colon removed, for skill-name matching."
@@ -887,14 +889,14 @@ folding the inner region only so incomplete parses never break the buffer."
   (with-current-buffer (current-buffer)
     (when (emagent-chat--open-response-p)
       (let ((inhibit-read-only t))
-      (emagent-chat--writable)
-      (unless emagent-chat--thought-open-p
-        (emagent-chat-begin-thought))
-      (goto-char emagent-chat--thought-marker)
-      (insert text)
-      (setq emagent-chat--thought-marker (point-marker)
-            emagent-chat--assistant-marker (point-marker))
-      (font-lock-flush)))))
+        (emagent-chat--writable)
+        (unless emagent-chat--thought-open-p
+          (emagent-chat-begin-thought))
+        (goto-char emagent-chat--thought-marker)
+        (insert text)
+        (setq emagent-chat--thought-marker (point-marker)
+              emagent-chat--assistant-marker (point-marker))
+        (font-lock-flush)))))
 
 (defun emagent-chat-close-thought ()
   "Close and hide the open Reasoning block, if any."
@@ -996,7 +998,7 @@ folding the inner region only so incomplete parses never break the buffer."
 (defun emagent-chat--fix-table-block (rows)
   "Convert markdown table ROWS into a valid org table block."
   (let* ((body (if (and (> (length rows) 1)
-                         (emagent-chat--table-hline-p (nth 1 rows)))
+                        (emagent-chat--table-hline-p (nth 1 rows)))
                    (append (list (car rows)) (nthcdr 2 rows))
                  rows))
          (normalized (mapcar #'emagent-chat--normalize-table-row body))
@@ -1155,8 +1157,8 @@ folding the inner region only so incomplete parses never break the buffer."
          (marker-position emagent-chat--assistant-marker))
     (goto-char emagent-chat--assistant-marker))
    ((save-excursion
-     (and (emagent-chat--find-response-begin-backward)
-          (not (re-search-forward emagent-chat--response-end-re (point-max) t))))
+      (and (emagent-chat--find-response-begin-backward)
+           (not (re-search-forward emagent-chat--response-end-re (point-max) t))))
     (goto-char (point-max)))
    (t
     (goto-char (point-max)))))
@@ -1417,9 +1419,9 @@ the prompt text."
     (let ((pct (* 100.0 (/ (float used) size))))
       (propertize (format " ctx:%.0f%%" pct)
                   'face (cond
-                          ((>= pct 80) 'error)
-                          ((>= pct 50) 'warning)
-                          (t           'success))))))
+                         ((>= pct 80) 'error)
+                         ((>= pct 50) 'warning)
+                         (t           'success))))))
 
 (defun emagent-mode-line ()
   "Return emagent status text for the mode line."
@@ -1534,7 +1536,7 @@ Run \\[emagent-mode] to reconnect a saved session."
                                     (emagent-chat--read-session-property))
         emagent-chat-provider (emagent-chat-agent)
         emagent-chat-allowed-tools (or emagent-chat-allowed-tools
-                                      (emagent-chat--read-allowed-tools-property)))
+                                       (emagent-chat--read-allowed-tools-property)))
   (setq-local default-directory (emagent-chat--session-directory))
   (if (bound-and-true-p doom-modeline-mode)
       (emagent-chat--setup-doom-modeline)
@@ -1569,7 +1571,7 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
       (rename-buffer buffer-name t)
       (setq emagent-chat-slug slug
             emagent-chat-session-id (or emagent-chat-session-id
-                                       (emagent-chat--read-session-property)))
+                                        (emagent-chat--read-session-property)))
       (emagent-chat-set-project-directory dir))
     buffer))
 
