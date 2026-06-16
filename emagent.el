@@ -42,6 +42,28 @@
   :type '(choice (const cursor) (const claude))
   :group 'emagent)
 
+(defcustom emagent-extra-exec-paths
+  (mapcar #'expand-file-name
+          '("~/.local/bin" "/usr/local/bin" "/opt/homebrew/bin"
+            "/opt/homebrew/sbin" "/opt/local/bin"))
+  "Extra directories searched for agent binaries when not on `exec-path'.
+When a binary is found in one of these directories, that directory is added
+to `exec-path' so the agent process can also be started normally."
+  :type '(repeat directory)
+  :group 'emagent)
+
+(defun emagent--find-executable (command)
+  "Find COMMAND on `exec-path' or in `emagent-extra-exec-paths'.
+When found via `emagent-extra-exec-paths', adds that directory to
+`exec-path' so subsequent lookups and process starts succeed."
+  (or (executable-find command)
+      (seq-some (lambda (dir)
+                  (let ((path (expand-file-name command dir)))
+                    (when (file-executable-p path)
+                      (cl-pushnew dir exec-path :test #'equal)
+                      path)))
+                emagent-extra-exec-paths)))
+
 (defcustom emagent-probe-models-at-start t
   "When non-nil, query installed agents for models when starting emagent.
 
@@ -105,11 +127,13 @@ once the session is ready; ON-REVEAL runs when the chat buffer should be shown."
 (add-hook 'emagent-mode-hook #'emagent--on-mode-enable)
 
 (defun emagent--provider-available-p (provider)
-  "Return non-nil when PROVIDER's ACP agent executable is on `exec-path'."
+  "Return non-nil when PROVIDER's ACP agent executable can be found.
+Searches `exec-path' and `emagent-extra-exec-paths'; when found via the
+latter, adds that directory to `exec-path' so the agent starts normally."
   (when-let ((command (pcase provider
                         ('cursor (emagent-cursor-command))
                         ('claude (emagent-claude-command)))))
-    (executable-find command)))
+    (emagent--find-executable command)))
 
 (defun emagent--available-providers ()
   "Return the providers whose ACP agent is installed, in preference order."
