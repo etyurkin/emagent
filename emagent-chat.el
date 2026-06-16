@@ -38,7 +38,7 @@
     (define-key map (kbd "C-y")     #'emagent-chat-yank)
     (define-key map (kbd "TAB") #'emagent-chat-tab)
     (define-key map (kbd "<backtab>") #'org-shifttab)
-    (define-key map (kbd "C-g") #'emagent-chat-interrupt)
+    (define-key map (kbd "C-g C-g") #'emagent-chat-interrupt)
     (define-key map (kbd "C-c p")   #'emagent-chat-new-prompt)
     map)
   "Keymap for `emagent-mode'.")
@@ -138,12 +138,10 @@ hideblocks / `org-cycle-hide-block-startup'."
 # C-y     paste text normally; if clipboard has image, inserts [[file:...]] link
 # C-c i   pick an image file and insert [[file:...]] link at point
 # C-c l   show emagent log (*Emagent Log*)
-# TAB    on # --- emagent --- folds just the response
-# Edit any previous '* username>' and C-c C-c to re-evaluate it
 # C-c C-b attach buffer context to the next send
 # C-c m   set ACP model
 # C-c C-l show emagent log (*Emagent Log*)
-# C-g     interrupt agent response
+# C-g C-g interrupt agent response
 # C-x k   kill buffer and disconnect agent
 # M-x emagent-mode to reconnect a saved session
 
@@ -1287,7 +1285,7 @@ prefix is stripped before the text is sent to the agent."
 (declare-function emagent-acp-interrupt "emagent-acp")
 
 (defun emagent-chat-interrupt ()
-  "Interrupt the running agent response (C-g).
+  "Interrupt the running agent response (C-g C-g).
 
 When the agent is busy, closes the response block with a stop notice and
 returns the session to idle.  When idle, falls through to `keyboard-quit'."

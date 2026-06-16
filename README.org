@@ -47,7 +47,7 @@ For a local clone, add =:load-path "~/path/to/emagent"= instead of =:ensure=.
 | =TAB= on =/command= line       | Complete slash commands (skills / built-ins) |
 | =TAB= on =# --- emagent ---=   | Fold / unfold the response block            |
 | =TAB= elsewhere              | =org-cycle= (headlines, Reasoning, etc.)      |
-| =C-g=                        | Interrupt agent response                    |
+| =C-g C-g=                    | Interrupt agent response                    |
 | =C-x k=                      | Kill buffer and disconnect agent            |
 
 ** Project directory and agent
