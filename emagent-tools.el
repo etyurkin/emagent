@@ -100,6 +100,11 @@ Bound by the MCP dispatcher to persist the choice for the session (emagent
 writes it to the chat buffer's =#+EMAGENT_ALLOWED_TOOLS= header).  Nil means the
 choice only lasts for the current call.")
 
+(defvar emagent-tools--chat-buffer nil
+  "The emagent chat buffer for the active session.
+When non-nil, permission prompts are shown as inline buttons there instead
+of in the minibuffer.  Bound per MCP dispatch by `emagent-mcp--run-tool'.")
+
 (defconst emagent-tools--permission-choices
   '((?y "yes" "Allow this call only")
     (?a "allow all" "Always allow this tool; save it to the document header")
@@ -112,6 +117,48 @@ choice only lasts for the current call.")
     (?y 'yes)
     (?a 'all)
     (_ 'no)))
+
+(defun emagent-tools--buttons-prompt (prompt choices chat-buffer &optional preamble)
+  "Insert optional PREAMBLE, PROMPT, and CHOICES as buttons in CHAT-BUFFER.
+CHOICES is a list of (LABEL . VALUE) pairs.  Blocks via `recursive-edit'
+until a button is clicked or C-g is pressed; removes the entire inserted
+block (preamble + prompt + buttons) afterward.
+Returns the VALUE of the clicked button, or nil on C-g.
+Falls back to `completing-read' when CHAT-BUFFER is nil or dead."
+  (if (not (and chat-buffer (buffer-live-p chat-buffer)))
+      (let* ((labels (mapcar #'car choices))
+             (label (completing-read (concat prompt " ") labels nil t)))
+        (cdr (assoc label choices)))
+    (let ((result nil) start end)
+      (with-current-buffer chat-buffer
+        (let ((inhibit-read-only t))
+          (goto-char (point-max))
+          (unless (bolp) (insert "\n"))
+          (setq start (point))
+          (when preamble (insert preamble))
+          (insert "\n" prompt "\n")
+          (dolist (choice choices)
+            (insert-button (concat "[" (car choice) "]")
+                           'action (let ((v (cdr choice)))
+                                     (lambda (_b)
+                                       (setq result v)
+                                       (exit-recursive-edit)))
+                           'follow-link t)
+            (insert "  "))
+          (insert "\n")
+          (setq end (point))))
+      (when-let ((win (get-buffer-window chat-buffer)))
+        (with-selected-window win
+          (goto-char end)
+          (recenter -3)))
+      (unwind-protect
+          (condition-case nil
+              (recursive-edit)
+            (quit nil))
+        (with-current-buffer chat-buffer
+          (let ((inhibit-read-only t))
+            (delete-region start end))))
+      result)))
 
 (defun emagent-tools--remember-allowed-tool (tool-name)
   "Record TOOL-NAME as allowed for this session and persist it when possible."
@@ -128,13 +175,24 @@ choice only lasts for the current call.")
 (defun emagent-tools--confirm (tool-name prompt)
   "Return non-nil when TOOL-NAME may run, prompting with PROMPT if needed.
 
-Offers yes / allow all / no; \"allow all\" remembers TOOL-NAME for the session
-and persists it via `emagent-tools-allow-all-function'."
+When `emagent-tools--chat-buffer' is live, shows inline buttons there.
+Otherwise falls back to `read-multiple-choice' in the minibuffer.
+\"Allow all\" remembers TOOL-NAME for the session via
+`emagent-tools-allow-all-function'."
   (or (emagent-tools--allowed-p tool-name)
-      (pcase (emagent-tools--read-permission prompt)
-        ('yes t)
-        ('all (emagent-tools--remember-allowed-tool tool-name) t)
-        (_ nil))))
+      (if (and emagent-tools--chat-buffer
+               (buffer-live-p emagent-tools--chat-buffer))
+          (pcase (emagent-tools--buttons-prompt
+                  prompt
+                  '(("Allow" . yes) ("Allow all" . all) ("Deny" . no))
+                  emagent-tools--chat-buffer)
+            ('yes t)
+            ('all (emagent-tools--remember-allowed-tool tool-name) t)
+            (_ nil))
+        (pcase (emagent-tools--read-permission prompt)
+          ('yes t)
+          ('all (emagent-tools--remember-allowed-tool tool-name) t)
+          (_ nil)))))
 
 (defun emagent-tools--confirm-p (tool-name)
   "Return non-nil when TOOL-NAME may run without confirmation."
@@ -144,6 +202,49 @@ and persists it via `emagent-tools-allow-all-function'."
   "Like `emagent-tools--confirm-p' but include DETAIL in the prompt."
   (emagent-tools--confirm
    tool-name (format "Allow emagent tool %s: %s? " tool-name detail)))
+
+(defun emagent-tools--write-diff-string (resolved new-content)
+  "Return a unified diff string comparing RESOLVED with NEW-CONTENT, or nil."
+  (when (executable-find "diff")
+    (let ((old-file (make-temp-file "emagent-old-"))
+          (new-file (make-temp-file "emagent-new-")))
+      (unwind-protect
+          (progn
+            (if (file-exists-p resolved)
+                (copy-file resolved old-file t)
+              (write-region "" nil old-file nil 'quiet))
+            (write-region new-content nil new-file nil 'quiet)
+            (with-temp-buffer
+              (call-process "diff" nil t nil "-u"
+                            "--label" (concat (file-name-nondirectory resolved)
+                                              " (current)")
+                            "--label" (concat (file-name-nondirectory resolved)
+                                              " (proposed)")
+                            old-file new-file)
+              (unless (= (point-min) (point-max))
+                (buffer-string))))
+        (ignore-errors (delete-file old-file))
+        (ignore-errors (delete-file new-file))))))
+
+(defun emagent-tools--confirm-write (tool-name resolved new-content &optional chat-buffer)
+  "Show diff of NEW-CONTENT vs RESOLVED in CHAT-BUFFER with inline buttons.
+Inserts a #+begin_src diff block (when changes exist) followed by Allow /
+Allow all / Deny buttons; the whole block is removed after the decision.
+Falls back to a minibuffer prompt when CHAT-BUFFER is unavailable.
+Returns non-nil when the write is approved."
+  (if (emagent-tools--allowed-p tool-name)
+      t
+    (let* ((diff (emagent-tools--write-diff-string resolved new-content))
+           (preamble (when diff
+                       (format "\n#+begin_src diff\n%s#+end_src" diff))))
+      (pcase (emagent-tools--buttons-prompt
+              (format "Write %s?" (file-name-nondirectory resolved))
+              '(("Allow" . yes) ("Allow all" . all) ("Deny" . no))
+              chat-buffer
+              preamble)
+        ('all (emagent-tools--remember-allowed-tool tool-name) t)
+        ('yes t)
+        (_ nil)))))
 
 (defun emagent-tools--symbols-in-form (form symbols)
   "Return symbols from SYMBOLS found anywhere in FORM."

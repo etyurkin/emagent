@@ -359,12 +359,20 @@ PROPERTIES keys are tool argument names, kept as strings via a hash-table so
   "Return the permission prompt for MCP tool NAME and ARGS."
   (format "Allow %s?\n%s" name (emagent-mcp--tool-prompt-detail name args root)))
 
-(defun emagent-mcp--confirm-tool (name args root)
-  "Return non-nil when the user allows MCP tool NAME with ARGS."
+(defun emagent-mcp--confirm-tool (name args root &optional buffer)
+  "Return non-nil when the user allows MCP tool NAME with ARGS.
+BUFFER is the chat buffer; when NAME is write_file it is passed to
+`emagent-tools--confirm-write' so the diff appears inline there."
   (let ((tool-symbol (emagent-mcp--tool-confirm-symbol name)))
-    (emagent-tools--confirm
-     tool-symbol
-     (emagent-mcp--tool-confirm-prompt name args root))))
+    (if (string= name "write_file")
+        (emagent-tools--confirm-write
+         tool-symbol
+         (emagent-tools--root-directory (emagent-mcp--arg args "path"))
+         (emagent-mcp--arg args "content" "")
+         buffer)
+      (emagent-tools--confirm
+       tool-symbol
+       (emagent-mcp--tool-confirm-prompt name args root)))))
 
 (defun emagent-mcp--run-tool (name args session)
   "Run tool NAME with ARGS in SESSION's context; return a result string."
@@ -380,12 +388,13 @@ PROPERTIES keys are tool argument names, kept as strings via a hash-table so
             (emagent-mcp--session-allowed-tools buffer))
            (emagent-tools-allow-all-function
             (emagent-mcp--make-allow-all-fn buffer))
+           (emagent-tools--chat-buffer buffer)
            (emagent-acp-prefer-emacs (if session
                                          (plist-get session :prefer-emacs)
                                        (and (boundp 'emagent-acp-prefer-emacs)
                                             emagent-acp-prefer-emacs))))
       (when (and (member name emagent-mcp--confirming-tools)
-                 (not (emagent-mcp--confirm-tool name args root)))
+                 (not (emagent-mcp--confirm-tool name args root buffer)))
         (user-error "Tool call cancelled"))
       (emagent-mcp--string-result (funcall handler args)))))
 

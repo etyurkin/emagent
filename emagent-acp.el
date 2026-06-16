@@ -914,7 +914,10 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
         (progn
           (emagent-acp--prepare-interactive-context state)
           (condition-case err
-              (if (y-or-n-p (format "Allow emagent to write %s? " resolved))
+              (if (emagent-tools--confirm-write
+                   'emagent-tool-write-file resolved
+                   (or (map-nested-elt emagent-acp-request '(params content)) "")
+                   (emagent-acp--chat-buffer state))
                   (let ((written (emagent-tools--write-file-content
                                   path (map-nested-elt emagent-acp-request '(params content)))))
                     (emagent-acp--notify-user
@@ -964,10 +967,9 @@ OPTIONS may be a list or vector (JSON arrays parse as vectors)."
                    (emagent-acp--permission-option-id options))
               (progn
                 (emagent-acp--prepare-interactive-context state)
-                (cdr (assoc (completing-read
-                             (format "emagent: %s " title)
-                             choices nil t)
-                            choices))))))
+                (emagent-tools--buttons-prompt
+                 title choices
+                 (emagent-acp--chat-buffer state))))))
     (emagent-acp-send-response
      :client (map-elt state :client)
      :response (emagent-acp-make-session-request-permission-response
