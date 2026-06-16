@@ -1493,31 +1493,6 @@ the prompt text."
                                (emagent-chat--metadata-end) t))
     (emagent-chat--write-top-property "STARTUP" "hideblocks")))
 
-(defun emagent-chat--table-row-overlay (eol)
-  "Return a display overlay at EOL that pads the line to the right margin."
-  (let ((ov (make-overlay eol eol)))
-    (overlay-put ov 'emagent-table-row t)
-    (overlay-put ov 'evaporate t)
-    (overlay-put ov 'after-string
-                 (propertize " " 'display '(space :align-to right)))
-    ov))
-
-(defun emagent-chat--fontify-table-rows (beg end)
-  "Manage right-margin overlays for org table rows in BEG..END.
-Each table row gets an overlay that adds padding to the right margin so
-that rows fitting within the window display on a single visual line.
-Called by jit-lock; replaces stale overlays on each re-fontification."
-  (dolist (ov (overlays-in beg end))
-    (when (overlay-get ov 'emagent-table-row)
-      (delete-overlay ov)))
-  (save-excursion
-    (goto-char beg)
-    (beginning-of-line)
-    (while (< (point) end)
-      (when (looking-at "|")
-        (emagent-chat--table-row-overlay (line-end-position)))
-      (forward-line 1))))
-
 (defun emagent-chat--setup-faces ()
   "Configure org highlighting and block folding for emagent buffers."
   (setq-local org-src-fontify-natively t
@@ -1526,7 +1501,10 @@ Called by jit-lock; replaces stale overlays on each re-fontification."
               org-cycle-hide-block-startup t
               truncate-lines nil)
   (visual-line-mode 1)
-  (jit-lock-register #'emagent-chat--fontify-table-rows))
+  ;; org-phscroll applies horizontal scrolling to table regions while
+  ;; leaving prose with visual-line wrapping.  Enable when available.
+  (when (fboundp 'org-phscroll-mode)
+    (org-phscroll-mode 1)))
 
 ;;;###autoload
 (define-derived-mode emagent-mode org-mode "Emagent"
