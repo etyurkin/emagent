@@ -573,10 +573,9 @@ This allows sending multimodal prompts to vision-capable agents."
          (image-blocks
           (apply #'vector
                  (mapcar (lambda (img)
-                           `((type   . "image")
-                             (source . ((type       . "base64")
-                                        (media_type . ,(map-elt img 'media-type))
-                                        (data       . ,(map-elt img 'data))))))
+                           `((type     . "image")
+                             (data     . ,(map-elt img 'data))
+                             (mimeType . ,(map-elt img 'media-type))))
                          (or images '()))))
          (all-blocks (vconcat text-blocks image-blocks)))
     `((:method . "session/prompt")

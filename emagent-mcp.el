@@ -124,8 +124,8 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("path")
          (lambda (args)
            (emagent-tool-read-file (emagent-mcp--arg args "path")
-                                  (emagent-mcp--arg args "line")
-                                  (emagent-mcp--arg args "limit"))))
+                                   (emagent-mcp--arg args "line")
+                                   (emagent-mcp--arg args "limit"))))
    (list "write_file"
          "Write CONTENT to a file through an Emacs buffer (one undoable change). Prompts the user."
          '(("path" . ((type . "string")
@@ -135,7 +135,7 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("path" "content")
          (lambda (args)
            (emagent-tool-write-file (emagent-mcp--arg args "path")
-                                   (emagent-mcp--arg args "content" ""))))
+                                    (emagent-mcp--arg args "content" ""))))
    (list "undo_file"
          "Undo edits in a file's buffer and save. Use to revert a write_file change."
          '(("path" . ((type . "string")
@@ -145,7 +145,7 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("path")
          (lambda (args)
            (emagent-tool-undo-file (emagent-mcp--arg args "path")
-                                  (emagent-mcp--arg args "steps"))))
+                                   (emagent-mcp--arg args "steps"))))
    (list "delete_file"
          "Delete a file. Prompts the user."
          '(("path" . ((type . "string")
@@ -162,7 +162,7 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("path")
          (lambda (args)
            (emagent-tool-delete-directory (emagent-mcp--arg args "path")
-                                         (emagent-mcp--bool args "recursive"))))
+                                          (emagent-mcp--bool args "recursive"))))
    (list "list_files"
          "List files under a directory (relative paths, one per line)."
          '(("path" . ((type . "string")
@@ -179,7 +179,7 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("pattern")
          (lambda (args)
            (emagent-tool-grep (emagent-mcp--arg args "pattern")
-                             (emagent-mcp--arg args "path"))))
+                              (emagent-mcp--arg args "path"))))
    (list "find_files"
          "List files matching a shell glob under a directory."
          '(("glob" . ((type . "string")
@@ -189,7 +189,7 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("glob")
          (lambda (args)
            (emagent-tool-find-files (emagent-mcp--arg args "glob")
-                                   (emagent-mcp--arg args "path"))))
+                                    (emagent-mcp--arg args "path"))))
    (list "git_status"
          "Return git status for the session project directory."
          '()
@@ -254,7 +254,7 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("command")
          (lambda (args)
            (emagent-tool-run-shell-command (emagent-mcp--arg args "command")
-                                          (emagent-mcp--arg args "directory"))))
+                                           (emagent-mcp--arg args "directory"))))
    (list "project_directory"
          "Return the session's project directory."
          '()
@@ -310,7 +310,7 @@ PROPERTIES keys are tool argument names, kept as strings via a hash-table so
           (emagent-chat-add-allowed-tool tool))))))
 
 (defconst emagent-mcp--confirming-tools
-  '("run_shell_command" "eval" "write_file" "delete_file" "delete_directory")
+  '("run_shell_command" "write_file" "delete_file" "delete_directory")
   "MCP tool names that prompt the user before running.")
 
 (defun emagent-mcp--tool-confirm-symbol (name)
@@ -381,9 +381,9 @@ PROPERTIES keys are tool argument names, kept as strings via a hash-table so
            (emagent-tools-allow-all-function
             (emagent-mcp--make-allow-all-fn buffer))
            (emagent-acp-prefer-emacs (if session
-                                        (plist-get session :prefer-emacs)
-                                      (and (boundp 'emagent-acp-prefer-emacs)
-                                           emagent-acp-prefer-emacs))))
+                                         (plist-get session :prefer-emacs)
+                                       (and (boundp 'emagent-acp-prefer-emacs)
+                                            emagent-acp-prefer-emacs))))
       (when (and (member name emagent-mcp--confirming-tools)
                  (not (emagent-mcp--confirm-tool name args root)))
         (user-error "Tool call cancelled"))
@@ -758,7 +758,7 @@ Set to nil to forward only the emagent server."
       (error
        (require 'emagent-log)
        (emagent-log "could not read MCP servers from %s: %s"
-                   path (error-message-string err))
+                    path (error-message-string err))
        nil))))
 
 (defun emagent-mcp-session-servers (mcp-http chat-buffer)
@@ -770,9 +770,9 @@ CHAT-BUFFER is the emagent chat buffer (for the per-buffer token)."
     (with-current-buffer chat-buffer
       (let* ((url (emagent-mcp-session-url (emagent-mcp-buffer-token)))
              (emagent-server `((type . "http")
-                              (name . ,emagent-mcp-server-name)
-                              (url . ,url)
-                              (headers . [])))
+                               (name . ,emagent-mcp-server-name)
+                               (url . ,url)
+                               (headers . [])))
              (extra (emagent-mcp-config-file-servers)))
         (vconcat (list emagent-server) extra)))))
 
