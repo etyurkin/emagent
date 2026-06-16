@@ -712,36 +712,33 @@ check is skipped so the user can re-evaluate any previous prompt."
               (end (cdr bounds))
               (prefix (buffer-substring-no-properties start end))
               ((string-prefix-p "/" prefix)))
-    ;; Pre-filter at CAPF invocation time and return a static list.
-    ;; This prevents the completion framework from expanding the set;
-    ;; orderless/flex styles only re-sort within our already-filtered list.
-    (let ((needle (substring prefix 1)))
-      (list start end
-            ;; Use a function table so the framework returns our results
-            ;; as-is without applying an additional prefix filter.
-            (lambda (_str _pred action)
-              (let ((filtered (mapcar (lambda (cmd) (concat "/" (map-elt cmd 'name)))
-                                      (seq-filter
-                                       (lambda (cmd)
-                                         (emagent-chat--command-matches-needle-p
-                                          (map-elt cmd 'name) needle))
-                                       commands))))
-                (cond
-                 ((eq action 'metadata)
-                  '(metadata (display-sort-function . identity)))
-                 ((eq action t) filtered)
-                 ((null action) (car filtered))
-                 ((eq action 'lambda) t))))
-            :annotation-function
-            (lambda (candidate)
-              (let ((name (substring candidate 1)))
-                (concat "  " (or (map-elt (cl-find name commands
-                                                   :key (lambda (c) (map-elt c 'name))
-                                                   :test #'string=)
-                                          'description)
-                                 ""))))
-            :exclusive t
-            :exit-action (lambda (_status) 'finished)))))
+    (list start end
+          ;; Dynamically filter using the current STR so typing more
+          ;; characters refreshes the candidate list.
+          (lambda (str pred action)
+            (let* ((needle (if (string-prefix-p "/" str) (substring str 1) str))
+                   (candidates (mapcar
+                                (lambda (cmd) (concat "/" (map-elt cmd 'name)))
+                                (seq-filter
+                                 (lambda (cmd)
+                                   (emagent-chat--command-matches-needle-p
+                                    (map-elt cmd 'name) needle))
+                                 commands))))
+              (cond
+               ((eq action 'metadata)
+                '(metadata (display-sort-function . identity)))
+               ((eq action t) candidates)
+               ((null action) (try-completion str candidates pred))
+               ((eq action 'lambda) (test-completion str candidates pred)))))
+          :annotation-function
+          (lambda (candidate)
+            (let ((name (substring candidate 1)))
+              (concat "  " (or (map-elt (cl-find name commands
+                                                 :key (lambda (c) (map-elt c 'name))
+                                                 :test #'string=)
+                                        'description)
+                               ""))))
+          :exclusive t)))
 
 (defun emagent-chat-tab ()
   "On a slash-command line, complete; otherwise org-cycle."
