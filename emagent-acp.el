@@ -939,32 +939,35 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
                                                 :message (error-message-string err)))))))))))
 
 (defun emagent-acp--permission-option-id (options)
-  "Return a permissive option id from OPTIONS."
+  "Return a permissive option id from OPTIONS, or nil when none is found.
+OPTIONS may be a list or vector (JSON arrays parse as vectors)."
   (let ((prefer '("allow_once" "allow-once" "allow_always" "allow-always" "allow" "yes")))
     (or (map-elt (seq-find (lambda (opt)
                              (let ((id (map-elt opt 'optionId)))
                                (and id (member id prefer))))
                            options)
                  'optionId)
-        (map-elt (car options) 'optionId))))
+        (when-let ((first (seq-first options)))
+          (map-elt first 'optionId)))))
 
 (cl-defun emagent-acp--on-permission (&key state emagent-acp-request)
   (let* ((options (map-nested-elt emagent-acp-request '(params options)))
          (title (or (map-nested-elt emagent-acp-request '(params toolCall title))
                     (map-nested-elt emagent-acp-request '(params title))
                     "Permission request"))
+         (choices (mapcar (lambda (opt)
+                            (cons (or (map-elt opt 'name) (map-elt opt 'optionId))
+                                  (map-elt opt 'optionId)))
+                          (append options nil)))
          (choice
-          (if emagent-acp-auto-approve-permissions
-              (emagent-acp--permission-option-id options)
-            (progn
-              (emagent-acp--prepare-interactive-context state)
-              (completing-read
-               (format "emagent: %s " title)
-               (mapcar (lambda (opt)
-                         (cons (or (map-elt opt 'name) (map-elt opt 'optionId))
-                               (map-elt opt 'optionId)))
-                       (append options nil))
-               nil t)))))
+          (or (and emagent-acp-auto-approve-permissions
+                   (emagent-acp--permission-option-id options))
+              (progn
+                (emagent-acp--prepare-interactive-context state)
+                (cdr (assoc (completing-read
+                             (format "emagent: %s " title)
+                             choices nil t)
+                            choices))))))
     (emagent-acp-send-response
      :client (map-elt state :client)
      :response (emagent-acp-make-session-request-permission-response
