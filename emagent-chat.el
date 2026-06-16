@@ -708,36 +708,23 @@ check is skipped so the user can re-evaluate any previous prompt."
   "Complete Claude Code slash commands (plugin skills) at point."
   (when-let* ((bounds (emagent-chat--slash-token-bounds))
               (commands emagent-chat-slash-commands)
-              (start (car bounds))
+              (slash-start (car bounds))
               (end (cdr bounds))
-              (prefix (buffer-substring-no-properties start end))
+              (prefix (buffer-substring-no-properties slash-start end))
               ((string-prefix-p "/" prefix)))
-    (list start end
-          ;; Dynamically filter using the current STR so typing more
-          ;; characters refreshes the candidate list.
-          (lambda (str pred action)
-            (let* ((needle (if (string-prefix-p "/" str) (substring str 1) str))
-                   (candidates (mapcar
-                                (lambda (cmd) (concat "/" (map-elt cmd 'name)))
-                                (seq-filter
-                                 (lambda (cmd)
-                                   (emagent-chat--command-matches-needle-p
-                                    (map-elt cmd 'name) needle))
-                                 commands))))
-              (cond
-               ((eq action 'metadata)
-                '(metadata (display-sort-function . identity)))
-               ((eq action t) candidates)
-               ((null action) (try-completion str candidates pred))
-               ((eq action 'lambda) (test-completion str candidates pred)))))
+    ;; Start the completion region AFTER the "/" so the framework sees the
+    ;; bare name (e.g. "relax", "session:relax") as its input.  This lets
+    ;; any completion style (basic, orderless, flex) filter naturally without
+    ;; the leading "/" confusing prefix or substring matching.
+    (list (1+ slash-start) end
+          (mapcar (lambda (cmd) (map-elt cmd 'name)) commands)
           :annotation-function
           (lambda (candidate)
-            (let ((name (substring candidate 1)))
-              (concat "  " (or (map-elt (cl-find name commands
-                                                 :key (lambda (c) (map-elt c 'name))
-                                                 :test #'string=)
-                                        'description)
-                               ""))))
+            (concat "  " (or (map-elt (cl-find candidate commands
+                                               :key (lambda (c) (map-elt c 'name))
+                                               :test #'string=)
+                                      'description)
+                             "")))
           :exclusive t)))
 
 (defun emagent-chat-tab ()
