@@ -299,7 +299,13 @@ instead; emagent then writes whatever port it gets into the agent config."
                       (description . "An Emacs Lisp form as a string to validate."))))
          '("form")
          (lambda (args)
-           (emagent-tool-check-elisp (emagent-mcp--arg args "form")))))
+           (emagent-tool-check-elisp (emagent-mcp--arg args "form"))))
+   (list "elisp_guide"
+         "Return the emagent Emacs Lisp reference guide: patterns, idioms, string/list/buffer/file/JSON/org operations, error handling, common pitfalls, and code templates. Call this before writing non-trivial Elisp."
+         '()
+         '()
+         (lambda (_args)
+           (emagent-tool-elisp-guide))))
   "Registry of emagent MCP tools: (NAME DESCRIPTION PROPERTIES REQUIRED HANDLER).")
 
 (defun emagent-mcp--tool-entry (name)

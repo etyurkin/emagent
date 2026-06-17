@@ -155,9 +155,11 @@ Follow these rules to avoid them:
 - delete-file, write-file, shell-command, call-process are blocked inside eval;
   use the dedicated tools (they prompt the user for confirmation).
 - Do not read iCloud paths or other apps' container directories.
+- Before writing non-trivial Elisp, call `elisp_guide` for ready-to-use
+  patterns covering strings, lists, buffers, files, JSON, org-mode, and pitfalls.
 - Discover Emacs APIs before guessing:
   1. apropos \"partial-name\" — find symbols by name fragment
-  2. apropos_doc \"what it does\" — find symbols by docstring meaning (e.g. \"split string\")
+  2. apropos_doc \"what it does\" — find symbols by docstring meaning
   3. describe_symbol \"name\" — full docstring, signature, type
   4. find_function \"name\" — jump to source
   5. eval \"(small-test)\" — verify behavior on a real value
@@ -167,8 +169,8 @@ Follow these rules to avoid them:
 read_file, write_file, undo_file, delete_file, delete_directory,
 list_files, find_files, grep, git_status, git_diff, git_log,
 project_directory, buffer_list, imenu_index, compile,
-eval, check_elisp, apropos, apropos_doc, describe_symbol, find_function,
-where_is, run_shell_command.")
+eval, check_elisp, elisp_guide, apropos, apropos_doc, describe_symbol,
+find_function, where_is, run_shell_command.")
 
 (defconst emagent-acp-system-prompt-gateway
   "

@@ -465,6 +465,24 @@ Slower than apropos (scans all docstrings) but finds symbols by meaning."
              (buffer-string))))
       (format "No function named %s" symbol))))
 
+(defun emagent-tool-elisp-guide ()
+  "Return the emagent Emacs Lisp reference guide.
+Covers core patterns, string/list/buffer/file/JSON/org-mode operations,
+error handling, common pitfalls, and ready-to-use code templates.
+Call this before writing non-trivial Elisp."
+  (let* ((lib-file (or load-file-name
+                       (and (boundp 'byte-compile-current-file)
+                            byte-compile-current-file)
+                       (symbol-file 'emagent-tool-elisp-guide 'defun)
+                       (locate-library "emagent-tools")))
+         (dir (and lib-file (file-name-directory lib-file)))
+         (guide (and dir (expand-file-name "emagent-elisp-guide.md" dir))))
+    (if (and guide (file-readable-p guide))
+        (with-temp-buffer
+          (insert-file-contents guide)
+          (buffer-string))
+      "Guide not found. Use apropos / apropos_doc / describe_symbol to discover Emacs APIs.")))
+
 (defun emagent-tools--check-elisp-parens (form-str)
   "Return nil when FORM-STR parses cleanly, or an error string on failure.
 Catches both unclosed parens (more '(' than ')') and extra closing parens."
