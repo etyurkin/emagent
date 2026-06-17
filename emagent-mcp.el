@@ -33,6 +33,8 @@
 ;; Defined in emagent-acp.el; declared here to avoid a circular require.
 (defvar emagent-acp-prefer-emacs)
 
+(declare-function emagent-log "emagent-log")
+
 ;; Defined in emagent-chat.el; declared to avoid a circular require.  The chat
 ;; buffer owns the per-document tool allow-list (#+EMAGENT_ALLOWED_TOOLS).
 (declare-function emagent-chat-allowed-tools "emagent-chat")
@@ -684,21 +686,24 @@ Starts the server if needed and returns the port."
   "Merge an `emagent' http MCP entry into the global cursor-agent config.
 
 The url uses ${env:EMAGENT_SESSION_TOKEN} so a single static file routes each
-cursor-agent invocation to its own session.  Existing servers are preserved."
+cursor-agent invocation to its own session.  Existing servers are preserved.
+Only writes the file when the entry is absent or points to a different port."
   (let* ((port (emagent-mcp-ensure-server))
          (file emagent-mcp-cursor-config-file)
+         (expected-url (format "http://127.0.0.1:%d/mcp/${env:EMAGENT_SESSION_TOKEN}" port))
          (data (emagent-mcp--read-json-file file))
          (servers (let ((value (gethash "mcpServers" data)))
                     (if (hash-table-p value) value (make-hash-table :test 'equal))))
-         (entry (make-hash-table :test 'equal)))
-    (puthash "url"
-             (format "http://127.0.0.1:%d/mcp/${env:EMAGENT_SESSION_TOKEN}" port)
-             entry)
-    (puthash emagent-mcp-server-name entry servers)
-    (puthash "mcpServers" servers data)
-    (make-directory (file-name-directory file) t)
-    (with-temp-file file
-      (insert (emagent-mcp--json-encode (emagent-mcp--lists-to-vectors data))))
+         (current-entry (gethash emagent-mcp-server-name servers)))
+    (unless (and (hash-table-p current-entry)
+                 (equal (gethash "url" current-entry) expected-url))
+      (let ((entry (make-hash-table :test 'equal)))
+        (puthash "url" expected-url entry)
+        (puthash emagent-mcp-server-name entry servers)
+        (puthash "mcpServers" servers data)
+        (make-directory (file-name-directory file) t)
+        (with-temp-file file
+          (insert (emagent-mcp--json-encode (emagent-mcp--lists-to-vectors data))))))
     file))
 
 ;;;; External MCP gateway forwarding

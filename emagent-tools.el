@@ -516,9 +516,10 @@ Use to revert `emagent-tool-write-file' changes."
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (dotimes (_ steps)
-          (if (null (undo))
-              (user-error "Only %d undo step(s) available in %s" done resolved)
-            (setq done (1+ done))))
+          (condition-case _
+              (progn (undo) (setq done (1+ done)))
+            (user-error
+             (user-error "Only %d undo step(s) available in %s" done resolved))))
         (when (buffer-file-name)
           (basic-save-buffer))))
     (format "Undid %d change(s) in %s" done resolved)))

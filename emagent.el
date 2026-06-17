@@ -32,6 +32,9 @@
 (require 'emagent-cursor)
 (require 'emagent-claude)
 
+(declare-function project-current "project")
+(declare-function project-root "project")
+
 (defgroup emagent nil
   "Emacs-native ACP chat assistant."
   :group 'tools
@@ -197,6 +200,7 @@ prompting; when both are installed prompt (defaulting to
                            (symbol-name provider)
                            (error-message-string err))
                nil))))
+    (ignore-errors (kill-buffer buffer))
     result))
 
 (defun emagent--agent-model-choices (cwd &optional providers)
@@ -269,12 +273,18 @@ When MODEL-ID is non-nil, persist it before connecting."
 (defun emagent--project-directory-initial ()
   "Default project directory for a new emagent session.
 Uses the current buffer's cwd when it is a shell or file-backed buffer,
-otherwise ~/."
+otherwise the project.el root, otherwise ~/."
   (cond
    ((derived-mode-p 'shell-mode 'eshell-mode 'term-mode 'vterm-mode)
     default-directory)
    (buffer-file-name
-    (file-name-directory buffer-file-name))
+    (or (and (fboundp 'project-current)
+             (when-let ((proj (project-current nil (file-name-directory buffer-file-name))))
+               (project-root proj)))
+        (file-name-directory buffer-file-name)))
+   ((and (fboundp 'project-current)
+         (when-let ((proj (project-current nil default-directory)))
+           (project-root proj))))
    (t
     (expand-file-name "~/"))))
 

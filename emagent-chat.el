@@ -13,12 +13,15 @@
 
 (require 'org)
 (require 'map)
+(require 'bookmark)
 (require 'emagent-log)
 (require 'emagent-context)
 (require 'emagent-tools)
 
 (declare-function emagent-set-model "emagent-acp")
 (declare-function emagent-acp-ensure-connected "emagent")
+(declare-function project-current "project")
+(declare-function project-root "project")
 
 ;; Optional doom-modeline integration; declared so byte-compilation without
 ;; doom-modeline present does not warn about these external symbols.
@@ -30,7 +33,7 @@
 
 (defvar emagent-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c C-c") #'emagent-chat-send)
+    (define-key map (kbd "C-c C-c") #'emagent-chat-send-or-babel)
     (define-key map (kbd "C-c a")   #'emagent-chat-attach-buffer)
     (define-key map (kbd "C-c i")   #'emagent-chat-attach-image)
     (define-key map (kbd "C-c m")   #'emagent-set-model)
@@ -40,6 +43,7 @@
     (define-key map (kbd "<backtab>") #'org-shifttab)
     (define-key map (kbd "C-g C-g") #'emagent-chat-interrupt)
     (define-key map (kbd "C-c p")   #'emagent-chat-new-prompt)
+    (define-key map (kbd "C-c ?")   #'emagent-dispatch)
     map)
   "Keymap for `emagent-mode'.")
 
@@ -132,15 +136,14 @@ hideblocks / `org-cycle-hide-block-startup'."
 # This buffer is a scratch pad for chatting with emagent.
 #
 # Type after '* username> ' and press C-c C-c to send.
-# C-c C-c send (auto-formats as '* username>'; select region for multiline)
+# C-c C-c send (on a src block: execute with org-babel instead)
 # C-c p   insert a new '* username>' prompt heading
 # C-c a   attach buffer context to the next send
 # C-y     paste text normally; if clipboard has image, inserts [[file:...]] link
 # C-c i   pick an image file and insert [[file:...]] link at point
 # C-c l   show emagent log (*Emagent Log*)
-# C-c C-b attach buffer context to the next send
 # C-c m   set ACP model
-# C-c C-l show emagent log (*Emagent Log*)
+# C-c ?   command palette (transient menu)
 # C-g C-g interrupt agent response
 # C-x k   kill buffer and disconnect agent
 # M-x emagent-mode to reconnect a saved session
@@ -433,6 +436,9 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
    (or (emagent-chat-project-directory)
        (and buffer-file-name (file-name-directory buffer-file-name))
        (if (boundp 'emagent-default-directory) emagent-default-directory)
+       (and (fboundp 'project-current)
+            (when-let ((proj (project-current nil default-directory)))
+              (project-root proj)))
        user-emacs-directory)))
 
 (defun emagent-chat--writable ()
@@ -1234,9 +1240,10 @@ Optional THOUGHT-TEXT is rendered as a foldable Reasoning quote above the body."
             (let ((insert-start (point)))
               (insert thought converted)
               (setq rendered t)
-              (ignore-errors
-                (emagent-chat--align-org-tables-in-region
-                 (+ insert-start (length thought)) (point)))
+              (when (string-match-p "|" converted)
+                (ignore-errors
+                  (emagent-chat--align-org-tables-in-region
+                   (+ insert-start (length thought)) (point))))
               (font-lock-flush)
               (when (not (string-empty-p thought))
                 (emagent-chat--hide-reasoning-deferred insert-start))
@@ -1542,7 +1549,9 @@ Run \\[emagent-mode] to reconnect a saved session."
   (emagent-chat--ensure-org-startup)
   (emagent-chat--sync-user-zone-marker)
   (add-hook 'completion-at-point-functions
-            #'emagent-chat-slash-command-completion-at-point -90 t))
+            #'emagent-chat-slash-command-completion-at-point -90 t)
+  (setq-local imenu-create-index-function #'emagent-chat--imenu-create-index)
+  (setq-local bookmark-make-record-function #'emagent-chat--bookmark-make-record))
 
 (cl-defun emagent-chat-open (&key project-dir)
   "Open or create an emagent buffer for PROJECT-DIR.
@@ -1565,6 +1574,101 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
                                         (emagent-chat--read-session-property)))
       (emagent-chat-set-project-directory dir))
     buffer))
+
+;;;; Context-sensitive C-c C-c
+
+(defun emagent-chat-send-or-babel ()
+  "Send the prompt at point, or execute a src block when point is inside one.
+
+On a `#+BEGIN_SRC ... #+END_SRC' block, delegates to
+`org-babel-execute-src-block' so code blocks in agent responses are
+executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'."
+  (interactive)
+  (if (org-in-src-block-p)
+      (call-interactively #'org-babel-execute-src-block)
+    (call-interactively #'emagent-chat-send)))
+
+;;;; Imenu
+
+(defun emagent-chat--imenu-create-index ()
+  "Build an imenu index of conversation turns for `emagent-mode' buffers."
+  (let ((user-re (emagent-chat--user-heading-re))
+        index)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward user-re nil t)
+        (let* ((pos (line-beginning-position))
+               (text (string-trim
+                      (buffer-substring-no-properties pos (line-end-position))))
+               (label (if (string-match user-re text)
+                          (let ((rest (substring text (match-end 0))))
+                            (if (string-empty-p rest)
+                                (format "turn %d" (length index))
+                              (truncate-string-to-width rest 60 nil nil "…")))
+                        text)))
+          (push (cons label pos) index)))
+      (nreverse index))))
+
+;;;; Bookmark
+
+(defun emagent-chat--bookmark-make-record ()
+  "Make a bookmark record for this emagent buffer."
+  (let ((session-id (emagent-chat-session-id))
+        (project-dir (emagent-chat-project-directory))
+        (model (emagent-chat-model))
+        (provider (when emagent-chat-provider (symbol-name emagent-chat-provider))))
+    `(,(buffer-name)
+      (handler . emagent-chat--bookmark-jump)
+      (session-id . ,session-id)
+      (project-dir . ,project-dir)
+      (model . ,model)
+      (provider . ,provider)
+      (position . ,(point)))))
+
+(defun emagent-chat--bookmark-jump (bookmark)
+  "Jump to an emagent BOOKMARK, reopening or reconnecting the session."
+  (let* ((session-id (bookmark-prop-get bookmark 'session-id))
+         (project-dir (bookmark-prop-get bookmark 'project-dir))
+         (model (bookmark-prop-get bookmark 'model))
+         (provider (when-let ((p (bookmark-prop-get bookmark 'provider)))
+                     (intern p)))
+         (pos (bookmark-prop-get bookmark 'position))
+         (buffer (when project-dir
+                   (emagent-chat-open :project-dir project-dir))))
+    (when buffer
+      (with-current-buffer buffer
+        (when model (emagent-chat-set-model model))
+        (when provider (emagent-chat-set-agent provider))
+        (when session-id (emagent-chat-set-session-id session-id)))
+      (pop-to-buffer buffer)
+      (when pos (goto-char pos)))))
+
+;;;; Transient command palette
+
+(declare-function emagent--transient-menu "emagent-chat")
+
+(defun emagent-dispatch ()
+  "Show the emagent command palette."
+  (interactive)
+  (if (fboundp 'transient-define-prefix)
+      (progn
+        (unless (fboundp 'emagent--transient-menu)
+          (eval
+           '(transient-define-prefix emagent--transient-menu ()
+              "Emagent commands."
+              ["Send & navigate"
+               ("SPC" "Send / execute src block" emagent-chat-send-or-babel)
+               ("p" "New prompt heading" emagent-chat-new-prompt)
+               ("g" "Interrupt agent (C-g C-g)" emagent-chat-interrupt)]
+              ["Attach"
+               ("a" "Attach buffer context" emagent-chat-attach-buffer)
+               ("i" "Attach image" emagent-chat-attach-image)]
+              ["Session"
+               ("m" "Set model" emagent-set-model)
+               ("l" "View log" emagent-log-view)])
+           t))
+        (call-interactively #'emagent--transient-menu))
+    (message "emagent keybindings: SPC=send, p=new-prompt, g=interrupt, a=attach, i=image, m=model, l=log")))
 
 (provide 'emagent-chat)
 

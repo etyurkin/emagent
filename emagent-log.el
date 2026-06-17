@@ -53,16 +53,22 @@ By default emagent writes only to `emagent-log-buffer-name'."
         (emagent-log-mode)))
     buffer))
 
+(defvar-local emagent-log--line-count 0
+  "Cached count of lines in the emagent log buffer.")
+
 (defun emagent-log--truncate (buffer)
-  "Drop oldest lines in BUFFER when over `emagent-log-max-lines'."
+  "Drop oldest lines in BUFFER when over `emagent-log-max-lines'.
+Uses a buffer-local counter instead of `count-lines' to avoid O(n) scanning."
   (when (and emagent-log-max-lines (> emagent-log-max-lines 0))
     (with-current-buffer buffer
-      (let ((total (count-lines (point-min) (point-max))))
-        (when (> total emagent-log-max-lines)
+      (cl-incf emagent-log--line-count)
+      (when (> emagent-log--line-count emagent-log-max-lines)
+        (let ((drop (- emagent-log--line-count emagent-log-max-lines)))
           (save-excursion
             (goto-char (point-min))
-            (forward-line (- total emagent-log-max-lines))
-            (delete-region (point-min) (point))))))))
+            (forward-line drop)
+            (delete-region (point-min) (point)))
+          (cl-decf emagent-log--line-count drop))))))
 
 (defun emagent-log-truncate-line (string width &optional keep-tail)
   "Truncate STRING for logging to display WIDTH.

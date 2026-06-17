@@ -11,6 +11,7 @@
 ;;; Code:
 
 (declare-function split-string-shell-argument "subr")
+(declare-function emagent-log "emagent-log")
 
 (defvar emagent-acp-prefer-emacs)
 
@@ -101,13 +102,13 @@
      (lambda ()
        (let ((branch (emagent-shell--current-branch)))
          (when (and branch (not (string-empty-p branch)))
-           (unless (executable-find "gh")
-             (user-error
-              "git push blocked: gh CLI not found. Install gh and authenticate before pushing."))
-           (when (emagent-shell--branch-pr-merged-p branch)
-             (user-error
-              "Branch '%s' has an already-merged PR. Checkout main, pull, and create a new branch instead."
-              branch))))))))
+           (if (executable-find "gh")
+               (when (emagent-shell--branch-pr-merged-p branch)
+                 (user-error
+                  "Branch '%s' has an already-merged PR. Checkout main, pull, and create a new branch instead."
+                  branch))
+             (require 'emagent-log)
+             (emagent-log "emagent: gh CLI not found; skipping merged-PR check for push"))))))))
 
 (defun emagent-shell--unquote (text)
   "Strip one layer of shell quotes from TEXT."

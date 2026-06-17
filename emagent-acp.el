@@ -622,13 +622,15 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
 
 (defun emagent-acp--clear-prompt-watchdog (state)
   "Cancel any pending prompt stall watchdog for STATE."
-  (map-put! state :prompt-watchdog nil))
+  (when-let ((timer (map-elt state :prompt-watchdog-timer)))
+    (cancel-timer timer))
+  (map-put! state :prompt-watchdog nil)
+  (map-put! state :prompt-watchdog-timer nil))
 
 (defun emagent-acp--schedule-prompt-watchdog (state)
   "Abort a prompt that stays busy without ACP progress."
-  (let ((token (cl-gensym "emagent-prompt-watchdog")))
-    (map-put! state :prompt-watchdog token)
-    (run-with-timer
+  (let* ((token (cl-gensym "emagent-prompt-watchdog"))
+         (timer (run-with-timer
      emagent-acp-watchdog-timeout nil
      (lambda ()
        (when (and (eq (map-elt state :prompt-watchdog) token)
@@ -648,6 +650,8 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
              (emagent-acp--abort-prompt
               state
               "prompt stalled — reconnect with M-x emagent-claude-start or kill and reopen the buffer"))))))))
+  (map-put! state :prompt-watchdog token)
+  (map-put! state :prompt-watchdog-timer timer)))
 
 (defun emagent-acp--stream-to-buffer-p (state)
   "Return non-nil when agent chunks may update the chat buffer live."
@@ -1348,6 +1352,8 @@ request continues in the background but its result is ignored."
     (emagent-mcp-deregister-session emagent-mcp--token))
   (when-let ((state emagent-acp--session))
     (emagent-acp--stop-rss-timer state)
+    (emagent-acp--clear-prompt-watchdog state)
+    (emagent-acp--cancel-prompt-render state)
     (when-let ((client (map-elt state :client)))
       (emagent-acp-shutdown :client client))
     (setq emagent-acp--session nil)))
