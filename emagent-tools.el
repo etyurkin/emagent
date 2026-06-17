@@ -30,20 +30,27 @@
   :group 'emagent-tools)
 
 (defcustom emagent-tools-eval-blocked-symbols
-  '(delete-file delete-directory
-    rename-file rename-directory
-    shell-command shell-command-to-string
-    call-process start-process start-file-process process-file
-    kill-emacs pause-emacs
-    write-region write-file insert-file-contents
+  '(kill-emacs pause-emacs
     load load-file load-library)
-  "Symbols refused by `emagent-tool-eval'; use a dedicated emagent-tool-*."
+  "Symbols hard-blocked in `emagent-tool-eval'; cannot run under any circumstances.
+These are too dangerous to allow even with confirmation:
+- kill-emacs / pause-emacs — would terminate or freeze the Emacs process
+- load / load-file / load-library — could execute arbitrary files from disk"
   :type '(repeat symbol)
   :group 'emagent-tools)
 
 (defcustom emagent-tools-eval-dangerous-symbols
-  '(copy-file copy-directory kill-buffer kill-buffer-and-save)
-  "Symbols in `emagent-tool-eval' that require an extra confirmation prompt."
+  '(delete-file delete-directory
+    rename-file rename-directory
+    copy-file copy-directory
+    write-region write-file
+    shell-command shell-command-to-string
+    call-process start-process start-file-process process-file
+    kill-buffer kill-buffer-and-save)
+  "Symbols in `emagent-tool-eval' that require explicit user confirmation.
+The user sees the full code and must approve before execution.
+`write-region' and `write-file' bypass emagent-tool-write-file's project
+boundary checks, so they need confirmation here too."
   :type '(repeat symbol)
   :group 'emagent-tools)
 
@@ -481,13 +488,25 @@ For forms longer than 3 lines, call check_elisp first to validate parens."
            (dangerous (emagent-tools--symbols-in-form parsed emagent-tools-eval-dangerous-symbols)))
       (when blocked
         (user-error
-         "Eval blocked (%s). Use emagent-tool-write-file, emagent-tool-delete-file, etc."
+         "Eval blocked (%s). Use the dedicated emagent tools instead."
          (mapconcat #'symbol-name blocked ", ")))
       (when dangerous
-        (unless (y-or-n-p
-                 (format "Eval contains sensitive ops (%s)? "
-                         (mapconcat #'symbol-name dangerous ", ")))
-          (user-error "Eval cancelled")))
+        (let* ((ops (mapconcat #'symbol-name dangerous ", "))
+               (preview (truncate-string-to-width form-str 400 nil nil "…"))
+               (preamble (format "\n#+begin_src elisp\n%s\n#+end_src" preview))
+               (prompt (format "Eval contains: *%s*" ops))
+               (allowed
+                (if (and emagent-tools--chat-buffer
+                         (buffer-live-p emagent-tools--chat-buffer))
+                    (eq 'yes
+                        (emagent-tools--buttons-prompt
+                         prompt
+                         '(("Allow" . yes) ("Deny" . no))
+                         emagent-tools--chat-buffer
+                         preamble))
+                  (y-or-n-p (format "Eval contains %s — allow? " ops)))))
+          (unless allowed
+            (user-error "Eval cancelled: contains %s" ops))))
       (condition-case err
           (let ((result (eval parsed)))
             (if (null result)
