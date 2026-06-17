@@ -64,47 +64,106 @@ Describe what you found before suggesting changes. Ask for confirmation before m
 (defconst emagent-acp-system-prompt-prefer-emacs
   "
 
-Tool preference: prefer emagent tools and the live Emacs when they can do the job.
-Before Bash, zsh, Python, jq, or the agent's built-in file/terminal tools, check
-whether an emagent tool or Emacs Lisp can handle it.
+## Tool preference
 
-Substitution guide (use the emagent tool, not shell):
+Prefer emagent tools and the live Emacs for every task. The order of preference:
+1. emagent MCP tool (read_file, grep, compile, eval, ...)
+2. Emacs Lisp via eval
+3. run_shell_command (for commands with no Emacs equivalent)
+4. Claude Code built-in tools or plugin slash commands (only when nothing else works)
 
-| Instead of              | Use                                      |
-|-------------------------+------------------------------------------|
-| cat, head, tail         | read_file (optional line, limit)         |
-| grep, rg, ag            | grep                                     |
-| find -name GLOB         | find_files                               |
-| find / list tree        | list_files                               |
-| git status              | git_status                               |
-| git diff                | git_diff                                 |
-| git log                 | git_log                                  |
-| jq                      | eval with json-parse-string / json-read  |
-| open URL                | eval with browse-url                     |
-| interactive bash/zsh    | run_shell_command only when unavoidable  |
+Substitution guide:
 
-run_shell_command auto-redirects simple cat/grep/git/find commands to the tools
-above and blocks git --no-verify and push to merged PR branches.
+| Instead of              | Use                                       |
+|-------------------------+-------------------------------------------|
+| cat, head, tail         | read_file (optional line, limit)          |
+| grep, rg, ag            | grep                                      |
+| find -name GLOB         | find_files                                |
+| ls / tree               | list_files                                |
+| git status/diff/log     | git_status / git_diff / git_log           |
+| mvn, gradle, make, cargo, npm test | compile (errors navigable with M-g n) |
+| jq, Python data ops     | eval with json-parse-string, seq-*, etc.  |
+| Python scripts          | eval with Emacs Lisp (see Elisp guide)    |
+| open URL                | eval with (browse-url URL)                |
+| what's open in editor   | buffer_list                               |
+| code outline            | imenu_index                               |
 
-Use external tools — Bash, plugin slash commands (/workflow:dev, /quality:*, …),
-gateway MCP backends, mvn, curl — only when:
-- A Claude Code plugin or workflow requires them
-- The task cannot reasonably be done inside Emacs
-- No emagent or Emacs alternative exists for that specific step
+run_shell_command auto-redirects cat/grep/git/find and always routes
+mvn/gradle/make/cargo/go/npm/yarn/pytest through compilation-mode.
+It blocks --no-verify and push to merged-PR branches.
 
-Discover Emacs APIs before guessing: apropos, describe_symbol, find_function,
-where_is, then eval a small test.
+## Emacs Lisp for scripting and automation
 
-emagent tools: read_file, write_file, undo_file, delete_file, delete_directory,
-list_files, find_files, grep, git_status, git_diff, git_log, project_directory,
-eval, apropos, describe_symbol, find_function, where_is, run_shell_command.
+For ANY scripting or automation task — data processing, text transformation,
+file manipulation, computation, JSON parsing, HTTP requests — use Emacs Lisp
+via the eval tool. Do NOT reach for Python, Ruby, Node, awk, sed, or shell
+pipelines. The eval tool runs directly in the live Emacs process with access
+to all loaded packages and open buffers.
 
-Omit a path to use the session project directory; relative paths resolve against
-it. File tools are confined to the session root. To revert a mistake, call
-undo_file — do not rewrite files from memory. delete-file, write-file,
-shell-command, call-process and similar are blocked inside eval; use the
-dedicated tools (they prompt the user). Do not read iCloud paths or other apps'
-container directories.")
+Common Elisp patterns (use these, not shell equivalents):
+
+| Task                      | Elisp                                              |
+|---------------------------+----------------------------------------------------|
+| String split/join         | (split-string s SEP) / (string-join list SEP)      |
+| Map over list             | (mapcar FN list) / (seq-map FN seq)                |
+| Filter list               | (seq-filter PRED seq)                              |
+| Read JSON string          | (json-parse-string s :object-type 'alist)          |
+| Write JSON                | (json-serialize object)                            |
+| Read file to string       | (with-temp-buffer (insert-file-contents PATH) ...) |
+| HTTP GET (sync)           | (url-retrieve-synchronously URL)                   |
+| Work with open buffer     | (with-current-buffer (get-buffer NAME) ...)        |
+| Find buffer by file       | (find-buffer-visiting PATH)                        |
+| All open project buffers  | buffer_list (MCP tool)                             |
+| Code outline              | imenu_index FILE (MCP tool)                        |
+| Build / test              | compile COMMAND (MCP tool, not run_shell_command)  |
+
+## Elisp paren discipline
+
+Paren mismatches are the #1 failure mode for agent-written Elisp.
+Follow these rules to avoid them:
+
+1. ALWAYS call check_elisp before eval for any form longer than 3 lines.
+   check_elisp validates syntax without executing — it catches mismatches safely.
+
+2. Keep eval calls short: one logical operation per call (ideally under 15 lines).
+   Chain multiple eval calls rather than writing one monolithic form.
+
+3. For complex code (>20 lines), write to a temp file with write_file, then load:
+     eval: (load-file \"/tmp/emagent-gen.el\")
+   This creates a visible, editable artifact that can be read back and corrected.
+
+4. Use let* for sequential work — avoid deep nesting:
+   GOOD:  (let* ((x (foo)) (y (bar x))) (baz y))
+   AVOID: (baz (bar (foo)))  ; hard to count parens, no intermediate values
+
+5. Close each sub-form before opening the next at the same level.
+   Never defer closing parentheses to the end of a long block.
+
+6. Count parens mentally for every form you write:
+   - Each (when (cond ...) body) needs exactly 2 closing parens
+   - Each (let* (...) body) needs exactly 2 closing parens
+   - Each (progn a b c) needs exactly 1 closing paren after c
+
+7. When a paren mismatch is reported, do not re-guess. Call check_elisp
+   with the corrected form FIRST, verify it returns \"OK\", then call eval.
+
+## Emacs tool rules
+
+- Omit a path to use the session project directory; relative paths resolve against it.
+- File tools are confined to the session root.
+- To revert a write_file mistake, call undo_file — never rewrite from memory.
+- delete-file, write-file, shell-command, call-process are blocked inside eval;
+  use the dedicated tools (they prompt the user for confirmation).
+- Do not read iCloud paths or other apps' container directories.
+- Discover Emacs APIs before guessing: apropos → describe_symbol → eval small test.
+
+## Full emagent tool list
+
+read_file, write_file, undo_file, delete_file, delete_directory,
+list_files, find_files, grep, git_status, git_diff, git_log,
+project_directory, buffer_list, imenu_index, compile,
+eval, check_elisp, apropos, describe_symbol, find_function, where_is,
+run_shell_command.")
 
 (defconst emagent-acp-system-prompt-gateway
   "

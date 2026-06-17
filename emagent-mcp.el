@@ -285,7 +285,14 @@ instead; emagent then writes whatever port it gets into the agent config."
                       (description . "File path relative to session root; omit for current buffer."))))
          '()
          (lambda (args)
-           (emagent-tool-imenu-index (emagent-mcp--arg args "file")))))
+           (emagent-tool-imenu-index (emagent-mcp--arg args "file"))))
+   (list "check_elisp"
+         "Check an Emacs Lisp form for syntax errors (paren balance, read errors) WITHOUT executing it. Returns \"OK\" or an error description. Always call this before eval for forms longer than 3 lines."
+         '(("form" . ((type . "string")
+                      (description . "An Emacs Lisp form as a string to validate."))))
+         '("form")
+         (lambda (args)
+           (emagent-tool-check-elisp (emagent-mcp--arg args "form")))))
   "Registry of emagent MCP tools: (NAME DESCRIPTION PROPERTIES REQUIRED HANDLER).")
 
 (defun emagent-mcp--tool-entry (name)

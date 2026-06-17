@@ -430,30 +430,71 @@ Use to discover functions and variables before calling them."
              (buffer-string))))
       (format "No function named %s" symbol))))
 
+(defun emagent-tools--check-elisp-parens (form-str)
+  "Return nil when FORM-STR parses cleanly, or an error string on failure.
+Catches both unclosed parens (more '(' than ')') and extra closing parens."
+  (condition-case err
+      (with-temp-buffer
+        (insert "(progn " form-str ")")
+        ;; scan-sexps throws scan-error for unclosed '('
+        (let ((end (scan-sexps (point-min) 1)))
+          ;; Check for trailing content — catches extra ')'
+          (goto-char end)
+          (skip-chars-forward " \t\n")
+          (when (< (point) (point-max))
+            (error "Extra closing parenthesis (more ')' than '(')"))
+          nil))
+    (scan-error
+     (format "Unclosed parentheses at char %d: %s"
+             (max 0 (- (nth 2 err) 7))
+             (nth 1 err)))
+    (error
+     (format "Parse error: %s" (error-message-string err)))))
+
+(defun emagent-tool-check-elisp (form)
+  "Check FORM for Emacs Lisp syntax errors without executing it.
+Returns \"OK\" when the form parses cleanly, or an error description.
+Always call this before eval for any form longer than 3 lines."
+  (let* ((form-str (if (stringp form) form (prin1-to-string form)))
+         (paren-error (emagent-tools--check-elisp-parens form-str)))
+    (if paren-error
+        (format "SYNTAX ERROR — %s\n\nFix the form and call check_elisp again before eval."
+                paren-error)
+      "OK")))
+
 (defun emagent-tool-eval (form)
   "Evaluate Emacs Lisp FORM and return the result as a string.
 Use this for small utilities and text processing — not Python or shell.
-Blocked symbols must go through dedicated emagent-tool-* helpers."
+Blocked symbols must go through dedicated emagent-tool-* helpers.
+For forms longer than 3 lines, call check_elisp first to validate parens."
   (interactive)
-  (let* ((form (if (stringp form) (read form) form))
-         (blocked (emagent-tools--symbols-in-form form emagent-tools-eval-blocked-symbols))
-         (dangerous (emagent-tools--symbols-in-form form emagent-tools-eval-dangerous-symbols)))
-    (when blocked
-      (user-error
-       "Eval blocked (%s). Use emagent-tool-write-file, emagent-tool-delete-file, etc."
-       (mapconcat #'symbol-name blocked ", ")))
-    (when dangerous
-      (unless (y-or-n-p
-               (format "Eval contains sensitive ops (%s)? "
-                       (mapconcat #'symbol-name dangerous ", ")))
-        (user-error "Eval cancelled")))
-    (condition-case err
-        (let ((result (eval form)))
-          (if (null result)
-              "nil"
-            (prin1-to-string result)))
-      (error
-       (format "Eval error: %s" (error-message-string err))))))
+  (let* ((form-str (if (stringp form) form (prin1-to-string form)))
+         (paren-error (emagent-tools--check-elisp-parens form-str)))
+    (when paren-error
+      (user-error "Elisp paren/syntax error (fix before eval): %s" paren-error))
+    (let* ((parsed (condition-case parse-err
+                       (read form-str)
+                     (error
+                      (user-error "Elisp read error: %s"
+                                  (error-message-string parse-err)))))
+           (blocked (emagent-tools--symbols-in-form parsed emagent-tools-eval-blocked-symbols))
+           (dangerous (emagent-tools--symbols-in-form parsed emagent-tools-eval-dangerous-symbols)))
+      (when blocked
+        (user-error
+         "Eval blocked (%s). Use emagent-tool-write-file, emagent-tool-delete-file, etc."
+         (mapconcat #'symbol-name blocked ", ")))
+      (when dangerous
+        (unless (y-or-n-p
+                 (format "Eval contains sensitive ops (%s)? "
+                         (mapconcat #'symbol-name dangerous ", ")))
+          (user-error "Eval cancelled")))
+      (condition-case err
+          (let ((result (eval parsed)))
+            (if (null result)
+                "nil"
+              (prin1-to-string result)))
+        (error
+         (format "Eval error: %s" (error-message-string err)))))))
 
 (defun emagent-tool-org-element ()
   "Return structured org element at point as a string."
