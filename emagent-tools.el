@@ -416,7 +416,7 @@ Each call is recorded as a single undoable change in the target buffer."
 
 (defun emagent-tool-apropos (pattern)
   "Return Emacs symbols matching PATTERN, one per line.
-Use to discover functions and variables before calling them."
+Searches symbol names. Use to discover functions and variables before calling them."
   (let* ((regexp (if (stringp pattern) pattern (format "%s" pattern)))
          (matches (apropos-internal regexp)))
     (if matches
@@ -425,6 +425,33 @@ Use to discover functions and variables before calling them."
                  (seq-take (sort matches #'string-lessp)
                            emagent-tools--apropos-max-results))
          "\n")
+      "No matches")))
+
+(defun emagent-tool-apropos-doc (pattern)
+  "Return Emacs symbols whose docstring matches PATTERN, one per line.
+Use when you know what a function does but not its name — e.g. apropos_doc
+\"split string by delimiter\" to find `split-string'.
+Slower than apropos (scans all docstrings) but finds symbols by meaning."
+  (let* ((regexp (if (stringp pattern) pattern (format "%s" pattern)))
+         (results nil)
+         (limit emagent-tools--apropos-max-results))
+    (mapatoms
+     (lambda (sym)
+       (when (< (length results) limit)
+         (ignore-errors
+           (let* ((fdoc (and (fboundp sym) (documentation sym t)))
+                  (vdoc (and (boundp sym)
+                             (documentation-property sym 'variable-documentation t)))
+                  (doc (or fdoc vdoc)))
+             (when (and doc (string-match-p regexp doc))
+               (push (format "%s — %s"
+                             sym
+                             (truncate-string-to-width
+                              (car (split-string doc "\n"))
+                              80 nil nil "…"))
+                     results)))))))
+    (if results
+        (string-join (nreverse results) "\n")
       "No matches")))
 
 (defun emagent-tool-find-function (symbol)

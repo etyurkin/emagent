@@ -220,12 +220,19 @@ instead; emagent then writes whatever port it gets into the agent config."
          (lambda (args)
            (emagent-tool-eval (emagent-mcp--arg args "form"))))
    (list "apropos"
-         "List Emacs symbols matching a regexp. Use to discover functions and variables."
+         "List Emacs symbols whose NAME matches a regexp. Use to discover functions and variables when you know part of the name."
          '(("pattern" . ((type . "string")
                          (description . "Regexp matched against symbol names."))))
          '("pattern")
          (lambda (args)
            (emagent-tool-apropos (emagent-mcp--arg args "pattern"))))
+   (list "apropos_doc"
+         "List Emacs symbols whose DOCSTRING matches a regexp. Use when you know what a function does but not its name, e.g. \"split string\" or \"insert at point\"."
+         '(("pattern" . ((type . "string")
+                         (description . "Regexp matched against symbol docstrings."))))
+         '("pattern")
+         (lambda (args)
+           (emagent-tool-apropos-doc (emagent-mcp--arg args "pattern"))))
    (list "describe_symbol"
          "Return documentation for an Emacs function or variable."
          '(("symbol" . ((type . "string")
