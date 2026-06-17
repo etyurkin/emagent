@@ -17,6 +17,8 @@
 
 (declare-function magit-diff-buffer-file "magit-diff")
 (declare-function magit-toplevel "magit-git")
+(declare-function imenu--make-index-alist "imenu")
+(declare-function imenu--subalist-p "imenu")
 
 (defgroup emagent-tools nil
   "Emacs tool handlers for emagent."
@@ -651,6 +653,80 @@ Uses pure Emacs search when `emagent-acp-prefer-emacs' is non-nil."
   (org-up-element)
   (org-paste-subtree)
   "Moved subtree to parent section")
+
+(defun emagent-tool-compile (command &optional directory)
+  "Run COMMAND via `compilation-mode' and return its output as text.
+
+Unlike `run_shell_command', errors appear in a persistent
+`*emagent-compile*' buffer navigable with `next-error' / \\[next-error].
+The buffer is shown to the user while the build runs."
+  (require 'compile)
+  (let* ((default-directory (expand-file-name
+                             (or directory
+                                 emagent-tools--project-directory
+                                 default-directory)))
+         (buf (compilation-start command 'compilation-mode
+                                  (lambda (_) "*emagent-compile*")))
+         (proc (get-buffer-process buf)))
+    (when proc
+      (while (process-live-p proc)
+        (accept-process-output proc 0.05 nil t)))
+    (with-current-buffer buf
+      (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+        (if (> (length text) emagent-tools--shell-output-limit)
+            (concat (substring text 0 emagent-tools--shell-output-limit)
+                    "\n… (output truncated)")
+          text)))))
+
+(defun emagent-tool-buffer-list ()
+  "Return paths of open Emacs buffers inside the session project, one per line.
+Modified buffers are marked with (modified).  Only files within the session
+root (`emagent-tools--project-directory') are included."
+  (let ((root (and emagent-tools--project-directory
+                   (file-name-as-directory
+                    (expand-file-name emagent-tools--project-directory)))))
+    (string-join
+     (delq nil
+           (mapcar (lambda (buf)
+                     (when-let ((file (buffer-file-name buf)))
+                       (let ((expanded (expand-file-name file)))
+                         (when (or (null root)
+                                   (string-prefix-p root expanded))
+                           (format "%s%s"
+                                   (if root
+                                       (file-relative-name expanded root)
+                                     (abbreviate-file-name expanded))
+                                   (if (buffer-modified-p buf)
+                                       " (modified)"
+                                     ""))))))
+                   (buffer-list)))
+     "\n")))
+
+(defun emagent-tool-imenu-index (&optional file)
+  "Return a structural outline (functions, classes, sections) for FILE.
+When FILE is omitted, uses the current buffer.  Works for any language
+that has imenu support configured (Java, Python, Elisp, JS, org, etc.)."
+  (require 'imenu)
+  (let* ((resolved (when file (emagent-tools--root-directory file)))
+         (buf (if resolved
+                  (or (find-buffer-visiting resolved)
+                      (find-file-noselect resolved))
+                (current-buffer))))
+    (with-current-buffer buf
+      (let* ((index (condition-case nil
+                        (imenu--make-index-alist t)
+                      (error nil)))
+             (lines nil))
+        (cl-labels ((flatten (alist prefix)
+                      (dolist (entry alist)
+                        (if (imenu--subalist-p entry)
+                            (flatten (cdr entry)
+                                     (concat prefix (car entry) "/"))
+                          (push (concat prefix (car entry)) lines)))))
+          (when index (flatten index "")))
+        (if lines
+            (string-join (nreverse lines) "\n")
+          "No imenu index available for this buffer")))))
 
 (provide 'emagent-tools)
 

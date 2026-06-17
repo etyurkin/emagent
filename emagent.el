@@ -35,6 +35,10 @@
 (declare-function project-current "project")
 (declare-function project-root "project")
 
+;; Optional integrations — loaded only when the dependency is present.
+(require 'emagent-consult nil t)
+(require 'emagent-embark nil t)
+
 (defgroup emagent nil
   "Emacs-native ACP chat assistant."
   :group 'tools

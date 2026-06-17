@@ -12,6 +12,7 @@
 
 (declare-function split-string-shell-argument "subr")
 (declare-function emagent-log "emagent-log")
+(declare-function emagent-tool-compile "emagent-tools")
 
 (defvar emagent-acp-prefer-emacs)
 
@@ -71,6 +72,17 @@
 (defun emagent-shell--git-push-p (command)
   "Return non-nil when COMMAND is a git push."
   (string-match-p "\\`git[[:space:]]+push\\>" (string-trim command)))
+
+(defconst emagent-shell--build-executables
+  '("mvn" "./mvnw" "gradle" "./gradlew" "make" "cmake" "ninja"
+    "cargo" "go" "pytest" "python" "python3"
+    "npm" "yarn" "pnpm" "bun")
+  "Executable names that produce compiler-style output.
+These are always redirected to `emagent-tool-compile' for navigable errors.")
+
+(defun emagent-shell--build-command-p (words)
+  "Return non-nil when WORDS names a build/test/compile executable."
+  (member (car words) emagent-shell--build-executables))
 
 (declare-function emagent-tools--run-git "emagent-tools")
 
@@ -249,23 +261,28 @@
 
 (defun emagent-shell-run-command (command &optional directory)
   "Run COMMAND with Emacs-native routing, guards, and redirects."
-  (let ((cmd (string-trim command)))
+  (let* ((cmd (string-trim command))
+         (words (emagent-shell--words cmd)))
     (when (and emagent-shell-block-no-verify
                (emagent-shell--git-no-verify-p cmd))
       (user-error
        "--no-verify bypasses pre-commit hooks. Fix the pre-commit issue instead."))
     (when (emagent-shell--git-push-p cmd)
       (emagent-shell--guard-git-push directory))
-    (or (emagent-shell--try-redirect cmd directory)
-        (let ((suggestion (emagent-shell--suggest-alternative cmd)))
-          (when suggestion
-            (user-error "%s" suggestion))
-          (let* ((default-directory (emagent-tools--root-directory directory))
-                 (output (shell-command-to-string cmd)))
-            (if (> (length output) emagent-tools--shell-output-limit)
-                (concat (substring output 0 emagent-tools--shell-output-limit)
-                        "\n… (output truncated)")
-              output))))))
+    ;; Build/test commands always go through compilation-mode for navigable errors,
+    ;; regardless of the prefer-emacs setting.
+    (if (emagent-shell--build-command-p words)
+        (emagent-tool-compile cmd directory)
+      (or (emagent-shell--try-redirect cmd directory)
+          (let ((suggestion (emagent-shell--suggest-alternative cmd)))
+            (when suggestion
+              (user-error "%s" suggestion))
+            (let* ((default-directory (emagent-tools--root-directory directory))
+                   (output (shell-command-to-string cmd)))
+              (if (> (length output) emagent-tools--shell-output-limit)
+                  (concat (substring output 0 emagent-tools--shell-output-limit)
+                          "\n… (output truncated)")
+                output)))))))
 
 (provide 'emagent-shell)
 ;;; emagent-shell.el ends here

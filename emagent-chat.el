@@ -22,6 +22,9 @@
 (declare-function emagent-acp-ensure-connected "emagent")
 (declare-function project-current "project")
 (declare-function project-root "project")
+(declare-function flymake-diagnostic-beg "flymake")
+(declare-function flymake-diagnostic-type "flymake")
+(declare-function flymake-diagnostic-text "flymake")
 
 ;; Optional doom-modeline integration; declared so byte-compilation without
 ;; doom-modeline present does not warn about these external symbols.
@@ -35,6 +38,8 @@
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'emagent-chat-send-or-babel)
     (define-key map (kbd "C-c a")   #'emagent-chat-attach-buffer)
+    (define-key map (kbd "C-c d")   #'emagent-chat-attach-files)
+    (define-key map (kbd "C-c e")   #'emagent-chat-attach-error-context)
     (define-key map (kbd "C-c i")   #'emagent-chat-attach-image)
     (define-key map (kbd "C-c m")   #'emagent-set-model)
     (define-key map (kbd "C-c l")   #'emagent-log-view)
@@ -139,6 +144,8 @@ hideblocks / `org-cycle-hide-block-startup'."
 # C-c C-c send (on a src block: execute with org-babel instead)
 # C-c p   insert a new '* username>' prompt heading
 # C-c a   attach buffer context to the next send
+# C-c d   pick project files to attach
+# C-c e   attach compilation/flymake errors to the next send
 # C-y     paste text normally; if clipboard has image, inserts [[file:...]] link
 # C-c i   pick an image file and insert [[file:...]] link at point
 # C-c l   show emagent log (*Emagent Log*)
@@ -1643,6 +1650,172 @@ executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'.
       (pop-to-buffer buffer)
       (when pos (goto-char pos)))))
 
+;;;; Error context attachment
+
+(defun emagent-chat--compilation-error-lines ()
+  "Return error lines from *compilation* buffer using text properties, or nil."
+  (when-let ((buf (get-buffer "*compilation*")))
+    (with-current-buffer buf
+      (let (lines)
+        (save-excursion
+          (goto-char (point-min))
+          (while (not (eobp))
+            (when (get-text-property (point) 'compilation-message)
+              (let ((text (string-trim
+                           (buffer-substring-no-properties
+                            (line-beginning-position) (line-end-position)))))
+                (unless (string-empty-p text)
+                  (push text lines))))
+            (forward-line 1)))
+        (nreverse lines)))))
+
+(defun emagent-chat--flymake-error-lines ()
+  "Return flymake diagnostic lines from all open file-visiting buffers."
+  (when (fboundp 'flymake-diagnostics)
+    (let (lines)
+      (dolist (buf (buffer-list))
+        (when (and (buffer-file-name buf)
+                   (buffer-local-value 'flymake-mode buf))
+          (let ((diags (with-current-buffer buf (flymake-diagnostics))))
+            (dolist (d diags)
+              (push (format "%s:%s [%s] %s"
+                            (abbreviate-file-name (buffer-file-name buf))
+                            (with-current-buffer buf
+                              (line-number-at-pos
+                               (flymake-diagnostic-beg d)))
+                            (flymake-diagnostic-type d)
+                            (flymake-diagnostic-text d))
+                    lines)))))
+      (nreverse lines))))
+
+(defun emagent-chat-attach-error-context ()
+  "Attach compilation errors and flymake diagnostics to the next prompt.
+
+Scans `*compilation*' for error lines and all open file buffers for
+active flymake diagnostics.  Attaches a combined error context block."
+  (interactive)
+  (let* ((compile-lines (emagent-chat--compilation-error-lines))
+         (flymake-lines (emagent-chat--flymake-error-lines))
+         (all (append compile-lines flymake-lines)))
+    (if all
+        (let ((text (concat "[Error context]\n" (string-join all "\n"))))
+          (emagent-log "attached %d error(s) to next prompt" (length all))
+          (when emagent-chat--on-attach
+            (funcall emagent-chat--on-attach text)))
+      (message "emagent: no errors found in compilation buffer or flymake"))))
+
+;;;; File attachment (pick from project)
+
+(defun emagent-chat-attach-files ()
+  "Pick one or more project files and attach their summaries to the next prompt.
+
+Presents `completing-read-multiple' over files under `emagent-chat-project-directory'.
+For each chosen file includes its relative path, size in lines, and a short
+content preview."
+  (interactive)
+  (let* ((root (or (emagent-chat-project-directory)
+                   default-directory))
+         (all-files (directory-files-recursively root "[^.].*" nil t))
+         (rel-files (seq-filter
+                     (lambda (f)
+                       (not (string-match-p "/\\.git/" f)))
+                     (mapcar (lambda (f) (file-relative-name f root))
+                             all-files)))
+         (chosen (completing-read-multiple
+                  "Attach files (comma-separated): " rel-files nil t))
+         (blocks
+          (mapcar (lambda (rel)
+                    (let* ((abs (expand-file-name rel root))
+                           (size (and (file-exists-p abs)
+                                      (with-temp-buffer
+                                        (insert-file-contents abs nil 0 4096)
+                                        (count-lines (point-min) (point-max))))))
+                      (format "[File: %s (%s lines)]\n%s"
+                              rel (or size "?")
+                              (condition-case nil
+                                  (with-temp-buffer
+                                    (insert-file-contents abs nil 0 2048)
+                                    (buffer-string))
+                                (error "(unreadable)")))))
+                  chosen)))
+    (if blocks
+        (let ((text (string-join blocks "\n\n")))
+          (emagent-log "attached %d file(s) to next prompt" (length blocks))
+          (when emagent-chat--on-attach
+            (funcall emagent-chat--on-attach text)))
+      (message "emagent: no files selected"))))
+
+;;;; Response extraction
+
+(defun emagent-chat--last-response-bounds ()
+  "Return (BEG . END) for the last completed response body, or nil."
+  (save-excursion
+    (goto-char (point-max))
+    (when (re-search-backward emagent-chat--response-end-re nil t)
+      (let ((end (match-beginning 0)))
+        (when (re-search-backward emagent-chat--response-begin-re nil t)
+          (forward-line 1)
+          (skip-chars-forward "\n")
+          (cons (point) end))))))
+
+(defun emagent-chat--collect-src-blocks (beg end)
+  "Return list of (LANG . CODE) for each src block between BEG and END."
+  (let (blocks)
+    (save-excursion
+      (goto-char beg)
+      (while (re-search-forward "^#\\+BEGIN_SRC \\(.*\\)\n" end t)
+        (let* ((lang (string-trim (match-string 1)))
+               (start (point))
+               (block-end (and (re-search-forward "^#\\+END_SRC\\s-*$" end t)
+                               (match-beginning 0))))
+          (when block-end
+            (push (cons lang (buffer-substring-no-properties start block-end))
+                  blocks)))))
+    (nreverse blocks)))
+
+(defun emagent-chat-insert-last-response ()
+  "Insert the last completed agent response into another buffer.
+
+Prompts for a target buffer with `completing-read'."
+  (interactive)
+  (if-let* ((bounds (emagent-chat--last-response-bounds))
+            (text (buffer-substring-no-properties (car bounds) (cdr bounds))))
+      (let* ((others (seq-filter (lambda (b) (not (eq b (current-buffer))))
+                                 (buffer-list)))
+             (choice (completing-read "Insert response into buffer: "
+                                      (mapcar #'buffer-name others) nil t))
+             (target (get-buffer choice)))
+        (with-current-buffer target
+          (insert text))
+        (message "emagent: inserted response into %s" choice))
+    (message "emagent: no completed response found")))
+
+(defun emagent-chat-insert-src-block ()
+  "Pick a src block from the last response and insert it into another buffer."
+  (interactive)
+  (if-let* ((bounds (emagent-chat--last-response-bounds))
+            (blocks (emagent-chat--collect-src-blocks (car bounds) (cdr bounds))))
+      (let* ((choices
+              (cl-loop for (lang . code) in blocks
+                       for i from 1
+                       collect
+                       (cons (format "%d [%s] %s" i lang
+                                     (truncate-string-to-width
+                                      (car (split-string code "\n")) 60 nil nil "…"))
+                             code)))
+             (pick (completing-read "Insert src block: "
+                                    (mapcar #'car choices) nil t))
+             (code (cdr (assoc pick choices)))
+             (others (seq-filter (lambda (b) (not (eq b (current-buffer))))
+                                 (buffer-list)))
+             (target (get-buffer
+                      (completing-read "Into buffer: "
+                                       (mapcar #'buffer-name others) nil t))))
+        (with-current-buffer target
+          (insert code))
+        (message "emagent: inserted src block into %s" (buffer-name target)))
+    (message "emagent: no src blocks found in last response")))
+
 ;;;; Transient command palette
 
 (declare-function emagent--transient-menu "emagent-chat")
@@ -1662,7 +1835,12 @@ executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'.
                ("g" "Interrupt agent (C-g C-g)" emagent-chat-interrupt)]
               ["Attach"
                ("a" "Attach buffer context" emagent-chat-attach-buffer)
+               ("d" "Attach project files" emagent-chat-attach-files)
+               ("e" "Attach error context" emagent-chat-attach-error-context)
                ("i" "Attach image" emagent-chat-attach-image)]
+              ["Extract response"
+               ("r" "Insert last response into buffer" emagent-chat-insert-last-response)
+               ("s" "Insert src block into buffer" emagent-chat-insert-src-block)]
               ["Session"
                ("m" "Set model" emagent-set-model)
                ("l" "View log" emagent-log-view)])

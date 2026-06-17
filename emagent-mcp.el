@@ -262,7 +262,30 @@ instead; emagent then writes whatever port it gets into the agent config."
          '()
          '()
          (lambda (_args)
-           (emagent-tool-project-directory))))
+           (emagent-tool-project-directory)))
+   (list "compile"
+         "Run a build or test command via Emacs compilation-mode. Errors appear in *emagent-compile* and are navigable with next-error / M-g n. Returns the full build output."
+         '(("command" . ((type . "string")
+                         (description . "The shell command to compile or test, e.g. 'mvn test', 'cargo build'.")))
+           ("directory" . ((type . "string")
+                           (description . "Working directory; defaults to the session root."))))
+         '("command")
+         (lambda (args)
+           (emagent-tool-compile (emagent-mcp--arg args "command")
+                                 (emagent-mcp--arg args "directory"))))
+   (list "buffer_list"
+         "List open Emacs buffers that visit files inside the session project root. Use to see what the user is currently editing."
+         '()
+         '()
+         (lambda (_args)
+           (emagent-tool-buffer-list)))
+   (list "imenu_index"
+         "Return the structural outline of a file (functions, classes, sections) using Emacs imenu. Works for any language with imenu support."
+         '(("file" . ((type . "string")
+                      (description . "File path relative to session root; omit for current buffer."))))
+         '()
+         (lambda (args)
+           (emagent-tool-imenu-index (emagent-mcp--arg args "file")))))
   "Registry of emagent MCP tools: (NAME DESCRIPTION PROPERTIES REQUIRED HANDLER).")
 
 (defun emagent-mcp--tool-entry (name)
@@ -312,7 +335,7 @@ PROPERTIES keys are tool argument names, kept as strings via a hash-table so
           (emagent-chat-add-allowed-tool tool))))))
 
 (defconst emagent-mcp--confirming-tools
-  '("run_shell_command" "write_file" "delete_file" "delete_directory")
+  '("run_shell_command" "compile" "write_file" "delete_file" "delete_directory")
   "MCP tool names that prompt the user before running.")
 
 (defun emagent-mcp--tool-confirm-symbol (name)
