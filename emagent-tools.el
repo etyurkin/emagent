@@ -44,13 +44,14 @@ These are too dangerous to allow even with confirmation:
     rename-file rename-directory
     copy-file copy-directory
     write-region write-file
+    insert-file-contents
     shell-command shell-command-to-string
     call-process start-process start-file-process process-file
     kill-buffer kill-buffer-and-save)
   "Symbols in `emagent-tool-eval' that require explicit user confirmation.
 The user sees the full code and must approve before execution.
-`write-region' and `write-file' bypass emagent-tool-write-file's project
-boundary checks, so they need confirmation here too."
+`write-region', `write-file', and `insert-file-contents' all bypass
+emagent-tool-read-file / emagent-tool-write-file's project boundary checks."
   :type '(repeat symbol)
   :group 'emagent-tools)
 
