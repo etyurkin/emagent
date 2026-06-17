@@ -30,12 +30,10 @@
   :group 'emagent-tools)
 
 (defcustom emagent-tools-eval-blocked-symbols
-  '(kill-emacs pause-emacs
-    load load-file load-library)
+  '(kill-emacs pause-emacs)
   "Symbols hard-blocked in `emagent-tool-eval'; cannot run under any circumstances.
 These are too dangerous to allow even with confirmation:
-- kill-emacs / pause-emacs — would terminate or freeze the Emacs process
-- load / load-file / load-library — could execute arbitrary files from disk"
+- kill-emacs / pause-emacs — would terminate or freeze the Emacs process"
   :type '(repeat symbol)
   :group 'emagent-tools)
 
@@ -45,13 +43,15 @@ These are too dangerous to allow even with confirmation:
     copy-file copy-directory
     write-region write-file
     insert-file-contents
+    load load-file load-library
     shell-command shell-command-to-string
     call-process start-process start-file-process process-file
     kill-buffer kill-buffer-and-save)
   "Symbols in `emagent-tool-eval' that require explicit user confirmation.
 The user sees the full code and must approve before execution.
-`write-region', `write-file', and `insert-file-contents' all bypass
-emagent-tool-read-file / emagent-tool-write-file's project boundary checks."
+`load-file' / `load-library' are here (not hard-blocked) to enable the
+write-file-then-load-file pattern for complex Elisp: the agent writes code
+with write_file (user reviews diff), then loads it — both steps confirmed."
   :type '(repeat symbol)
   :group 'emagent-tools)
 
@@ -480,8 +480,10 @@ For forms longer than 3 lines, call check_elisp first to validate parens."
          (paren-error (emagent-tools--check-elisp-parens form-str)))
     (when paren-error
       (user-error "Elisp paren/syntax error (fix before eval): %s" paren-error))
-    (let* ((parsed (condition-case parse-err
-                       (read form-str)
+    ;; Wrap in progn so multiple top-level forms all execute, not just the first.
+    (let* ((wrapped-str (concat "(progn " form-str ")"))
+           (parsed (condition-case parse-err
+                       (read wrapped-str)
                      (error
                       (user-error "Elisp read error: %s"
                                   (error-message-string parse-err)))))
