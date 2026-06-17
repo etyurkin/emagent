@@ -470,12 +470,10 @@ Slower than apropos (scans all docstrings) but finds symbols by meaning."
 Covers core patterns, string/list/buffer/file/JSON/org-mode operations,
 error handling, common pitfalls, and ready-to-use code templates.
 Call this before writing non-trivial Elisp."
-  (let* ((lib-file (or load-file-name
-                       (and (boundp 'byte-compile-current-file)
-                            byte-compile-current-file)
-                       (symbol-file 'emagent-tool-elisp-guide 'defun)
-                       (locate-library "emagent-tools")))
-         (dir (and lib-file (file-name-directory lib-file)))
+  ;; The .md is installed alongside the .el files via the elpaca :files recipe.
+  ;; locate-library finds emagent-tools.el(c) in the build dir; the guide is there too.
+  (let* ((lib (locate-library "emagent-tools"))
+         (dir (and lib (file-name-directory lib)))
          (guide (and dir (expand-file-name "emagent-elisp-guide.md" dir))))
     (if (and guide (file-readable-p guide))
         (with-temp-buffer

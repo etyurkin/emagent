@@ -18,7 +18,8 @@ ACP agent (Cursor or Claude).
 
 #+BEGIN_SRC emacs-lisp
 (use-package emagent
-  :ensure (:host github :repo "etyurkin/emagent" :depth 1)
+  :ensure (:host github :repo "etyurkin/emagent" :depth 1
+           :files (:defaults "emagent-elisp-guide.md"))
   :commands (emagent emagent-cursor-start emagent-claude-start emagent-mode emagent-set-model)
   :custom (emagent-default-provider (if (equal (getenv "EMAGENT_AGENT") "claude")
                                        'claude
@@ -28,27 +29,36 @@ ACP agent (Cursor or Claude).
 Set =EMAGENT_AGENT= to =claude= or =cursor= to pick the default provider when
 Emacs starts.
 
+The =:files= entry includes =emagent-elisp-guide.md=, the Emacs Lisp reference
+guide served to the agent via the =elisp_guide= MCP tool.
+
 For a local clone, add =:load-path "~/path/to/emagent"= instead of =:ensure=.
 
 * Usage
 
-| Key / command              | Action                                      |
-|----------------------------+---------------------------------------------|
-| =M-x emagent=                | Start a session (infers cwd, selects agent) |
-| =M-x emagent-cursor-start=   | Start with the Cursor provider              |
-| =M-x emagent-claude-start=   | Start with the Claude ACP provider          |
-| =M-x emagent-mode=           | Reconnect a saved buffer (agent + session)  |
-| =M-x emagent-set-model=      | Change ACP model mid-session                |
-| =C-c C-c=                    | Send the current =* user>= block (or region)  |
-| =C-c p=                      | Insert a new =* user>= prompt heading         |
-| =C-c a=                      | Attach buffer summary to next prompt        |
-| =C-c m=                      | Set model                                   |
-| =C-c l=                      | Show emagent log (=*Emagent Log*=)            |
-| =TAB= on =/command= line       | Complete slash commands (skills / built-ins) |
-| =TAB= on =# --- emagent ---=   | Fold / unfold the response block            |
-| =TAB= elsewhere              | =org-cycle= (headlines, Reasoning, etc.)      |
-| =C-g C-g=                    | Interrupt agent response                    |
-| =C-x k=                      | Kill buffer and disconnect agent            |
+| Key / command                       | Action                                           |
+|-------------------------------------+--------------------------------------------------|
+| =M-x emagent=                         | Start a session (infers cwd, selects agent)      |
+| =M-x emagent-cursor-start=            | Start with the Cursor provider                   |
+| =M-x emagent-claude-start=            | Start with the Claude ACP provider               |
+| =M-x emagent-mode=                    | Reconnect a saved buffer (agent + session)       |
+| =M-x emagent-set-model=               | Change ACP model mid-session                     |
+| =C-c C-c=                             | Send =* user>= block; execute src block when inside one |
+| =C-c p=                               | Insert a new =* user>= prompt heading             |
+| =C-c a=                               | Attach current buffer summary to next prompt     |
+| =C-c d=                               | Pick project files to attach to next prompt      |
+| =C-c e=                               | Attach compilation/flymake errors to next prompt |
+| =C-c i=                               | Attach image file (or clipboard image)           |
+| =C-c m=                               | Set model                                        |
+| =C-c l=                               | Show emagent log (=*Emagent Log*=)                |
+| =C-c ?=                               | Command palette (transient menu)                 |
+| =M-x emagent-chat-insert-last-response= | Insert last response into another buffer        |
+| =M-x emagent-chat-insert-src-block=   | Pick a src block from last response and insert  |
+| =TAB= on =/command= line              | Complete slash commands (skills / built-ins)     |
+| =TAB= on =# --- emagent ---=           | Fold / unfold the response block                 |
+| =TAB= elsewhere                       | =org-cycle= (headlines, Reasoning, etc.)          |
+| =C-g C-g=                             | Interrupt agent response                         |
+| =C-x k=                               | Kill buffer and disconnect agent                 |
 
 ** Project directory and agent
 
@@ -100,9 +110,42 @@ fresh session — the agent has nothing stored yet to resume.
 | =emagent-oauth-auto-browse-url=     | =nil=          | Auto-open OAuth authorize URLs in a browser       |
 | =emagent-acp-watchdog-timeout=      | =300=          | Seconds of silence before aborting a stalled prompt |
 
-Destructive tool calls (=eval=, =write_file=, =delete_file=, shell commands,
-etc.) prompt before running.  Answer /allow all/ to remember a tool for the
-current buffer.
+Destructive tool calls (=write_file=, =delete_file=, shell commands, etc.)
+prompt before running using inline buttons in the chat buffer.  =write_file=
+shows a unified diff before asking.  Answer /Allow all/ to remember a tool for
+the current buffer session.
+
+** Eval safety
+
+The =eval= MCP tool runs Emacs Lisp directly in the live Emacs process.
+Dangerous symbols (=delete-file=, =shell-command=, =write-region=, =load-file=,
+etc.) trigger a confirmation prompt showing the full code before execution.
+=kill-emacs= and =pause-emacs= are permanently blocked.
+
+The agent is guided to call =check_elisp= (paren validator) before =eval= for
+any non-trivial form, and =elisp_guide= (built-in Elisp reference) before
+writing new code.
+
+** MCP tools exposed to the agent
+
+| Tool            | Description                                               |
+|-----------------+-----------------------------------------------------------|
+| =read_file=       | Read through Emacs (includes unsaved buffer content)      |
+| =write_file=      | Write via Emacs buffer (undo-able, diff shown to user)    |
+| =grep=, =find_files=, =list_files= | File search within session root          |
+| =git_status/diff/log= | Git info via Emacs                                    |
+| =compile=         | Build/test via compilation-mode (errors navigable with =M-g n=) |
+| =buffer_list=     | Open files inside the project visible to Emacs            |
+| =imenu_index=     | Function/class outline for any file                       |
+| =eval=            | Execute Emacs Lisp in the live process                    |
+| =check_elisp=     | Validate Elisp paren balance before eval                  |
+| =elisp_guide=     | On-demand Elisp reference (patterns, pitfalls, examples)  |
+| =apropos=         | Find symbols by name fragment                             |
+| =apropos_doc=     | Find symbols by docstring meaning                         |
+| =describe_symbol= | Full docstring + signature                                |
+
+Build commands (=mvn=, =gradle=, =cargo=, =make=, =npm test=, etc.) are always
+routed through =compile= for navigable error output, regardless of other settings.
 
 ** MCP gateway forwarding
 
