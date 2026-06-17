@@ -942,12 +942,19 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
                                                 :message (error-message-string err)))))))))))
 
 (defun emagent-acp--permission-option-id (options)
-  "Return a permissive option id from OPTIONS, or nil when none is found.
+  "Return an allow-type option id from OPTIONS.
+Tries optionId against a prefer list, then option name containing
+\"allow\" or \"yes\", then falls back to the first available option.
 OPTIONS may be a list or vector (JSON arrays parse as vectors)."
   (let ((prefer '("allow_once" "allow-once" "allow_always" "allow-always" "allow" "yes")))
     (or (map-elt (seq-find (lambda (opt)
                              (let ((id (map-elt opt 'optionId)))
                                (and id (member id prefer))))
+                           options)
+                 'optionId)
+        (map-elt (seq-find (lambda (opt)
+                             (let ((name (downcase (or (map-elt opt 'name) ""))))
+                               (string-match-p "\\`\\(?:allow\\|yes\\)" name)))
                            options)
                  'optionId)
         (when-let ((first (seq-first options)))
@@ -963,18 +970,24 @@ OPTIONS may be a list or vector (JSON arrays parse as vectors)."
                                   (map-elt opt 'optionId)))
                           (append options nil)))
          (choice
-          (or (and emagent-acp-auto-approve-permissions
-                   (emagent-acp--permission-option-id options))
-              (progn
-                (emagent-acp--prepare-interactive-context state)
-                (emagent-tools--buttons-prompt
-                 title choices
-                 (emagent-acp--chat-buffer state))))))
+          (if emagent-acp-auto-approve-permissions
+              ;; Auto-approve: always resolve to an option, never show buttons.
+              (emagent-acp--permission-option-id options)
+            (progn
+              (emagent-acp--prepare-interactive-context state)
+              (emagent-tools--buttons-prompt
+               title choices
+               (emagent-acp--chat-buffer state))))))
     (emagent-acp-send-response
      :client (map-elt state :client)
-     :response (emagent-acp-make-session-request-permission-response
-                :request-id (map-elt emagent-acp-request 'id)
-                :option-id choice))))
+     :response (if choice
+                   (emagent-acp-make-session-request-permission-response
+                    :request-id (map-elt emagent-acp-request 'id)
+                    :option-id choice)
+                 ;; C-g or empty options: send cancelled so the agent doesn't hang.
+                 (emagent-acp-make-session-request-permission-response
+                  :request-id (map-elt emagent-acp-request 'id)
+                  :cancelled t)))))
 
 (cl-defun emagent-acp--on-request (&key state emagent-acp-request)
   (pcase (map-elt emagent-acp-request 'method)
