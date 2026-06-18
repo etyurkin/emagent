@@ -38,6 +38,7 @@
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'emagent-chat-send-or-babel)
     (define-key map (kbd "C-c a")   #'emagent-chat-attach-buffer)
+    (define-key map (kbd "C-c b")   #'emagent-btw)
     (define-key map (kbd "C-c d")   #'emagent-chat-attach-files)
     (define-key map (kbd "C-c e")   #'emagent-chat-attach-error-context)
     (define-key map (kbd "C-c i")   #'emagent-chat-attach-image)
@@ -78,6 +79,9 @@
 
 (defvar-local emagent-chat--on-send nil
   "Function called with user input when sending.")
+
+(defvar-local emagent-chat--pending-prompt nil
+  "Text queued via /btw to send after the current agent response finishes.")
 
 (defvar-local emagent-chat--on-attach nil
   "Function called with attachment text.")
@@ -157,6 +161,7 @@ hideblocks / `org-cycle-hide-block-startup'."
 # C-c C-c send (on a src block: execute with org-babel instead)
 # C-c p   insert a new '* username>' prompt heading
 # C-c a   attach buffer context to the next send
+# C-c b   queue a follow-up message (btw) for after agent finishes
 # C-c d   pick project files to attach
 # C-c e   attach compilation/flymake errors to the next send
 # C-y     paste text normally; if clipboard has image, inserts [[file:...]] link
@@ -1313,7 +1318,8 @@ inserted at `point-max' always land outside it."
         (emagent-chat--insert-response-end)
         (emagent-chat--reset-response-state)
         (emagent-chat--sync-user-zone-marker)
-        (font-lock-flush)))))
+        (font-lock-flush)
+        (emagent-chat--flush-pending-prompt)))))
 
 (defun emagent-chat-finish-assistant (text &optional thought-text)
   "Finalize the latest emagent response.
@@ -1351,7 +1357,63 @@ Optional THOUGHT-TEXT is rendered as a foldable Reasoning quote above the body."
         (emagent-chat--sync-user-zone-marker)
         (emagent-chat--insert-user-heading-stub)
         (font-lock-flush))
-      (goto-char (point-max)))))
+      (goto-char (point-max))
+      (emagent-chat--flush-pending-prompt))))
+
+(defun emagent-chat--clear-btw-indicator ()
+  "Remove the btw queued indicator line from the buffer, if present."
+  (let ((inhibit-read-only t))
+    (emagent-chat--writable)
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (if (get-text-property (point) 'emagent-btw)
+            (delete-region (line-beginning-position)
+                           (min (1+ (line-end-position)) (point-max)))
+          (forward-line 1))))))
+
+(defun emagent-chat--flush-pending-prompt ()
+  "Send the pending btw prompt if one exists.  Called after agent finishes."
+  (when emagent-chat--pending-prompt
+    (let ((text emagent-chat--pending-prompt))
+      (setq emagent-chat--pending-prompt nil)
+      (emagent-chat--clear-btw-indicator)
+      (force-mode-line-update)
+      (when emagent-chat--on-send
+        (emagent-log "btw send: %s" (emagent-log-truncate-line text 80))
+        (emagent-chat--insert-user-heading-stub)
+        (emagent-chat--begin-response (emagent-chat--user-zone-start))
+        (funcall emagent-chat--on-send text)))))
+
+(defun emagent-btw (text)
+  "Queue TEXT to send after the current agent response finishes (C-c b).
+
+When the agent is idle, sends immediately.  When busy, stores TEXT and
+shows a `# [btw]' indicator; it is removed and TEXT is sent automatically
+when the agent finishes."
+  (interactive "sBTW: ")
+  (when (string-empty-p (string-trim text))
+    (user-error "BTW message is empty"))
+  (if (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
+      (progn
+        (setq emagent-chat--pending-prompt text)
+        (let ((inhibit-read-only t))
+          (emagent-chat--writable)
+          (emagent-chat--clear-btw-indicator)
+          (save-excursion
+            (goto-char (emagent-chat--user-zone-start))
+            (unless (bolp) (insert "\n"))
+            (insert (propertize (format "# [btw] %s\n" text)
+                                'face 'shadow
+                                'emagent-btw t))))
+        (force-mode-line-update)
+        (message "emagent: btw queued — will send when agent finishes"))
+    ;; Agent is idle: send immediately.
+    (emagent-log "btw send: %s" (emagent-log-truncate-line text 80))
+    (emagent-chat--insert-user-heading-stub)
+    (emagent-chat--begin-response (emagent-chat--user-zone-start))
+    (when emagent-chat--on-send
+      (funcall emagent-chat--on-send text))))
 
 (defun emagent-chat-send ()
   "Send region or line at point to the agent (C-c C-c).
@@ -1359,7 +1421,10 @@ Optional THOUGHT-TEXT is rendered as a foldable Reasoning quote above the body."
 With an active region, send the selection.  Otherwise send the current
 line (or nearest preceding sendable line in the user zone).  The text is
 formatted as a '* username> ' org heading in the buffer; the heading
-prefix is stripped before the text is sent to the agent."
+prefix is stripped before the text is sent to the agent.
+
+If the text starts with /btw, the remainder is queued and sent after
+the current agent response finishes.  An empty /btw opens a minibuffer."
   (interactive)
   (let* ((bounds (emagent-chat--send-bounds))
          (raw (string-trim (buffer-substring-no-properties
@@ -1545,7 +1610,9 @@ the prompt text."
     (concat status
             (when model-str (concat sep model-str))
             (when context   (concat sep (string-trim-left context)))
-            (when rss-str   (concat sep rss-str)))))
+            (when rss-str   (concat sep rss-str))
+            (when emagent-chat--pending-prompt
+              (concat sep (propertize "⏳btw" 'face 'warning))))))
 
 (defvar emagent-chat--doom-modeline-registered-p nil)
 
@@ -1933,6 +2000,7 @@ Prompts for a target buffer with `completing-read'."
                ("g" "Interrupt agent (C-g C-g)" emagent-chat-interrupt)]
               ["Attach"
                ("a" "Attach buffer context" emagent-chat-attach-buffer)
+               ("b" "Queue btw message for after agent" emagent-btw)
                ("d" "Attach project files" emagent-chat-attach-files)
                ("e" "Attach error context" emagent-chat-attach-error-context)
                ("i" "Attach image" emagent-chat-attach-image)]
