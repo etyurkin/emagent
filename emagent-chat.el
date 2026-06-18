@@ -1404,6 +1404,7 @@ when the agent finishes."
   (interactive "sBTW: ")
   (when (string-empty-p (string-trim text))
     (user-error "BTW message is empty"))
+  (let ((text (format "btw, %s" (string-trim text))))
   (if (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
       (progn
         (setq emagent-chat--pending-prompt text)
@@ -1423,7 +1424,7 @@ when the agent finishes."
     (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
       (emagent-chat--begin-response response-pos))
     (when emagent-chat--on-send
-      (funcall emagent-chat--on-send text))))
+      (funcall emagent-chat--on-send text)))))
 
 (defun emagent-chat-send ()
   "Send region or line at point to the agent (C-c C-c).
