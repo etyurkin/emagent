@@ -125,6 +125,7 @@ once the session is ready; ON-REVEAL runs when the chat buffer should be shown."
 (defun emagent--on-mode-enable ()
   "Wire callbacks and reconnect ACP when enabling `emagent-mode'."
   (emagent-chat--wire-buffer)
+  (emagent-chat--setup-faces)
   (add-hook 'kill-buffer-hook #'emagent-acp-shutdown-buffer nil t)
   (when (or (emagent-chat-project-directory)
             (and (emagent-chat-session-id)

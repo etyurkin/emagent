@@ -945,24 +945,28 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
                          :error (emagent-acp-make-error :code -32603
                                                 :message (error-message-string err)))))))))))
 
+(defun emagent-acp--permission-option-allow-p (opt)
+  "Return non-nil when OPT is an allow-type ACP permission option."
+  (let ((kind (downcase (or (map-elt opt 'kind) "")))
+        (id (downcase (or (map-elt opt 'optionId) "")))
+        (name (downcase (or (map-elt opt 'name) ""))))
+    (or (member kind '("allow" "allow_once" "allow_always" "allow-once" "allow-always"))
+        (member id '("allow_once" "allow-once" "allow_always" "allow-always" "allow" "yes" "run" "run_once"))
+        (string-match-p "allow" id)
+        (string-match-p "\\`\\(?:allow\\|yes\\|run\\)" name))))
+
 (defun emagent-acp--permission-option-id (options)
   "Return an allow-type option id from OPTIONS.
-Tries optionId against a prefer list, then option name containing
-\"allow\" or \"yes\", then falls back to the first available option.
-OPTIONS may be a list or vector (JSON arrays parse as vectors)."
-  (let ((prefer '("allow_once" "allow-once" "allow_always" "allow-always" "allow" "yes")))
+Tries preferred optionIds, then `kind' = allow, then name/id matching allow.
+Never returns a deny option.  OPTIONS may be a list or vector."
+  (let ((prefer '("allow_once" "allow-once" "allow_always" "allow-always" "allow" "yes" "run" "run_once")))
     (or (map-elt (seq-find (lambda (opt)
                              (let ((id (map-elt opt 'optionId)))
                                (and id (member id prefer))))
                            options)
                  'optionId)
-        (map-elt (seq-find (lambda (opt)
-                             (let ((name (downcase (or (map-elt opt 'name) ""))))
-                               (string-match-p "\\`\\(?:allow\\|yes\\)" name)))
-                           options)
-                 'optionId)
-        (when-let ((first (seq-first options)))
-          (map-elt first 'optionId)))))
+        (map-elt (seq-find #'emagent-acp--permission-option-allow-p options)
+                 'optionId))))
 
 (cl-defun emagent-acp--on-permission (&key state emagent-acp-request)
   (let* ((options (map-nested-elt emagent-acp-request '(params options)))
@@ -975,13 +979,15 @@ OPTIONS may be a list or vector (JSON arrays parse as vectors)."
                           (append options nil)))
          (choice
           (if emagent-acp-auto-approve-permissions
-              ;; Auto-approve: always resolve to an option, never show buttons.
               (emagent-acp--permission-option-id options)
             (progn
               (emagent-acp--prepare-interactive-context state)
               (emagent-tools--buttons-prompt
                title choices
                (emagent-acp--chat-buffer state))))))
+    (when emagent-acp-auto-approve-permissions
+      (emagent-log "permission auto-approve: %s → %s"
+                   title (or choice "cancelled (no allow option)")))
     (emagent-acp-send-response
      :client (map-elt state :client)
      :response (if choice

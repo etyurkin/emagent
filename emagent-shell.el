@@ -259,6 +259,20 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
       "Use emagent eval with browse-url instead of open.")
      (t nil)))))
 
+(defun emagent-shell--read-only-network-p (command)
+  "Return non-nil when COMMAND is a read-only HTTP GET via curl or wget."
+  (let ((cmd (emagent-shell--strip-quoted (string-trim command))))
+    (cond
+     ((string-match-p "\\`curl\\>" cmd)
+      (and (string-match-p "https?://" cmd)
+           (not (string-match-p
+                 "\\(?:-X[[:space:]]*\\(?:POST\\|PUT\\|DELETE\\|PATCH\\)\\|-d\\|--data\\|-F\\|--form\\|-o[[:space:]]\\|-O\\|>[[:space:]]\\)"
+                 cmd))))
+     ((string-match-p "\\`wget\\>" cmd)
+      (and (string-match-p "https?://" cmd)
+           (not (string-match-p "\\(?:--post\\|-O\\|--output-document\\|>[[:space:]]\\)" cmd))))
+     (t nil))))
+
 (defun emagent-shell-run-command (command &optional directory)
   "Run COMMAND with Emacs-native routing, guards, and redirects."
   (let* ((cmd (string-trim command))

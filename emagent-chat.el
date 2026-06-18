@@ -1508,17 +1508,24 @@ the prompt text."
     (emagent-chat--write-top-property "STARTUP" "hideblocks")))
 
 (defun emagent-chat--setup-faces ()
-  "Configure org highlighting and block folding for emagent buffers."
+  "Configure org highlighting, line wrap, and block folding for emagent buffers."
   (setq-local org-src-fontify-natively t
               org-ellipsis "…"
               org-fontify-quote-and-verse-blocks t
               org-cycle-hide-block-startup t
+              org-startup-truncated nil
               truncate-lines nil)
+  (when (boundp 'word-wrap)
+    (setq-local word-wrap t))
   (visual-line-mode 1)
-  ;; org-phscroll applies horizontal scrolling to table regions while
-  ;; leaving prose with visual-line wrapping.  Enable when available.
+  ;; org-phscroll: horizontal scroll for wide tables while prose wraps.
   (when (fboundp 'org-phscroll-mode)
     (org-phscroll-mode 1)))
+
+(defun emagent-chat--setup-faces-deferred ()
+  "Re-apply `emagent-chat--setup-faces' after org startup hooks finish."
+  (when (derived-mode-p 'emagent-mode)
+    (emagent-chat--setup-faces)))
 
 ;;;###autoload
 (define-derived-mode emagent-mode org-mode "Emagent"
@@ -1547,7 +1554,6 @@ Run \\[emagent-mode] to reconnect a saved session."
       (emagent-chat--setup-doom-modeline)
     (setq-local mode-line-format (list "" 'emagent-mode-line "")))
   (org-indent-mode -1)
-  (emagent-chat--setup-faces)
   (when-let ((dir (emagent-chat-project-directory)))
     (rename-buffer (emagent-chat--buffer-name-for-label
                     (emagent-chat--short-cwd-label dir))
@@ -1558,7 +1564,9 @@ Run \\[emagent-mode] to reconnect a saved session."
   (add-hook 'completion-at-point-functions
             #'emagent-chat-slash-command-completion-at-point -90 t)
   (setq-local imenu-create-index-function #'emagent-chat--imenu-create-index)
-  (setq-local bookmark-make-record-function #'emagent-chat--bookmark-make-record))
+  (setq-local bookmark-make-record-function #'emagent-chat--bookmark-make-record)
+  (emagent-chat--setup-faces)
+  (run-with-idle-timer 0 nil #'emagent-chat--setup-faces-deferred))
 
 (cl-defun emagent-chat-open (&key project-dir)
   "Open or create an emagent buffer for PROJECT-DIR.
@@ -1707,11 +1715,11 @@ active flymake diagnostics.  Attaches a combined error context block."
 ;;;; File attachment (pick from project)
 
 (defun emagent-chat-attach-files ()
-  "Pick one or more project files and attach their summaries to the next prompt.
+  "Pick project files and attach summaries to the next prompt.
 
-Presents `completing-read-multiple' over files under `emagent-chat-project-directory'.
-For each chosen file includes its relative path, size in lines, and a short
-content preview."
+Presents `completing-read-multiple' over files under
+`emagent-chat-project-directory'.  For each chosen file includes its
+relative path, size in lines, and a short content preview."
   (interactive)
   (let* ((root (or (emagent-chat-project-directory)
                    default-directory))
@@ -1847,6 +1855,12 @@ Prompts for a target buffer with `completing-read'."
            t))
         (call-interactively #'emagent--transient-menu))
     (message "emagent keybindings: SPC=send, p=new-prompt, g=interrupt, a=attach, i=image, m=model, l=log")))
+
+(add-hook 'emagent-mode-hook #'emagent-chat--setup-faces 100 t)
+(dolist (buffer (buffer-list))
+  (with-current-buffer buffer
+    (when (derived-mode-p 'emagent-mode)
+      (emagent-chat--setup-faces))))
 
 (provide 'emagent-chat)
 

@@ -53,10 +53,13 @@ Example for Emacs Lisp:
 Another paragraph starts after a blank line.
 
 You have emagent tools (read_file, write_file, grep, find_files, git_status,
-git_diff, git_log, list_files, eval, apropos, run_shell_command, ...) that
-execute inside the live Emacs process. Prefer them — and the user's installed
-Emacs packages — over Bash, zsh, or the agent's built-in terminal tools.
-run_shell_command runs through Emacs; reach for elisp and emagent tools first.
+git_diff, git_log, list_files, fetch_url, eval, apropos, run_shell_command, ...)
+that execute inside the live Emacs process. Prefer them — and the user's
+installed Emacs packages — over Bash, zsh, or the agent's built-in terminal tools.
+run_shell_command and fetch_url run through Emacs; reach for elisp and emagent
+tools first. The agent's built-in WebSearch and shell tools are often sandboxed
+without network access — use fetch_url (or eval with url-retrieve-synchronously)
+for live HTTP data instead.
 
 If you do not know how to do something in Emacs, discover the API first — never guess.
 Describe what you found before suggesting changes. Ask for confirmation before mutating buffers.")
@@ -85,6 +88,7 @@ Substitution guide:
 | jq, Python data ops     | eval with json-parse-string, seq-*, etc.  |
 | Python scripts          | eval with Emacs Lisp (see Elisp guide)    |
 | open URL                | eval with (browse-url URL)                |
+| live HTTP / web API     | fetch_url (or eval with url-retrieve-synchronously) |
 | what's open in editor   | buffer_list                               |
 | code outline            | imenu_index                               |
 
@@ -110,7 +114,7 @@ Common Elisp patterns (use these, not shell equivalents):
 | Read JSON string          | (json-parse-string s :object-type 'alist)          |
 | Write JSON                | (json-serialize object)                            |
 | Read file to string       | (with-temp-buffer (insert-file-contents PATH) ...) |
-| HTTP GET (sync)           | (url-retrieve-synchronously URL)                   |
+| HTTP GET (sync)           | fetch_url URL (preferred) or eval with url-retrieve-synchronously |
 | Work with open buffer     | (with-current-buffer (get-buffer NAME) ...)        |
 | Find buffer by file       | (find-buffer-visiting PATH)                        |
 | All open project buffers  | buffer_list (MCP tool)                             |
@@ -169,7 +173,7 @@ Follow these rules to avoid them:
 read_file, write_file, undo_file, delete_file, delete_directory,
 list_files, find_files, grep, git_status, git_diff, git_log,
 project_directory, buffer_list, imenu_index, compile,
-eval, check_elisp, elisp_guide, apropos, apropos_doc, describe_symbol,
+eval, check_elisp, elisp_guide, fetch_url, apropos, apropos_doc, describe_symbol,
 find_function, where_is, run_shell_command.")
 
 (defconst emagent-acp-system-prompt-gateway

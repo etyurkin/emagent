@@ -219,6 +219,16 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("form")
          (lambda (args)
            (emagent-tool-eval (emagent-mcp--arg args "form"))))
+   (list "fetch_url"
+         "Fetch an http(s) URL and return the response body. Use for live web data when the agent's WebSearch or shell tools are sandboxed; runs through Emacs network access."
+         '(("url" . ((type . "string")
+                     (description . "http:// or https:// URL to fetch.")))
+           ("max_bytes" . ((type . "integer")
+                           (description . "Optional maximum response size in bytes."))))
+         '("url")
+         (lambda (args)
+           (emagent-tool-fetch-url (emagent-mcp--arg args "url")
+                                   (emagent-mcp--arg args "max_bytes"))))
    (list "apropos"
          "List Emacs symbols whose NAME matches a regexp. Use to discover functions and variables when you know part of the name."
          '(("pattern" . ((type . "string")
@@ -358,6 +368,15 @@ PROPERTIES keys are tool argument names, kept as strings via a hash-table so
   '("run_shell_command" "compile" "write_file" "delete_file" "delete_directory")
   "MCP tool names that prompt the user before running.")
 
+(declare-function emagent-shell--read-only-network-p "emagent-shell")
+
+(defun emagent-mcp--tool-needs-confirmation-p (name args)
+  "Return non-nil when MCP tool NAME with ARGS should prompt the user."
+  (and (member name emagent-mcp--confirming-tools)
+       (not (and (string= name "run_shell_command")
+                 (emagent-shell--read-only-network-p
+                  (or (emagent-mcp--arg args "command") ""))))))
+
 (defun emagent-mcp--tool-confirm-symbol (name)
   "Return the `emagent-tool-*' symbol used for allow-listing MCP tool NAME."
   (intern (concat "emagent-tool-" (replace-regexp-in-string "_" "-" name))))
@@ -438,7 +457,7 @@ BUFFER is the chat buffer; when NAME is write_file it is passed to
                                          (plist-get session :prefer-emacs)
                                        (and (boundp 'emagent-acp-prefer-emacs)
                                             emagent-acp-prefer-emacs))))
-      (when (and (member name emagent-mcp--confirming-tools)
+      (when (and (emagent-mcp--tool-needs-confirmation-p name args)
                  (not (emagent-mcp--confirm-tool name args root buffer)))
         (user-error "Tool call cancelled"))
       (emagent-mcp--string-result (funcall handler args)))))

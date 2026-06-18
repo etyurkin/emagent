@@ -24,7 +24,7 @@
   "Emacs tool handlers for emagent."
   :group 'emagent)
 
-(defcustom emagent-allowed-tools nil
+(defcustom emagent-allowed-tools '(emagent-tool-fetch-url)
   "Symbols naming tools that may run without confirmation."
   :type '(repeat symbol)
   :group 'emagent-tools)
@@ -416,7 +416,8 @@ Each call is recorded as a single undoable change in the target buffer."
 
 (defun emagent-tool-apropos (pattern)
   "Return Emacs symbols matching PATTERN, one per line.
-Searches symbol names. Use to discover functions and variables before calling them."
+Searches symbol names.  Use to discover functions and variables before
+calling them."
   (let* ((regexp (if (stringp pattern) pattern (format "%s" pattern)))
          (matches (apropos-internal regexp)))
     (if matches
@@ -483,7 +484,7 @@ Call this before writing non-trivial Elisp."
 
 (defun emagent-tools--check-elisp-parens (form-str)
   "Return nil when FORM-STR parses cleanly, or an error string on failure.
-Catches both unclosed parens (more '(' than ')') and extra closing parens."
+Catches unclosed and extra closing parentheses."
   (condition-case err
       (with-temp-buffer
         (insert "(progn " form-str ")")
@@ -612,6 +613,12 @@ For forms longer than 3 lines, call check_elisp first to validate parens."
 
 (defconst emagent-tools--shell-output-limit 100000)
 
+(defconst emagent-tools--fetch-url-limit 100000
+  "Maximum response body size returned by `emagent-tool-fetch-url'.")
+
+(defconst emagent-tools--fetch-url-timeout 30
+  "Seconds to wait for `url-retrieve-synchronously' in `emagent-tool-fetch-url'.")
+
 (defun emagent-tool-undo-file (path &optional steps)
   "Undo STEPS edits in PATH and save.
 Use to revert `emagent-tool-write-file' changes."
@@ -644,6 +651,30 @@ When RECURSIVE is non-nil, delete contents as well."
   (let ((resolved (emagent-tools--root-directory path)))
     (delete-directory resolved recursive)
     (format "Deleted %s" resolved)))
+
+(defun emagent-tool-fetch-url (url &optional max-bytes)
+  "Fetch URL over HTTP/HTTPS and return the response body as a string.
+Runs in Emacs (not the agent sandbox), so network access works when the
+agent's built-in WebSearch and shell tools are blocked."
+  (unless (and (stringp url) (string-match-p "\\`https?://" url))
+    (user-error "fetch_url requires an http:// or https:// URL"))
+  (require 'url)
+  (let* ((limit (or max-bytes emagent-tools--fetch-url-limit))
+         (buffer (url-retrieve-synchronously
+                  url nil t emagent-tools--fetch-url-timeout)))
+    (unwind-protect
+        (if (null buffer)
+            (user-error "Failed to fetch %s" url)
+          (with-current-buffer buffer
+            (goto-char (point-min))
+            (unless (re-search-forward "\n\n" nil t)
+              (user-error "No HTTP body in response from %s" url))
+            (let ((body (buffer-substring-no-properties (point) (point-max))))
+              (if (> (length body) limit)
+                  (concat (substring body 0 limit) "\n… (output truncated)")
+                body))))
+      (when (and buffer (buffer-live-p buffer))
+        (kill-buffer buffer)))))
 
 (declare-function emagent-shell-run-command "emagent-shell")
 

@@ -26,6 +26,17 @@ from ~/.cursor/mcp.json (see `emagent-mcp-ensure-cursor-config')."
   :type '(repeat string)
   :group 'emagent-cursor)
 
+(defcustom emagent-cursor-acp-extra-args
+  '("--approve-mcps" "--force" "--sandbox" "disabled")
+  "Extra arguments appended after \"acp\" when spawning cursor-agent.
+
+Cursor documents these flags on the top-level agent command; passing them
+here may still take effect depending on the CLI version.  They reduce
+sandbox blocks on WebSearch, shell, and MCP tool calls in ACP sessions.
+Set to nil to pass no extra flags."
+  :type '(repeat string)
+  :group 'emagent-cursor)
+
 (defcustom emagent-cursor-environment nil
   "Environment variables for the Cursor ACP agent."
   :type '(repeat string)
@@ -40,7 +51,7 @@ from ~/.cursor/mcp.json (see `emagent-mcp-ensure-cursor-config')."
 
 (defun emagent-cursor-command-params ()
   "Return the Cursor ACP command parameters."
-  (cdr emagent-cursor-acp-command))
+  (append (cdr emagent-cursor-acp-command) emagent-cursor-acp-extra-args))
 
 (defun emagent-cursor-check-command ()
   "Signal a clear error when the Cursor agent is missing."
