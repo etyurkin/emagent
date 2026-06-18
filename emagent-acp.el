@@ -1112,6 +1112,24 @@ Never returns a deny option.  OPTIONS may be a list or vector."
      (lambda (request)
        (emagent-acp--on-request :state state :emagent-acp-request request)))))
 
+(cl-defun emagent-acp--authenticate (&key state method-id on-ready)
+  "Send an authenticate request with METHOD-ID, then connect the session.
+
+Called when `initialize' returns authMethods (e.g. cursor_login).
+The authenticate call completes the credential handshake so the agent
+grants full plan access (including Auto model) to this ACP session."
+  (emagent-acp--progress state (format "authenticating (%s)…" method-id))
+  (emagent-acp--send-request
+   :state state
+   :request (emagent-acp-make-authenticate-request :method-id method-id)
+   :on-success (lambda (_response)
+                 (emagent-acp--connect-session :state state :on-ready on-ready))
+   :on-failure (lambda (error _raw)
+                 (emagent-log "authenticate %s failed: %s — proceeding anyway"
+                              method-id
+                              (or (map-elt error 'message) (format "%s" error)))
+                 (emagent-acp--connect-session :state state :on-ready on-ready))))
+
 (cl-defun emagent-acp--initialize (&key state on-ready)
   (emagent-acp--progress state "initializing ACP…")
   (emagent-acp--send-request
@@ -1132,7 +1150,14 @@ Never returns a deny option.  OPTIONS may be a list or vector."
    :on-success (lambda (response)
                  (map-put! state :initialized t)
                  (map-put! state :mcp-http (emagent-acp--mcp-http-capable-p response))
-                 (emagent-acp--connect-session :state state :on-ready on-ready))
+                 (let ((auth-methods (append (map-elt response 'authMethods) nil)))
+                   (if-let ((method-id (map-elt (seq-find
+                                                 (lambda (m) (map-elt m 'id))
+                                                 auth-methods)
+                                                'id)))
+                       (emagent-acp--authenticate
+                        :state state :method-id method-id :on-ready on-ready)
+                     (emagent-acp--connect-session :state state :on-ready on-ready))))
    :on-failure (lambda (error _raw)
                  (emagent-acp--fail-connect
                   state
