@@ -318,7 +318,17 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
   (let ((usage (emagent-acp--usage-state state)))
     (when-let ((total (map-elt emagent-acp-usage 'totalTokens)))
       (map-put! usage :total-tokens total))
-    (map-put! state :usage usage)))
+    ;; Extract context usage — cursor may use different field names.
+    (when-let ((used (or (map-elt emagent-acp-usage 'contextUsed)
+                         (map-elt emagent-acp-usage 'inputTokens)
+                         (map-elt emagent-acp-usage 'promptTokens))))
+      (map-put! usage :context-used used))
+    (when-let ((size (or (map-elt emagent-acp-usage 'contextSize)
+                         (map-elt emagent-acp-usage 'contextLimit)
+                         (map-elt emagent-acp-usage 'contextWindow))))
+      (map-put! usage :context-size size))
+    (map-put! state :usage usage)
+    (emagent-acp--refresh-mode-line state)))
 
 (defun emagent-acp--update-usage-from-notification (state emagent-acp-update)
   "Update STATE usage from a session/update usage_update payload."
@@ -335,7 +345,6 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
                          (map-elt emagent-acp-update 'contextWindow)
                          (map-elt emagent-acp-update 'maxTokens))))
       (map-put! usage :context-size size))
-    (emagent-acp--trace "usage_update raw: %s" (format "%s" emagent-acp-update))
     (map-put! state :usage usage)
     (emagent-acp--refresh-mode-line state)))
 
