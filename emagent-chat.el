@@ -1599,8 +1599,11 @@ the prompt text."
                                     (t         nil))))
          (model (emagent-chat-model))
          (sep (propertize " | " 'face 'shadow))
-         (model-str (when (and model (not (string-empty-p model)))
-                      (propertize model 'face 'shadow)))
+         (model-display (when (and model (not (string-empty-p model)))
+                          (let ((stripped (replace-regexp-in-string "\\[.*\\]" "" model)))
+                            (if (string= stripped "default") "auto" stripped))))
+         (model-str (when (and model-display (not (string-empty-p model-display)))
+                      (propertize model-display 'face 'shadow)))
          (context (emagent-chat--mode-line-context-usage))
          (rss-str (when rss
                     (propertize (format "mem:%dMB" rss)
