@@ -201,9 +201,12 @@ prompting; when both are installed prompt (defaulting to
                           :sync t)))
                     (emagent-acp-shutdown :client client)))
               (error
-               (emagent-log "could not probe %s: %s"
-                           (symbol-name provider)
-                           (error-message-string err))
+               (let ((msg (error-message-string err)))
+                 (emagent-log "could not probe %s: %s" (symbol-name provider) msg)
+                 (when (string-match-p "uthenti\\|login\\|auth" msg)
+                   (message "emagent: %s probe failed — authentication required (run '%s login')"
+                            provider
+                            (or (emagent-cursor-command) (symbol-name provider)))))
                nil))))
     (ignore-errors (kill-buffer buffer))
     result))
