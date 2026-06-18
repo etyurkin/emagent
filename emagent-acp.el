@@ -1051,11 +1051,19 @@ Never returns a deny option.  OPTIONS may be a list or vector."
          (let ((text (or (map-nested-elt emagent-acp-notification '(params update content text)) "")))
            (emagent-acp--thought-chunk state text)))
         ("tool_call"
-         (let ((title (map-nested-elt emagent-acp-notification '(params update title))))
-           (emagent-acp--notify-user state (format "emagent: tool %s" (or title "running")))
-           (map-put! state :current-tool (or title "running"))
+         (let* ((update (map-nested-elt emagent-acp-notification '(params update)))
+                (title (or (map-elt update 'title) "tool"))
+                (subtitle (map-elt update 'subtitle))
+                (label (if (and subtitle (not (string-empty-p subtitle)))
+                           (format "%s: %s" title subtitle)
+                         title)))
+           (emagent-acp--notify-user state (format "emagent: tool %s" title))
+           (map-put! state :current-tool title)
            (emagent-acp--refresh-mode-line state)
-           (emagent-acp--schedule-prompt-watchdog state)))
+           (emagent-acp--schedule-prompt-watchdog state)
+           (when (buffer-live-p (emagent-acp--chat-buffer state))
+             (with-current-buffer (emagent-acp--chat-buffer state)
+               (emagent-chat-begin-executing label)))))
         ("config_option_update"
          (emagent-acp--save-config-options
           state

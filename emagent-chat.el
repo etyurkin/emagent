@@ -64,6 +64,15 @@
 (defvar-local emagent-chat--thought-marker nil
   "Insert position for streaming agent reasoning text.")
 
+(defvar-local emagent-chat--executing-open-p nil
+  "Non-nil while an Executing quote block is open in the in-flight response.")
+
+(defvar-local emagent-chat--executing-marker nil
+  "Insertion point for appending tool-call lines inside the Executing block.")
+
+(defvar-local emagent-chat--executing-hide-at nil
+  "Buffer position of the open Executing block start, for deferred folding.")
+
 (defvar-local emagent-chat--user-zone-start-marker nil
   "Position where the next user prompt may begin.")
 
@@ -127,6 +136,10 @@ connects (Claude Code plugins, skills, and built-in slash commands).")
 (defconst emagent-chat--reasoning-begin-re
   "^#\\+begin_quote Reasoning\\s-*$"
   "Regexp matching the Reasoning quote block opener.")
+
+(defconst emagent-chat--executing-begin-re
+  "^#\\+begin_quote Executing\\s-*$"
+  "Regexp matching the Executing quote block opener.")
 
 (defcustom emagent-chat-fold-reasoning-on-done t
   "When non-nil, hide Reasoning quote blocks once reasoning finishes.
@@ -922,6 +935,77 @@ folding the inner region only so incomplete parses never break the buffer."
         (when hide-at
           (emagent-chat--hide-reasoning-deferred hide-at))))))
 
+(defun emagent-chat-begin-executing (label)
+  "Open an Executing block or append LABEL to an existing one.
+
+If the Reasoning block is currently open, appends LABEL as a tool-use
+annotation there instead.  Otherwise, opens a single Executing block on
+the first call and appends one line per subsequent call.  The block is
+written complete (begin + end markers) so permission-dialog buttons
+inserted at `point-max' always land outside it."
+  (with-current-buffer (current-buffer)
+    (when (emagent-chat--open-response-p)
+      (let ((inhibit-read-only t))
+        (emagent-chat--writable)
+        (emagent-chat--ensure-response-markers)
+        (cond
+         ;; Tool call during Reasoning: annotate inside the Reasoning block.
+         (emagent-chat--thought-open-p
+          (when (and emagent-chat--thought-marker
+                     (marker-position emagent-chat--thought-marker))
+            (goto-char emagent-chat--thought-marker)
+            (unless (bolp) (insert "\n"))
+            (insert (format "→ %s" label))
+            (setq emagent-chat--thought-marker (point-marker))
+            (font-lock-flush)))
+         ;; Append to existing Executing block.
+         (emagent-chat--executing-open-p
+          (when (and emagent-chat--executing-marker
+                     (marker-position emagent-chat--executing-marker))
+            (goto-char emagent-chat--executing-marker)
+            (insert label "\n")
+            (setq emagent-chat--executing-marker (point-marker))
+            (font-lock-flush)))
+         ;; Open a new Executing block.
+         (t
+          (emagent-chat--clear-progress-line)
+          (goto-char emagent-chat--assistant-marker)
+          (insert "#+begin_quote Executing\n")
+          (let ((hide-at (save-excursion
+                           (re-search-backward emagent-chat--executing-begin-re nil t)
+                           (point))))
+            (setq emagent-chat--executing-hide-at hide-at)
+            (setq emagent-chat--executing-marker (point-marker))
+            (insert label "\n#+end_quote\n\n")
+            (setq emagent-chat--executing-open-p t
+                  emagent-chat--assistant-marker (point-marker)))
+          (font-lock-flush)))))))
+
+(defun emagent-chat-close-executing ()
+  "Fold and close the open Executing block, if any."
+  (with-current-buffer (current-buffer)
+    (when emagent-chat--executing-open-p
+      (let ((hide-at emagent-chat--executing-hide-at)
+            (buffer (current-buffer)))
+        (setq emagent-chat--executing-open-p nil
+              emagent-chat--executing-marker nil
+              emagent-chat--executing-hide-at nil)
+        (font-lock-flush)
+        (when hide-at
+          (run-with-idle-timer
+           0 nil
+           (lambda ()
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (save-excursion
+                   (goto-char hide-at)
+                   (when (looking-at emagent-chat--executing-begin-re)
+                     (let ((content-start (line-end-position)))
+                       (when (re-search-forward "^#\\+end_quote\\s-*$" nil t)
+                         (ignore-errors
+                           (org-fold-region content-start (match-beginning 0)
+                                            t 'block)))))))))))))))
+
 (defun emagent-chat-append-assistant (text)
   "Append TEXT to the current emagent response section."
   (with-current-buffer (current-buffer)
@@ -929,6 +1013,7 @@ folding the inner region only so incomplete parses never break the buffer."
       (let ((inhibit-read-only t))
         (emagent-chat--writable)
         (emagent-chat-close-thought)
+        (emagent-chat-close-executing)
         (emagent-chat--goto-active-response-point)
         (insert text)
         (setq emagent-chat--assistant-marker (point-marker))
@@ -1193,7 +1278,10 @@ folding the inner region only so incomplete parses never break the buffer."
   (setq emagent-chat--assistant-marker nil
         emagent-chat--response-body-start nil
         emagent-chat--thought-open-p nil
-        emagent-chat--thought-marker nil))
+        emagent-chat--thought-marker nil
+        emagent-chat--executing-open-p nil
+        emagent-chat--executing-marker nil
+        emagent-chat--executing-hide-at nil))
 
 (defun emagent-chat--ensure-response-markers ()
   "Set body markers for the open response when they were lost."
@@ -1219,6 +1307,7 @@ folding the inner region only so incomplete parses never break the buffer."
     (let ((inhibit-read-only t))
       (emagent-chat--writable)
       (when (emagent-chat--fail-response-p)
+        (emagent-chat-close-executing)
         (emagent-chat--goto-response-insertion-point)
         (insert (format "\n\n*Error:* %s\n" message))
         (emagent-chat--insert-response-end)
@@ -1237,6 +1326,7 @@ Optional THOUGHT-TEXT is rendered as a foldable Reasoning quote above the body."
           (rendered nil))
       (emagent-chat--writable)
       (emagent-chat-close-thought)
+      (emagent-chat-close-executing)
       (unwind-protect
           (when-let* ((bounds (emagent-chat--finish-body-bounds))
                       (body-beg (car bounds))
