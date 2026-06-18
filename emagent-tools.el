@@ -471,16 +471,8 @@ Slower than apropos (scans all docstrings) but finds symbols by meaning."
 Covers core patterns, string/list/buffer/file/JSON/org-mode operations,
 error handling, common pitfalls, and ready-to-use code templates.
 Call this before writing non-trivial Elisp."
-  ;; The .md is installed alongside the .el files via the elpaca :files recipe.
-  ;; locate-library finds emagent-tools.el(c) in the build dir; the guide is there too.
-  (let* ((lib (locate-library "emagent-tools"))
-         (dir (and lib (file-name-directory lib)))
-         (guide (and dir (expand-file-name "emagent-elisp-guide.md" dir))))
-    (if (and guide (file-readable-p guide))
-        (with-temp-buffer
-          (insert-file-contents guide)
-          (buffer-string))
-      "Guide not found. Use apropos / apropos_doc / describe_symbol to discover Emacs APIs.")))
+  (require 'emagent-prompts)
+  emagent-acp-elisp-guide)
 
 (defun emagent-tools--check-elisp-parens (form-str)
   "Return nil when FORM-STR parses cleanly, or an error string on failure.
