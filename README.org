@@ -14,6 +14,25 @@ ACP agent (Cursor or Claude).
   - *Cursor* (default): [[https://cursor.com/cli][Cursor CLI]] → =cursor-agent acp=
   - *Claude*: =npm install -g @agentclientprotocol/claude-agent-acp= and =ANTHROPIC_API_KEY=
 
+** Shell environment
+
+Emagent runs agent shell commands via =/bin/zsh -c= (a non-interactive shell that
+does *not* source =~/.zshrc=).  Tools like =mvn=, =node=, =cargo=, etc
+ must be set in =~/.zshenv= to be visible to emagent and
+the agents it spawns.
+
+Typical =~/.zshenv= additions:
+
+#+BEGIN_SRC sh
+# PATH — tools emagent shell commands will call
+export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+export PATH="$HOME/.npm-global/bin:$HOME/.jenv/bin:$HOME/.jenv/shims:$PATH"
+#+END_SRC
+
+Check which shell Emacs uses: =(shell-file-name)=.
+=emagent-extra-exec-paths= is a separate escape hatch for binaries that need
+to be on Emacs's own =exec-path= (e.g. =cursor-agent=, =claude-agent-acp=).
+
 * Install
 
 #+BEGIN_SRC emacs-lisp
