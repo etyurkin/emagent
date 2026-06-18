@@ -1372,6 +1372,16 @@ Optional THOUGHT-TEXT is rendered as a foldable Reasoning quote above the body."
                            (min (1+ (line-end-position)) (point-max)))
           (forward-line 1))))))
 
+(defun emagent-chat--insert-user-heading-with-text (text)
+  "Insert TEXT as a complete `* username> TEXT' heading and return point after it."
+  (let ((inhibit-read-only t))
+    (emagent-chat--writable)
+    (goto-char (emagent-chat--user-zone-start))
+    (unless (bolp) (insert "\n"))
+    (insert (emagent-chat--user-heading-prefix) text)
+    (unless (= (char-before) ?\n) (insert "\n"))
+    (point)))
+
 (defun emagent-chat--flush-pending-prompt ()
   "Send the pending btw prompt if one exists.  Called after agent finishes."
   (when emagent-chat--pending-prompt
@@ -1381,8 +1391,8 @@ Optional THOUGHT-TEXT is rendered as a foldable Reasoning quote above the body."
       (force-mode-line-update)
       (when emagent-chat--on-send
         (emagent-log "btw send: %s" (emagent-log-truncate-line text 80))
-        (emagent-chat--insert-user-heading-stub)
-        (emagent-chat--begin-response (emagent-chat--user-zone-start))
+        (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
+          (emagent-chat--begin-response response-pos))
         (funcall emagent-chat--on-send text)))))
 
 (defun emagent-btw (text)
@@ -1410,8 +1420,8 @@ when the agent finishes."
         (message "emagent: btw queued — will send when agent finishes"))
     ;; Agent is idle: send immediately.
     (emagent-log "btw send: %s" (emagent-log-truncate-line text 80))
-    (emagent-chat--insert-user-heading-stub)
-    (emagent-chat--begin-response (emagent-chat--user-zone-start))
+    (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
+      (emagent-chat--begin-response response-pos))
     (when emagent-chat--on-send
       (funcall emagent-chat--on-send text))))
 
