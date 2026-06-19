@@ -70,6 +70,28 @@ only unblock the ACP session handshake."
   :type 'boolean
   :group 'emagent)
 
+(defcustom emagent-acp-confirm-fs-writes nil
+  "When non-nil, require diff + Allow before each ACP fs/write_text_file.
+
+When nil (default), Emacs writes immediately after path checks, matching
+`emagent-mcp-confirm-write-file' nil so file edits are not blocked by a second
+in-editor prompt.  ACP `session/request_permission' is unchanged; see
+`emagent-acp-auto-approve-permissions'."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-external-tool-gate-hints t
+  "When non-nil, detect extra agent-side tool permission layers and log hints.
+
+Emacs only answers ACP `session/request_permission' (see
+`emagent-acp-auto-approve-permissions').  Claude Agent SDK, Cursor, and
+similar stacks may still block tools afterward.  When this is non-nil,
+emagent records hints after `initialize' (from the agent command line and
+optional capability metadata) and when refusal-shaped text appears in
+streamed chunks or tool-call labels, then logs to `emagent-log-buffer-name'."
+  :type 'boolean
+  :group 'emagent)
+
 (defcustom emagent-acp-stream-to-buffer nil
   "When non-nil, stream agent chunks into the chat buffer while a prompt is busy.
 
@@ -180,9 +202,11 @@ session's current model instead.")
             (run-with-timer
              5 15
              (lambda ()
-               (let ((mb (emagent-acp--agent-rss-mb state)))
-                 (map-put! state :agent-rss mb)
-                 (emagent-acp--refresh-mode-line state))))))
+               (if (buffer-live-p (map-elt state :chat-buffer))
+                   (let ((mb (emagent-acp--agent-rss-mb state)))
+                     (map-put! state :agent-rss mb)
+                     (emagent-acp--refresh-mode-line state))
+                 (emagent-acp--stop-rss-timer state))))))
 
 (defun emagent-acp--stop-rss-timer (state)
   "Cancel the RSS polling timer for STATE."
@@ -220,6 +244,12 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :usage usage state)
     (puthash :initialized nil state)
     (puthash :mcp-http nil state)
+    (puthash :permission-queue nil state)
+    (puthash :permission-busy nil state)
+    (puthash :session-auto-approve nil state)
+    (puthash :external-tool-gate-reasons nil state)
+    (puthash :external-tool-gate-proactive-logged nil state)
+    (puthash :external-tool-refusal-logged nil state)
     (puthash :ready nil state)
     (puthash :busy nil state)
     (puthash :assistant-text "" state)
@@ -253,6 +283,99 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :on-reveal on-reveal state)
     state))
 
+(defun emagent-acp--agent-launch-string (state)
+  "Return the agent argv as a single shell-like string, or nil."
+  (when-let ((client (map-elt state :client))
+             (cmd (map-elt client :command)))
+    (string-trim
+     (mapconcat #'identity
+                (delq nil (cons cmd (append (map-elt client :command-params) nil)))
+                " "))))
+
+(defun emagent-acp--external-refusal-text-p (text)
+  "Return non-nil when TEXT looks like an out-of-band tool refusal message."
+  (let ((s (downcase text)))
+    (and (not (string-empty-p s))
+         (or (string-search "user refused permission" s)
+             (string-search "refused permission to run tool" s)
+             (string-search "permission to run tool was denied" s)
+             (string-search "tool use was denied" s)))))
+
+(defun emagent-acp--external-tool-gate-add (state reason)
+  "Record REASON (a symbol) in STATE's external-tool-gate hint list."
+  (unless (memq reason (map-elt state :external-tool-gate-reasons))
+    (map-put! state :external-tool-gate-reasons
+              (cons reason (map-elt state :external-tool-gate-reasons)))))
+
+(defun emagent-acp--infer-external-tool-gate-from-agent (state)
+  "Infer likely SDK-side tool gates from the agent executable (see defcustom)."
+  (when emagent-acp-external-tool-gate-hints
+    (when-let ((launch (emagent-acp--agent-launch-string state)))
+      (cond
+       ((string-match-p "claude-agent-acp" launch)
+        (emagent-acp--external-tool-gate-add state 'claude-agent-sdk))
+       ((string-match-p "cursor-agent" launch)
+        (emagent-acp--external-tool-gate-add state 'cursor-agent-cli))))))
+
+(defun emagent-acp--format-external-tool-gate-proactive-hint (reasons)
+  "Return a log line for SDK/capability hints in REASONS, or nil."
+  (let (parts)
+    (when (memq 'claude-agent-sdk reasons)
+      (push (concat "claude-agent-acp (Claude Agent SDK) may still enforce its own "
+                    "tool approvals; emagent only answers ACP session/request_permission.")
+            parts))
+    (when (memq 'cursor-agent-cli reasons)
+      (push (concat "cursor-agent may enforce separate CLI tool approvals; "
+                    "emagent only answers ACP session/request_permission.")
+            parts))
+    (when (memq 'agent-capability-metadata reasons)
+      (push (concat "The agent's initialize response included permission-related "
+                    "capability metadata; check the agent/SDK for an extra approval layer.")
+            parts))
+    (when (and emagent-acp-auto-approve-permissions
+               (or (memq 'claude-agent-sdk reasons)
+                   (memq 'cursor-agent-cli reasons)
+                   (memq 'agent-capability-metadata reasons)))
+      (push (concat "With `emagent-acp-auto-approve-permissions' non-nil, Emacs auto-approves "
+                    "ACP permission requests; that does not satisfy separate agent gates.")
+            parts))
+    (when parts
+      (mapconcat #'identity (nreverse parts) "  "))))
+
+(defun emagent-acp--maybe-log-external-tool-gate-proactive (state)
+  "Log a one-time proactive hint after `initialize' when we inferred SDK gates."
+  (when emagent-acp-external-tool-gate-hints
+    (unless (map-elt state :external-tool-gate-proactive-logged)
+      (when-let ((reasons (map-elt state :external-tool-gate-reasons))
+                 (msg (emagent-acp--format-external-tool-gate-proactive-hint reasons)))
+        (map-put! state :external-tool-gate-proactive-logged t)
+        (emagent-log "emagent: external tool permission hint — %s" msg)))))
+
+(defun emagent-acp--infer-external-tool-gate-from-initialize-response (state response)
+  "If RESPONSE `agentCapabilities' mention permission-like keys, record a hint."
+  (when emagent-acp-external-tool-gate-hints
+    (when-let ((caps (map-elt response 'agentCapabilities)))
+      (when (listp caps)
+        (dolist (pair caps)
+          (when (and (consp pair)
+                     (symbolp (car pair))
+                     (let ((case-fold-search t))
+                       (string-match-p "permission\\|approval\\|policy"
+                                       (symbol-name (car pair))))
+                     (cdr pair))
+            (emagent-acp--external-tool-gate-add state 'agent-capability-metadata)))))))
+
+(defun emagent-acp--detect-external-refusal-in-text (state text)
+  "If TEXT looks like a tool refusal, record it and maybe log once."
+  (when (and emagent-acp-external-tool-gate-hints
+             (emagent-acp--external-refusal-text-p text))
+    (emagent-acp--external-tool-gate-add state 'observed-refusal-in-stream)
+    (unless (map-elt state :external-tool-refusal-logged)
+      (map-put! state :external-tool-refusal-logged t)
+      (emagent-log (concat "emagent: agent output looks like a tool was refused "
+                           "outside Emacs (ACP approval alone is not enough); "
+                           "check the agent/SDK permission or sandbox settings.")))))
+
 ;;;; Public session state accessors (for use by emagent-chat.el)
 
 (defun emagent-acp-busy-p ()
@@ -279,28 +402,46 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
               (size (map-elt usage :context-size)))
     (cons used size)))
 
+(defun emagent-acp-external-tool-gate-reasons ()
+  "Return external tool-gate reason symbols for the current session, or nil.
+See `emagent-acp-external-tool-gate-hints'."
+  (and emagent-acp--session
+       (map-elt emagent-acp--session :external-tool-gate-reasons)))
+
 (defun emagent-acp--chat-buffer (state)
-  (map-elt state :chat-buffer))
+  "Return STATE's chat buffer if it is live, else nil.
+
+A killed buffer must not be returned: timers and callbacks still hold STATE
+after the user kills the chat buffer, and `with-current-buffer' on a dead
+buffer signals \"Selecting deleted buffer\"."
+  (let ((buf (map-elt state :chat-buffer)))
+    (when (buffer-live-p buf)
+      buf)))
 
 (defun emagent-acp--session-cwd (state)
-  (with-current-buffer (emagent-acp--chat-buffer state)
-    (emagent-chat--session-directory)))
+  (if-let ((buf (emagent-acp--chat-buffer state)))
+      (with-current-buffer buf (emagent-chat--session-directory))
+    (user-error "emagent chat buffer is no longer available")))
 
 (defun emagent-acp--persist-session-id (state session-id)
-  (with-current-buffer (emagent-acp--chat-buffer state)
-    (emagent-chat-set-session-id session-id)))
+  (when-let ((buf (emagent-acp--chat-buffer state)))
+    (with-current-buffer buf
+      (emagent-chat-set-session-id session-id))))
 
 (defun emagent-acp--saved-session-id (state)
-  (with-current-buffer (emagent-acp--chat-buffer state)
-    (emagent-chat-session-id)))
+  (when-let ((buf (emagent-acp--chat-buffer state)))
+    (with-current-buffer buf
+      (emagent-chat-session-id))))
 
 (defun emagent-acp--saved-model-id (state)
-  (with-current-buffer (emagent-acp--chat-buffer state)
-    (emagent-chat-model)))
+  (when-let ((buf (emagent-acp--chat-buffer state)))
+    (with-current-buffer buf
+      (emagent-chat-model))))
 
 (defun emagent-acp--persist-model-id (state model-id)
-  (with-current-buffer (emagent-acp--chat-buffer state)
-    (emagent-chat-set-model model-id))
+  (when-let ((buf (emagent-acp--chat-buffer state)))
+    (with-current-buffer buf
+      (emagent-chat-set-model model-id)))
   (emagent-acp--refresh-mode-line state))
 
 (defun emagent-acp--refresh-mode-line (state)
@@ -774,15 +915,16 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
 (defun emagent-acp--thought-chunk (state text)
   "Accumulate thought TEXT for display and optional logging."
   (unless (string-empty-p text)
+    (emagent-acp--detect-external-refusal-in-text state text)
     (map-put! state :thought-text
               (concat (or (map-elt state :thought-text) "") text))
     (when-let ((mode emagent-acp-thought-progress))
       (when (map-elt state :prompt-finishing)
         (emagent-acp--schedule-prompt-render state))
       (when (memq mode '(buffer both))
-        (when (and (emagent-acp--stream-thought-to-buffer-p state)
-                   (buffer-live-p (emagent-acp--chat-buffer state)))
-          (with-current-buffer (emagent-acp--chat-buffer state)
+        (when-let ((buf (and (emagent-acp--stream-thought-to-buffer-p state)
+                             (emagent-acp--chat-buffer state))))
+          (with-current-buffer buf
             (when-let ((cb (map-elt state :cb-thought)))
               (funcall cb text)))))
       (when (memq mode '(minimal trail both))
@@ -935,34 +1077,36 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
                       :request-id request-id
                       :error (emagent-acp--protected-fs-error path)))
         (progn
-          (emagent-acp--prepare-interactive-context state)
+          (when emagent-acp-confirm-fs-writes
+            (emagent-acp--prepare-interactive-context state))
           (condition-case err
-              (if (emagent-tools--confirm-write
-                   'emagent-tool-write-file resolved
-                   (or (map-nested-elt emagent-acp-request '(params content)) "")
-                   (emagent-acp--chat-buffer state))
-                  (let ((written (emagent-tools--write-file-content
-                                  path (map-nested-elt emagent-acp-request '(params content)))))
-                    (emagent-acp--notify-user
-                     state (format "emagent: wrote %s (C-/ to undo in that buffer)"
-                                   written))
-                    (emagent-acp-send-response
-                     :client client
-                     :response (emagent-acp-make-fs-write-text-file-response
-                                :request-id request-id)))
-                (emagent-acp-send-response
-                 :client client
-                 :response (emagent-acp-make-fs-write-text-file-response
-                            :request-id request-id
-                            :error (emagent-acp-make-error :code -32603
-                                                   :message "Write denied by user"))))
+              (if (and emagent-acp-confirm-fs-writes
+                       (not (emagent-tools--confirm-write
+                             'emagent-tool-write-file resolved
+                             (or (map-nested-elt emagent-acp-request '(params content)) "")
+                             (emagent-acp--chat-buffer state))))
+                  (emagent-acp-send-response
+                   :client client
+                   :response (emagent-acp-make-fs-write-text-file-response
+                              :request-id request-id
+                              :error (emagent-acp-make-error :code -32603
+                                     :message "Write denied by user")))
+                (let ((written (emagent-tools--write-file-content
+                                path (map-nested-elt emagent-acp-request '(params content)))))
+                  (emagent-acp--notify-user
+                   state (format "emagent: wrote %s (C-/ to undo in that buffer)"
+                                 written))
+                  (emagent-acp-send-response
+                   :client client
+                   :response (emagent-acp-make-fs-write-text-file-response
+                              :request-id request-id))))
             (error
              (emagent-acp-send-response
               :client client
               :response (emagent-acp-make-fs-write-text-file-response
                          :request-id request-id
                          :error (emagent-acp-make-error :code -32603
-                                                :message (error-message-string err)))))))))))
+                                :message (error-message-string err)))))))))))
 
 (defun emagent-acp--permission-option-allow-p (opt)
   "Return non-nil when OPT is an allow-type ACP permission option."
@@ -1120,6 +1264,8 @@ Never returns a deny option.  OPTIONS may be a list or vector."
          (label (emagent-acp--tool-call-label merged))
          (labels (map-elt state :tool-call-labels))
          (prev (and id labels (gethash id labels))))
+    (when (and label (not (string-empty-p label)))
+      (emagent-acp--detect-external-refusal-in-text state label))
     (when (and label (not (string-empty-p label))
                (or (null prev) (not (string= prev label))))
       (when id (puthash id label labels))
@@ -1127,11 +1273,12 @@ Never returns a deny option.  OPTIONS may be a list or vector."
       (map-put! state :current-tool label)
       (emagent-acp--refresh-mode-line state)
       (emagent-acp--schedule-prompt-watchdog state)
-      (when (buffer-live-p (emagent-acp--chat-buffer state))
-        (with-current-buffer (emagent-acp--chat-buffer state)
+      (when-let ((buf (emagent-acp--chat-buffer state)))
+        (with-current-buffer buf
           (emagent-chat-show-tool-call id label))))))
 
-(cl-defun emagent-acp--on-permission (&key state emagent-acp-request)
+(cl-defun emagent-acp--handle-one-permission (&key state emagent-acp-request)
+  "Process a single queued permission request synchronously."
   (let* ((options (map-nested-elt emagent-acp-request '(params options)))
          (title (or (map-nested-elt emagent-acp-request '(params toolCall title))
                     (map-nested-elt emagent-acp-request '(params title))
@@ -1140,15 +1287,24 @@ Never returns a deny option.  OPTIONS may be a list or vector."
                             (cons (or (map-elt opt 'name) (map-elt opt 'optionId))
                                   (map-elt opt 'optionId)))
                           (append options nil)))
+         (auto-approve (or emagent-acp-auto-approve-permissions
+                           (map-elt state :session-auto-approve)))
          (choice
-          (if emagent-acp-auto-approve-permissions
+          (if auto-approve
               (emagent-acp--permission-option-id options)
             (progn
               (emagent-acp--prepare-interactive-context state)
-              (emagent-tools--buttons-prompt
-               title choices
-               (emagent-acp--chat-buffer state))))))
-    (when emagent-acp-auto-approve-permissions
+              (let ((raw (emagent-tools--buttons-prompt
+                          title
+                          (append choices '(("Allow All (session)" . :allow-all)))
+                          (emagent-acp--chat-buffer state))))
+                (if (eq raw :allow-all)
+                    (progn
+                      (map-put! state :session-auto-approve t)
+                      (emagent-log "permission: Allow All (session) — auto-approving all future requests")
+                      (emagent-acp--permission-option-id options))
+                  raw))))))
+    (when auto-approve
       (emagent-log "permission auto-approve: %s → %s"
                    title (or choice "cancelled (no allow option)")))
     (emagent-acp-send-response
@@ -1161,6 +1317,24 @@ Never returns a deny option.  OPTIONS may be a list or vector."
                  (emagent-acp-make-session-request-permission-response
                   :request-id (map-elt emagent-acp-request 'id)
                   :cancelled t)))))
+
+(defun emagent-acp--drain-permission-queue (state)
+  "Process queued permission requests one at a time.
+
+Prevents nested `recursive-edit' calls when two permission requests arrive
+while an interactive prompt is already blocking for user input."
+  (unless (map-elt state :permission-busy)
+    (when-let ((request (car (map-elt state :permission-queue))))
+      (map-put! state :permission-queue (cdr (map-elt state :permission-queue)))
+      (map-put! state :permission-busy t)
+      (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
+      (map-put! state :permission-busy nil)
+      (emagent-acp--drain-permission-queue state))))
+
+(cl-defun emagent-acp--on-permission (&key state emagent-acp-request)
+  (map-put! state :permission-queue
+            (append (map-elt state :permission-queue) (list emagent-acp-request)))
+  (emagent-acp--drain-permission-queue state))
 
 (cl-defun emagent-acp--on-request (&key state emagent-acp-request)
   (pcase (map-elt emagent-acp-request 'method)
@@ -1207,12 +1381,13 @@ Never returns a deny option.  OPTIONS may be a list or vector."
         ("agent_message_chunk"
          (let ((text (or (map-nested-elt emagent-acp-notification '(params update content text)) "")))
            (unless (map-elt state :replaying-history)
+             (emagent-acp--detect-external-refusal-in-text state text)
              (map-put! state :assistant-text (concat (map-elt state :assistant-text) text))
              (when (map-elt state :prompt-finishing)
                (emagent-acp--schedule-prompt-render state))
-             (when (and (emagent-acp--stream-to-buffer-p state)
-                        (buffer-live-p (emagent-acp--chat-buffer state)))
-               (with-current-buffer (emagent-acp--chat-buffer state)
+             (when-let ((buf (and (emagent-acp--stream-to-buffer-p state)
+                                 (emagent-acp--chat-buffer state))))
+               (with-current-buffer buf
                  (when-let ((cb (map-elt state :cb-chunk)))
                    (funcall cb text)))))))
         ("agent_thought_chunk"
@@ -1308,6 +1483,9 @@ grants full plan access (including Auto model) to this ACP session."
    :on-success (lambda (response)
                  (map-put! state :initialized t)
                  (map-put! state :mcp-http (emagent-acp--mcp-http-capable-p response))
+                 (emagent-acp--infer-external-tool-gate-from-agent state)
+                 (emagent-acp--infer-external-tool-gate-from-initialize-response state response)
+                 (emagent-acp--maybe-log-external-tool-gate-proactive state)
                  (let ((auth-methods (append (map-elt response 'authMethods) nil)))
                    (if-let ((method-id (map-elt (seq-find
                                                  (lambda (m) (map-elt m 'id))
@@ -1386,8 +1564,9 @@ grants full plan access (including Auto model) to this ACP session."
    :on-failure (lambda (_error _raw)
                  (map-put! state :replaying-history nil)
                  (emagent-acp--progress state "resume failed, creating session…")
-                 (with-current-buffer (emagent-acp--chat-buffer state)
-                   (emagent-chat-clear-session-id))
+                 (when-let ((buf (emagent-acp--chat-buffer state)))
+                   (with-current-buffer buf
+                     (emagent-chat-clear-session-id)))
                  (emagent-acp--new-session :state state :on-ready on-ready))))
 
 (cl-defun emagent-acp--connect-session (&key state on-ready)

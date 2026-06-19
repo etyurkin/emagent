@@ -31,6 +31,7 @@
 (require 'emagent-acp)
 (require 'emagent-cursor)
 (require 'emagent-claude)
+(require 'emagent-trust)
 
 (declare-function project-current "project")
 (declare-function project-root "project")
@@ -87,10 +88,15 @@ startup picker when there is more than one choice."
 
 (defun emagent--make-client (provider buffer)
   "Create an ACP client for PROVIDER using BUFFER as context."
-  (pcase provider
-    ('cursor (emagent-cursor-make-client :context-buffer buffer))
-    ('claude (emagent-claude-make-client :context-buffer buffer))
-    (_ (user-error "Unknown emagent provider: %s" provider))))
+  (let ((process-directory (and (buffer-live-p buffer)
+                                (with-current-buffer buffer
+                                  (emagent-chat--session-directory)))))
+    (pcase provider
+      ('cursor (emagent-cursor-make-client :context-buffer buffer
+                                           :process-directory process-directory))
+      ('claude (emagent-claude-make-client :context-buffer buffer
+                                           :process-directory process-directory))
+      (_ (user-error "Unknown emagent provider: %s" provider)))))
 
 (cl-defun emagent-acp-ensure-connected (&key on-ready on-reveal)
   "Connect the current emagent buffer to its ACP provider if needed.
@@ -264,11 +270,17 @@ current buffer."
       (emagent--read-project-directory)
     (emagent--project-directory-initial)))
 
-(defun emagent--start-with-provider (provider project-dir connect &optional model-id)
+(defun emagent--start-with-provider (provider project-dir connect &optional model-id handshake)
   "Start emagent using PROVIDER in PROJECT-DIR.
-When MODEL-ID is non-nil, persist it before connecting."
+When MODEL-ID is non-nil, persist it before connecting.
+HANDSHAKE is the plist returned by `emagent-trust--configure' (Cursor extra
+args, etc.)."
   (let ((buffer (emagent-chat-open :project-dir project-dir)))
     (with-current-buffer buffer
+      (when (eq provider 'cursor)
+        (kill-local-variable 'emagent-chat-cursor-acp-extra-args))
+      (when-let ((args (and handshake (plist-get handshake :cursor-acp-extra-args))))
+        (setq-local emagent-chat-cursor-acp-extra-args args))
       (emagent-chat-set-agent provider)
       (when (and model-id (not (string-empty-p model-id)))
         (emagent-chat-set-model model-id))
@@ -280,8 +292,10 @@ When MODEL-ID is non-nil, persist it before connecting."
 
 (defun emagent--start-session (project-dir &optional fixed-provider)
   "Start emagent in PROJECT-DIR, optionally limiting to FIXED-PROVIDER."
-  (let ((pair (emagent--read-agent-and-model project-dir fixed-provider)))
-    (emagent--start-with-provider (car pair) project-dir t (cdr pair))))
+  (let* ((pair (emagent--read-agent-and-model project-dir fixed-provider))
+         (provider (car pair))
+         (handshake (emagent-trust--configure provider project-dir)))
+    (emagent--start-with-provider provider project-dir t (cdr pair) handshake)))
 
 (defun emagent--project-directory-initial ()
   "Default project directory for a new emagent session.
@@ -308,14 +322,93 @@ otherwise the project.el root, otherwise ~/."
                         (emagent--project-directory-initial)
                         nil t)))
 
+(declare-function emagent-trust--ensure-provider-features "emagent-trust")
+(declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
+(declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
+(declare-function emagent-trust-cursor-extra-args-after-yes "emagent-trust-cursor")
+(declare-function emagent-acp--connected-p "emagent-acp")
+
+;;;###autoload
+(defun emagent-trust-workspace (&optional both-agents)
+  "Write on-disk workspace trust for Claude and/or Cursor.
+
+Must be called from an `emagent-mode' buffer.  Uses the buffer's project
+directory (`emagent-chat-project-directory') and agent (`emagent-chat-agent').
+
+By default updates trust only for this buffer's agent.  With a prefix
+argument, updates *both* Claude (=~/.claude.json=) and Cursor
+(=~/.cursor/projects/...=).
+
+This command does not run the startup y/n/q trust dialog.  For Claude, the
+running agent does not reload ~/.claude.json on session/load; after recording
+trust use `emagent-trust-claude-reconnect' in this buffer (or clear
+#+EMAGENT_SESSION and toggle `emagent-mode') so a new session picks it up.
+For Cursor buffers, `--trust' is merged into buffer-local extra args when this
+buffer's agent is Cursor."
+  (interactive "P")
+  (unless (derived-mode-p 'emagent-mode)
+    (user-error "emagent-trust-workspace must be called from an emagent buffer"))
+  (emagent-trust--ensure-provider-features)
+  (let* ((dir0 (or (emagent-chat-project-directory)
+                   (user-error "No project directory set in this buffer")))
+         (dir (emagent-trust--normalize-dir (expand-file-name dir0)))
+         (providers (if both-agents
+                        '(claude cursor)
+                      (list (or (emagent-chat-agent)
+                                (user-error "No agent set in this buffer")))))
+         (reconnect-hint
+          (when (emagent-acp--connected-p)
+            (if (memq 'claude providers)
+                (concat "  Claude does not re-read trust on session/load — run"
+                        " `M-x emagent-trust-claude-reconnect' (or clear"
+                        " #+EMAGENT_SESSION and toggle emagent-mode).")
+              "  Restart emagent for trust to take effect."))))
+    (when (file-remote-p dir)
+      (user-error "Remote directories are not supported: %s" dir))
+    (dolist (p providers)
+      (pcase p
+        ('claude (emagent-trust-claude-record-trust dir))
+        ('cursor (emagent-trust-cursor-record-trust dir))))
+    (when (and (memq 'cursor providers)
+               (eq (emagent-chat-agent) 'cursor))
+      (setq-local emagent-chat-cursor-acp-extra-args
+                  (emagent-trust-cursor-extra-args-after-yes)))
+    (message "Recorded trust for %s (%s).%s"
+             (mapconcat #'symbol-name providers ", ")
+             dir
+             (or reconnect-hint ""))))
+
+;;;###autoload
+(defun emagent-trust-claude-reconnect ()
+  "Clear this buffer's saved ACP session and reconnect Claude.
+
+Claude Code reads ~/.claude.json trust when a new session starts.
+Resuming #+EMAGENT_SESSION (ACP session/load) keeps the old agent semantics,
+so trust recorded via \\`emagent-trust-workspace' can have no effect until you
+drop the saved session id and connect again.
+
+Requires `emagent-mode' in a buffer whose agent is Claude."
+  (interactive)
+  (unless (derived-mode-p 'emagent-mode)
+    (user-error "Turn on emagent-mode in this buffer first"))
+  (unless (eq (emagent-chat-agent) 'claude)
+    (user-error "This buffer's agent is not Claude (see #+EMAGENT_AGENT)"))
+  (emagent-chat-clear-session-id)
+  (when emagent-acp--session
+    (emagent-acp-shutdown-buffer))
+  (emagent-acp-ensure-connected)
+  (message "emagent: Claude reconnected with a new session (trust from disk)"))
+
 ;;;###autoload
 (defun emagent (&optional prompt-directory)
   "Start a new emagent session and connect.
 
 Infers the project directory from the current buffer, probes installed
 agents for models when `emagent-probe-models-at-start' is non-nil, and
-prompts when more than one agent/model combination is available.  With a
-prefix argument PROMPT-DIRECTORY, read the project directory instead."
+prompts when more than one agent/model combination is available.  After you
+pick an agent, workspace trust is checked (`emagent-trust--configure'); see
+`emagent-trust-enabled'.  With a prefix argument PROMPT-DIRECTORY, read the
+project directory instead."
   (interactive "P")
   (emagent--start-session (emagent--project-directory prompt-directory)))
 

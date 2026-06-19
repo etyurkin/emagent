@@ -157,7 +157,8 @@ Follow these rules to avoid them:
 - File tools are confined to the session root.
 - To revert a write_file mistake, call undo_file — never rewrite from memory.
 - delete-file, write-file, shell-command, call-process are blocked inside eval;
-  use the dedicated tools (they prompt the user for confirmation).
+  use the dedicated tools (writes use Emacs unless you enable
+  `emagent-mcp-confirm-write-file' / `emagent-acp-confirm-fs-writes').
 - Do not read iCloud paths or other apps' container directories.
 - Before writing non-trivial Elisp, call `elisp_guide` for ready-to-use
   patterns covering strings, lists, buffers, files, JSON, org-mode, and pitfalls.

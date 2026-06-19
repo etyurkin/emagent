@@ -29,7 +29,11 @@ The npm package @agentclientprotocol/claude-agent-acp installs a
   "Environment variables for the Claude ACP agent (strings \"KEY=value\").
 
 The Claude Agent SDK reads credentials from the environment; set
-ANTHROPIC_API_KEY here if you do not export it in your shell profile."
+ANTHROPIC_API_KEY here if you do not export it in your shell profile.
+
+If tools stay blocked after Emacs approves ACP, adjust the SDK or
+claude-agent-acp (approval/sandbox).
+See `emagent-acp-external-tool-gate-hints'."
   :type '(repeat string)
   :group 'emagent-claude)
 
@@ -54,10 +58,13 @@ That is the `cdr' of `emagent-claude-acp-command'."
            (emagent-claude-command)
            emagent-claude-install-hint)))
 
-(cl-defun emagent-claude-make-client (&key context-buffer)
-  "Create an ACP client for Claude using CONTEXT-BUFFER."
+(cl-defun emagent-claude-make-client (&key context-buffer process-directory)
+  "Create an ACP client for Claude using CONTEXT-BUFFER.
+PROCESS-DIRECTORY is passed to `make-process' as the working directory
+(see `emagent-chat--session-directory' / #+EMAGENT_PROJECT)."
   (emagent-claude-check-command)
   (emagent-acp-make-client :context-buffer context-buffer
+                   :process-directory process-directory
                    :command (emagent-claude-command)
                    :command-params (emagent-claude-command-params)
                    :environment-variables emagent-claude-environment))

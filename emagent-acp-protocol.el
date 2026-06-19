@@ -53,7 +53,7 @@
       (setq emagent-acp-instance-count 0)
     (setq emagent-acp-instance-count (1+ emagent-acp-instance-count))))
 
-(cl-defun emagent-acp-make-client (&key context-buffer command command-params
+(cl-defun emagent-acp-make-client (&key context-buffer process-directory command command-params
                                 environment-variables
                                 request-sender notification-sender
                                 request-resolver response-sender
@@ -61,6 +61,10 @@
   "Create an ACP client hash table.
 
 CONTEXT-BUFFER is set as `current-buffer' for all callbacks.
+PROCESS-DIRECTORY, when non-nil, is the absolute directory passed to
+`make-process' as `:directory' so the agent binary starts in the emagent
+project root (see #+EMAGENT_PROJECT).  When nil, the context buffer's
+`default-directory' is used at start time.
 COMMAND is the agent binary; COMMAND-PARAMS is a list of argument strings.
 ENVIRONMENT-VARIABLES is a list of \"VAR=value\" strings.
 REQUEST-SENDER, NOTIFICATION-SENDER, REQUEST-RESOLVER, RESPONSE-SENDER
@@ -71,6 +75,8 @@ modify each outgoing JSON-RPC request before it is sent."
     (error ":command is required"))
   (let ((client (make-hash-table :test 'eq)))
     (puthash :context-buffer context-buffer client)
+    (when process-directory
+      (puthash :process-directory process-directory client))
     (puthash :instance-count (emagent-acp--increment-instance-count) client)
     (puthash :process nil client)
     (puthash :command command client)
@@ -101,101 +107,109 @@ rather than via a deferred timer, preventing queue stalls when multiple
 messages arrive while a drain is already in progress."
   (unless client (error ":client is required"))
   (unless (map-elt client :command) (error ":command is required"))
-  (unless (executable-find (map-elt client :command)
-                           (file-remote-p default-directory))
-    (error "\"%s\" not found; please install it" (map-elt client :command)))
   (when (emagent-acp--client-started-p client)
     (error "Client already started"))
-  (let* ((coding-system-for-read  'utf-8-unix)
-         (coding-system-for-write 'utf-8-unix)
-         (pending-input "")
-         (message-queue nil)
-         (message-queue-busy nil)
-         (process-environment (append (map-elt client :environment-variables)
-                                      process-environment))
-         (stderr-buffer (get-buffer-create
-                         (format "acp-client-stderr(%s)-%s"
-                                 (map-elt client :command)
-                                 (map-elt client :instance-count)))))
-    (with-current-buffer stderr-buffer
-      (add-hook 'after-change-functions
-                (lambda (beg end _len)
-                  (let ((raw (buffer-substring-no-properties beg end)))
-                    (emagent-acp--log client "STDERR" "%s" (string-trim raw))
-                    (when-let ((err (or (emagent-acp--parse-stderr-api-error raw)
-                                        (and (not (string-empty-p (string-trim raw)))
-                                             (emagent-acp--make-internal-error raw)))))
-                      (emagent-acp--log client "API-ERROR" "%s" (string-trim raw))
-                      (dolist (h (map-elt client :error-handlers))
-                        (funcall h err)))))
-                nil t))
-    (cl-labels
-        ((route (incoming)
-           (let ((print-circle t) (print-level 25) (print-length 200))
-             (emagent-acp--route-incoming-message
-              :message incoming :client client
-              :on-notification
-              (lambda (notif)
-                (dolist (h (map-elt client :notification-handlers))
-                  (condition-case-unless-debug err
-                      (funcall h notif)
-                    (error (emagent-acp--log client "NOTIFICATION HANDLER ERROR"
-                                     "Failed: %S" err)))))
-              :on-request
-              (lambda (req)
-                (dolist (h (map-elt client :request-handlers))
-                  (condition-case-unless-debug err
-                      (funcall h req)
-                    (error (emagent-acp--log client "REQUEST HANDLER ERROR"
-                                     "Failed: %S" err))))))))
-         (drain ()
-           (unless message-queue-busy
-             (setq message-queue-busy t)
-             (unwind-protect
-                 (while message-queue
-                   (let ((incoming (car message-queue)))
-                     (setq message-queue (cdr message-queue))
-                     (route incoming)))
-               (setq message-queue-busy nil))
-             (when message-queue (drain))))
-         (enqueue (incoming)
-           (setq message-queue (append message-queue (list incoming)))
-           (drain)))
-      (let ((proc
-             (make-process
-              :name (format "acp-client(%s)-%s"
-                            (map-elt client :command)
-                            (map-elt client :instance-count))
-              :command (cons (map-elt client :command)
-                             (map-elt client :command-params))
-              :stderr stderr-buffer
-              :connection-type 'pipe
-              :noquery t
-              :file-handler (file-remote-p default-directory)
-              :filter
-              (lambda (_proc input)
-                (emagent-acp--log client "INCOMING TEXT" "%s" input)
-                (setq pending-input (concat pending-input input))
-                (let ((start 0) pos)
-                  (while (setq pos (string-search "\n" pending-input start))
-                    (let ((json (substring pending-input start pos)))
-                      (emagent-acp--log client "INCOMING LINE" "%s" json)
-                      (when-let* ((obj (condition-case nil
-                                           (emagent-acp--parse-json json)
-                                         (error
-                                          (emagent-acp--log client "JSON PARSE ERROR"
-                                                    "Invalid JSON: %s" json)
-                                          nil))))
-                        (enqueue (emagent-acp--make-message :json json :object obj))))
-                    (setq start (1+ pos)))
-                  (setq pending-input (substring pending-input start))))
-              :sentinel
-              (lambda (process event)
-                (when (buffer-live-p stderr-buffer)
-                  (kill-buffer stderr-buffer))
-                (when (memq (process-status process) '(exit signal))
-                  (emagent-acp--fail-pending-requests :client client :event event))))))
-        (map-put! client :process proc)))))
+  (let* ((ctx (map-elt client :context-buffer))
+         (dir (or (map-elt client :process-directory)
+                  (and (buffer-live-p ctx)
+                       (with-current-buffer ctx
+                         (expand-file-name default-directory)))
+                  (expand-file-name default-directory))))
+    (unless (file-directory-p dir)
+      (error "ACP client directory is not a directory: %s" dir))
+    (unless (executable-find (map-elt client :command) (file-remote-p dir))
+      (error "\"%s\" not found; please install it" (map-elt client :command)))
+    (let* ((coding-system-for-read  'utf-8-unix)
+           (coding-system-for-write 'utf-8-unix)
+           (pending-input "")
+           (message-queue nil)
+           (message-queue-busy nil)
+           (process-environment (append (map-elt client :environment-variables)
+                                        process-environment))
+           (stderr-buffer (get-buffer-create
+                           (format "acp-client-stderr(%s)-%s"
+                                   (map-elt client :command)
+                                   (map-elt client :instance-count)))))
+      (with-current-buffer stderr-buffer
+        (add-hook 'after-change-functions
+                  (lambda (beg end _len)
+                    (let ((raw (buffer-substring-no-properties beg end)))
+                      (emagent-acp--log client "STDERR" "%s" (string-trim raw))
+                      (when-let ((err (or (emagent-acp--parse-stderr-api-error raw)
+                                          (and (not (string-empty-p (string-trim raw)))
+                                               (emagent-acp--make-internal-error raw)))))
+                        (emagent-acp--log client "API-ERROR" "%s" (string-trim raw))
+                        (dolist (h (map-elt client :error-handlers))
+                          (funcall h err)))))
+                  nil t))
+      (cl-labels
+          ((route (incoming)
+             (let ((print-circle t) (print-level 25) (print-length 200))
+               (emagent-acp--route-incoming-message
+                :message incoming :client client
+                :on-notification
+                (lambda (notif)
+                  (dolist (h (map-elt client :notification-handlers))
+                    (condition-case-unless-debug err
+                        (funcall h notif)
+                      (error (emagent-acp--log client "NOTIFICATION HANDLER ERROR"
+                                       "Failed: %S" err)))))
+                :on-request
+                (lambda (req)
+                  (dolist (h (map-elt client :request-handlers))
+                    (condition-case-unless-debug err
+                        (funcall h req)
+                      (error (emagent-acp--log client "REQUEST HANDLER ERROR"
+                                       "Failed: %S" err))))))))
+           (drain ()
+             (unless message-queue-busy
+               (setq message-queue-busy t)
+               (unwind-protect
+                   (while message-queue
+                     (let ((incoming (car message-queue)))
+                       (setq message-queue (cdr message-queue))
+                       (route incoming)))
+                 (setq message-queue-busy nil))
+               (when message-queue (drain))))
+           (enqueue (incoming)
+             (setq message-queue (append message-queue (list incoming)))
+             (drain)))
+        (let ((proc
+               (let ((default-directory dir))
+                 (make-process
+                  :name (format "acp-client(%s)-%s"
+                                (map-elt client :command)
+                                (map-elt client :instance-count))
+                  :command (cons (map-elt client :command)
+                                 (map-elt client :command-params))
+                  :stderr stderr-buffer
+                  :connection-type 'pipe
+                  :noquery t
+                  :file-handler (file-remote-p dir)
+                  :filter
+                  (lambda (_proc input)
+                    (emagent-acp--log client "INCOMING TEXT" "%s" input)
+                    (setq pending-input (concat pending-input input))
+                    (let ((start 0) pos)
+                      (while (setq pos (string-search "\n" pending-input start))
+                        (let ((json (substring pending-input start pos)))
+                          (emagent-acp--log client "INCOMING LINE" "%s" json)
+                          (when-let* ((obj (condition-case nil
+                                               (emagent-acp--parse-json json)
+                                             (error
+                                              (emagent-acp--log client "JSON PARSE ERROR"
+                                                        "Invalid JSON: %s" json)
+                                              nil))))
+                            (enqueue (emagent-acp--make-message :json json :object obj))))
+                        (setq start (1+ pos)))
+                      (setq pending-input (substring pending-input start))))
+                  :sentinel
+                  (lambda (process event)
+                    (when (buffer-live-p stderr-buffer)
+                      (kill-buffer stderr-buffer))
+                    (when (memq (process-status process) '(exit signal))
+                      (emagent-acp--fail-pending-requests :client client :event event)))))))
+          (map-put! client :process proc))))))
 
 (cl-defun emagent-acp-shutdown (&key client)
   "Shut down ACP CLIENT and release resources."
@@ -670,10 +684,10 @@ Provide either OPTION-ID (selected option) or CANCELLED (non-nil)."
   (unless (or option-id cancelled)
     (error "Must specify :option-id or :cancelled"))
   `((:request-id . ,request-id)
-    (:result . ,(if cancelled
-                    '((outcome . "cancelled"))
-                  `((outcome  . "selected")
-                    (optionId . ,option-id))))))
+    (:result . ((outcome . ,(if cancelled
+                                '((outcome . "cancelled"))
+                              `((outcome  . "selected")
+                                (optionId . ,option-id))))))))
 
 (cl-defun emagent-acp-make-fs-read-text-file-response (&key request-id content error)
   "Build a \"fs/read_text_file\" response with CONTENT or ERROR."

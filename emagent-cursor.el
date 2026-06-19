@@ -53,6 +53,17 @@ Set to nil to pass no extra flags."
   "Return the Cursor ACP command parameters."
   (append (cdr emagent-cursor-acp-command) emagent-cursor-acp-extra-args))
 
+(defun emagent-cursor-command-params-for-context (context-buffer)
+  "Return Cursor ACP args for CONTEXT-BUFFER.
+
+Uses `emagent-chat-cursor-acp-extra-args' when buffer-local and non-nil."
+  (append (cdr emagent-cursor-acp-command)
+          (with-current-buffer context-buffer
+            (if (and (boundp 'emagent-chat-cursor-acp-extra-args)
+                     emagent-chat-cursor-acp-extra-args)
+                emagent-chat-cursor-acp-extra-args
+              emagent-cursor-acp-extra-args))))
+
 (defun emagent-cursor-check-command ()
   "Signal a clear error when the Cursor agent is missing."
   (unless (executable-find (emagent-cursor-command))
@@ -69,13 +80,16 @@ invocation to its own in-Emacs MCP session."
     (append emagent-cursor-environment
             (list (format "EMAGENT_SESSION_TOKEN=%s" token)))))
 
-(cl-defun emagent-cursor-make-client (&key context-buffer)
-  "Create an ACP client for Cursor using CONTEXT-BUFFER."
+(cl-defun emagent-cursor-make-client (&key context-buffer process-directory)
+  "Create an ACP client for Cursor using CONTEXT-BUFFER.
+PROCESS-DIRECTORY is passed to `make-process' as the working directory
+(see `emagent-chat--session-directory' / #+EMAGENT_PROJECT)."
   (emagent-cursor-check-command)
   (emagent-mcp-ensure-cursor-config)
   (emagent-acp-make-client :context-buffer context-buffer
+                   :process-directory process-directory
                    :command (emagent-cursor-command)
-                   :command-params (emagent-cursor-command-params)
+                   :command-params (emagent-cursor-command-params-for-context context-buffer)
                    :environment-variables (emagent-cursor--environment context-buffer)))
 
 (provide 'emagent-cursor)

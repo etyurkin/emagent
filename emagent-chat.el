@@ -19,6 +19,8 @@
 (require 'emagent-tools)
 
 (declare-function emagent-set-model "emagent-acp")
+(declare-function emagent-trust-workspace "emagent" (&optional arg))
+(declare-function emagent-trust-claude-reconnect "emagent" ())
 (declare-function emagent-acp-ensure-connected "emagent")
 (declare-function project-current "project")
 (declare-function project-root "project")
@@ -109,6 +111,12 @@
 
 (defvar-local emagent-chat-provider nil
   "ACP provider symbol (`cursor' or `claude') for the current emagent buffer.")
+
+(defvar-local emagent-chat-cursor-acp-extra-args nil
+  "When non-nil, replaces `emagent-cursor-acp-extra-args' for this buffer only.
+
+Set from `emagent-trust--configure' when the user answers the workspace trust
+prompt for the Cursor provider.")
 
 (defvar-local emagent-chat-allowed-tools nil
   "Tools allowed without confirmation for the current emagent buffer.
@@ -2189,10 +2197,12 @@ Prompts for a target buffer with `completing-read'."
                ("s" "Insert src block into buffer" emagent-chat-insert-src-block)]
               ["Session"
                ("m" "Set model" emagent-set-model)
+               ("t" "Trust workspace on disk" emagent-trust-workspace)
+               ("R" "Claude: new session (trust)" emagent-trust-claude-reconnect)
                ("l" "View log" emagent-log-view)])
            t))
         (call-interactively #'emagent--transient-menu))
-    (message "emagent keybindings: SPC=send, p=new-prompt, g=interrupt, a=attach, i=image, m=model, l=log")))
+    (message "emagent: SPC=send, p=prompt, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
 
 (add-hook 'emagent-mode-hook #'emagent-chat--setup-faces 100 t)
 (dolist (buffer (buffer-list))

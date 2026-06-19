@@ -365,14 +365,25 @@ PROPERTIES keys are tool argument names, kept as strings via a hash-table so
           (emagent-chat-add-allowed-tool tool))))))
 
 (defconst emagent-mcp--confirming-tools
-  '("run_shell_command" "compile" "write_file" "delete_file" "delete_directory")
-  "MCP tool names that prompt the user before running.")
+  '("run_shell_command" "compile" "delete_file" "delete_directory")
+  "MCP tool names that prompt the user before running.
+`write_file' is gated separately by `emagent-mcp-confirm-write-file'.")
+
+(defcustom emagent-mcp-confirm-write-file nil
+  "When non-nil, require diff + Allow before MCP write_file.
+
+Nil (default) skips a second Emacs prompt so project edits can proceed after
+ACP permission.  See `emagent-acp-confirm-fs-writes' for fs/write_text_file.
+The agent process may still enforce its own policy."
+  :type 'boolean
+  :group 'emagent)
 
 (declare-function emagent-shell--read-only-network-p "emagent-shell")
 
 (defun emagent-mcp--tool-needs-confirmation-p (name args)
   "Return non-nil when MCP tool NAME with ARGS should prompt the user."
-  (and (member name emagent-mcp--confirming-tools)
+  (and (or (and (string= name "write_file") emagent-mcp-confirm-write-file)
+           (member name emagent-mcp--confirming-tools))
        (not (and (string= name "run_shell_command")
                  (emagent-shell--read-only-network-p
                   (or (emagent-mcp--arg args "command") ""))))))
