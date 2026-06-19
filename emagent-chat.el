@@ -1439,7 +1439,7 @@ Return non-nil when a line was updated."
             (insert display)
             (set-marker end (point))
             (when emagent-chat--thought-open-p
-              (setq emagent-chat--thought-marker (copy-marker end nil))))
+              (setq emagent-chat--thought-marker (copy-marker end nil)))))
         t))))
 
 (defun emagent-chat-show-tool-call (id label)
@@ -1524,7 +1524,7 @@ Optional THOUGHT-TEXT is rendered as a foldable Reasoning quote above the body."
           (emagent-chat--sync-user-zone-marker)
           (emagent-chat--insert-user-heading-stub)
           (font-lock-flush))
-        (emagent-chat--flush-pending-prompt))))))
+        (emagent-chat--flush-pending-prompt)))))
 
 (defun emagent-chat--clear-btw-indicator ()
   "Remove the btw queued indicator line from the buffer, if present."
