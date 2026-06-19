@@ -264,6 +264,7 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :extra-context nil state)
     (puthash :replaying-history nil state)
     (puthash :current-tool nil state)
+    (puthash :current-tool-kind nil state)
     (puthash :tool-call-titles (make-hash-table :test 'equal) state)
     (puthash :tool-call-inputs (make-hash-table :test 'equal) state)
     (puthash :tool-call-labels (make-hash-table :test 'equal) state)
@@ -389,6 +390,10 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
 (defun emagent-acp-current-tool ()
   "Return the name of the tool currently running, or nil."
   (and emagent-acp--session (map-elt emagent-acp--session :current-tool)))
+
+(defun emagent-acp-current-tool-kind ()
+  "Return the kind of the running tool (\"read\", \"write\", \"execute\"), or nil."
+  (and emagent-acp--session (map-elt emagent-acp--session :current-tool-kind)))
 
 (defun emagent-acp-agent-rss ()
   "Return the agent process RSS in MB, or nil."
@@ -880,6 +885,7 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
     (map-put! state :prompt-finishing t)
     (map-put! state :busy nil)
     (map-put! state :current-tool nil)
+    (map-put! state :current-tool-kind nil)
     (emagent-acp--clear-prompt-watchdog state)
     (emagent-acp--trace "prompt done (%d chars, %d thought)"
                         (length (or (map-elt state :assistant-text) ""))
@@ -1259,23 +1265,32 @@ Never returns a deny option.  OPTIONS may be a list or vector."
 
 (defun emagent-acp--on-tool-call (state update)
   "Display or refresh a tool-call line from ACP UPDATE."
-  (let* ((id (map-elt update 'toolCallId))
+  (let* ((id     (map-elt update 'toolCallId))
+         (status (map-elt update 'status))
+         (kind   (map-elt update 'kind))
          (merged (emagent-acp--merged-tool-call-update state update))
-         (label (emagent-acp--tool-call-label merged))
+         (label  (emagent-acp--tool-call-label merged))
          (labels (map-elt state :tool-call-labels))
-         (prev (and id labels (gethash id labels))))
+         (prev   (and id labels (gethash id labels))))
     (when (and label (not (string-empty-p label)))
       (emagent-acp--detect-external-refusal-in-text state label))
-    (when (and label (not (string-empty-p label))
-               (or (null prev) (not (string= prev label))))
-      (when id (puthash id label labels))
-      (emagent-acp--notify-user state (format "emagent: tool %s" label))
-      (map-put! state :current-tool label)
-      (emagent-acp--refresh-mode-line state)
-      (emagent-acp--schedule-prompt-watchdog state)
-      (when-let ((buf (emagent-acp--chat-buffer state)))
-        (with-current-buffer buf
-          (emagent-chat-show-tool-call id label))))))
+    (if (member status '("completed" "failed"))
+        ;; Tool finished — clear active-tool state so mode line returns to Thinking.
+        (progn
+          (map-put! state :current-tool nil)
+          (map-put! state :current-tool-kind nil)
+          (emagent-acp--refresh-mode-line state))
+      (when (and label (not (string-empty-p label))
+                 (or (null prev) (not (string= prev label))))
+        (when id (puthash id label labels))
+        (emagent-acp--notify-user state (format "emagent: tool %s" label))
+        (map-put! state :current-tool label)
+        (when kind (map-put! state :current-tool-kind kind))
+        (emagent-acp--refresh-mode-line state)
+        (emagent-acp--schedule-prompt-watchdog state)
+        (when-let ((buf (emagent-acp--chat-buffer state)))
+          (with-current-buffer buf
+            (emagent-chat-show-tool-call id label)))))))
 
 (cl-defun emagent-acp--handle-one-permission (&key state emagent-acp-request)
   "Process a single queued permission request synchronously."
@@ -1667,6 +1682,8 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
            (blocks `[((type . "text") (text . ,clean-text))]))
       (map-put! state :extra-context nil)
       (map-put! state :busy t)
+      (when (fboundp 'emagent-chat--spinner-start)
+        (emagent-chat--spinner-start))
       (map-put! state :assistant-text "")
       (map-put! state :thought-text "")
       (map-put! state :prompt-finalized nil)

@@ -1749,6 +1749,40 @@ the prompt text."
     (funcall emagent-chat--on-quit))
   (bury-buffer))
 
+(defconst emagent-chat--spinner-frames ["⠋" "⠙" "⠚" "⠞" "⠖" "⠦" "⠴" "⠲" "⠳" "⠓"]
+  "Braille spinner frames shown while the agent is thinking.")
+
+(defvar emagent-chat--spinner-frame 0
+  "Current spinner frame index (0-3).")
+
+(defvar emagent-chat--spinner-timer nil
+  "Repeating timer that advances the spinner while any session is busy.")
+
+(defun emagent-chat--spinner-tick ()
+  "Advance spinner one frame and refresh mode lines of all emagent buffers.
+Cancels the timer automatically when no session is busy."
+  (setq emagent-chat--spinner-frame
+        (% (1+ emagent-chat--spinner-frame)
+           (length emagent-chat--spinner-frames)))
+  (let ((any-busy nil))
+    (dolist (buf (buffer-list))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (when (derived-mode-p 'emagent-mode)
+            (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
+              (setq any-busy t))
+            (force-mode-line-update)))))
+    (unless any-busy
+      (when emagent-chat--spinner-timer
+        (cancel-timer emagent-chat--spinner-timer))
+      (setq emagent-chat--spinner-timer nil))))
+
+(defun emagent-chat--spinner-start ()
+  "Start the spinner timer if not already running."
+  (unless emagent-chat--spinner-timer
+    (setq emagent-chat--spinner-timer
+          (run-with-timer 0 0.08 #'emagent-chat--spinner-tick))))
+
 (defun emagent-chat--mode-line-context-usage ()
   "Return a propertized context fill percentage string, or nil."
   (when-let* ((pair (and (fboundp 'emagent-acp-context-usage)
@@ -1768,12 +1802,15 @@ the prompt text."
   (let* ((busy  (and (fboundp 'emagent-acp-busy-p)  (emagent-acp-busy-p)))
          (ready (and (fboundp 'emagent-acp-ready-p) (emagent-acp-ready-p)))
          (tool  (and (fboundp 'emagent-acp-current-tool) (emagent-acp-current-tool)))
+         (kind  (and (fboundp 'emagent-acp-current-tool-kind) (emagent-acp-current-tool-kind)))
          (rss   (and (fboundp 'emagent-acp-agent-rss) (emagent-acp-agent-rss)))
          (connected (or busy ready))
+         (spinner (aref emagent-chat--spinner-frames emagent-chat--spinner-frame))
          (status-str (cond
-                      ((and busy tool) (format "emagent:%s" tool))
-                      (busy            "emagent:thinking")
-                      (ready           "emagent:ready")
+                      ((and busy tool (member kind '("write" "execute")))
+                       (format "emagent:Executing... %s" spinner))
+                      (busy            (format "emagent:Thinking... %s" spinner))
+                      (ready           "emagent:Idle")
                       (connected       "emagent:connecting")
                       (t               "emagent")))
          (status (propertize status-str
