@@ -37,8 +37,7 @@ to be on Emacs's own =exec-path= (e.g. =cursor-agent=, =claude-agent-acp=).
 
 #+BEGIN_SRC emacs-lisp
 (use-package emagent
-  :ensure (:host github :repo "etyurkin/emagent" :depth 1
-           :files (:defaults "emagent-elisp-guide.md"))
+  :ensure (:host github :repo "etyurkin/emagent" :depth 1)
   :commands (emagent emagent-cursor-start emagent-claude-start emagent-mode emagent-set-model)
   :custom (emagent-default-provider (if (equal (getenv "EMAGENT_AGENT") "claude")
                                        'claude
@@ -47,9 +46,6 @@ to be on Emacs's own =exec-path= (e.g. =cursor-agent=, =claude-agent-acp=).
 
 Set =EMAGENT_AGENT= to =claude= or =cursor= to pick the default provider when
 Emacs starts.
-
-The =:files= entry includes =emagent-elisp-guide.md=, the Emacs Lisp reference
-guide served to the agent via the =elisp_guide= MCP tool.
 
 For a local clone, add =:load-path "~/path/to/emagent"= instead of =:ensure=.
 
@@ -65,6 +61,7 @@ For a local clone, add =:load-path "~/path/to/emagent"= instead of =:ensure=.
 | =C-c C-c=                             | Send =* user>= block; execute src block when inside one |
 | =C-c p=                               | Insert a new =* user>= prompt heading             |
 | =C-c a=                               | Attach current buffer summary to next prompt     |
+| =C-c b=                               | Queue a follow-up ("btw") for after agent finishes |
 | =C-c d=                               | Pick project files to attach to next prompt      |
 | =C-c e=                               | Attach compilation/flymake errors to next prompt |
 | =C-c i=                               | Attach image file (or clipboard image)           |
@@ -109,6 +106,35 @@ id, model, and project directory are all restored from the =#+EMAGENT_*= header.
 *Note:* the agent can only resume a session that has at least one completed
 exchange.  A buffer saved before any prompt was sent will reconnect but start a
 fresh session — the agent has nothing stored yet to resume.
+
+** Response blocks
+
+Agent responses appear between =# --- emagent ---= / =# --- /emagent ---=
+delimiters.  TAB on the opening delimiter folds the entire block.
+
+- *Reasoning* (=#+begin_quote Reasoning=) — streamed thinking text; folds
+  automatically when reasoning finishes.  Tool calls made during reasoning
+  appear as =→ tool-name= annotations inside the block.
+- *Executing* (=#+begin_quote Executing=) — accumulates tool calls during the
+  execution phase (one line per tool); folds when the agent resumes writing.
+
+** Queued follow-ups (/btw/)
+
+Press =C-c b= while the agent is running to queue a follow-up message.  A
+minibuffer opens — type your note, press Enter.  The text is stored and sent
+automatically as =btw, <your message>= when the agent finishes.  A =# [btw]=
+indicator appears in the buffer and the mode line shows =⏳btw=.
+
+** Cursor notes
+
+Before first use, authenticate: =cursor-agent login= in your terminal.  Without
+authentication, the session runs in a limited mode that rejects the Auto model.
+Model IDs in the mode line are shown without technical parameters
+(=claude-sonnet-4-6= not =claude-sonnet-4-6[thinking=true,...]=;
+=auto= not =default[]=).
+
+Context window percentage (=ctx%=) is only available with Claude; cursor-agent
+does not expose token usage via ACP.
 
 * Customization
 
