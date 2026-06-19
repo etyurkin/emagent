@@ -26,6 +26,9 @@
 (declare-function flymake-diagnostic-type "flymake")
 (declare-function flymake-diagnostic-text "flymake")
 
+(declare-function cl-find "cl-lib")
+(declare-function cl-some "cl-lib")
+
 ;; Optional doom-modeline integration; declared so byte-compilation without
 ;; doom-modeline present does not warn about these external symbols.
 (defvar doom-modeline-mode-alist)
@@ -773,6 +776,90 @@ check is skipped so the user can re-evaluate any previous prompt."
    (t
     (call-interactively #'emagent-chat-cycle-or-org-cycle))))
 
+(defun emagent-chat--window-at-bottom-p (window)
+  "Return non-nil when WINDOW shows the end of the current buffer."
+  (and window (window-live-p window)
+       (with-selected-window window
+         (pos-visible-in-window-p (point-max) nil t))))
+
+(defun emagent-chat--save-window-views ()
+  "Return saved scroll state for windows displaying the current buffer."
+  (let (views)
+    (dolist (win (get-buffer-window-list (current-buffer) nil t))
+      (push `(:window ,win
+              :start ,(window-start win)
+              :at-bottom ,(emagent-chat--window-at-bottom-p win))
+            views))
+    views))
+
+(defun emagent-chat--restore-window-views (views)
+  "Restore scroll state from VIEWS returned by `emagent-chat--save-window-views'."
+  (dolist (view views)
+    (let ((win (plist-get view :window)))
+      (when (window-live-p win)
+        (if (plist-get view :at-bottom)
+            (with-selected-window win
+              (goto-char (point-max))
+              (recenter -1))
+          (set-window-start win (plist-get view :start) t))))))
+
+(defmacro emagent-chat--with-stable-view (&rest body)
+  "Run BODY while preserving window scroll unless already at buffer end."
+  (declare (indent 0))
+  `(let* ((emagent-chat--view-saved-point (point))
+          (emagent-chat--view-saved-windows (emagent-chat--save-window-views)))
+     (unwind-protect
+         (progn ,@body)
+       (goto-char emagent-chat--view-saved-point)
+       (emagent-chat--restore-window-views emagent-chat--view-saved-windows))))
+
+(defun emagent-chat--reasoning-stream-marker ()
+  "Return insert marker before #+end_quote in the open Reasoning block."
+  (save-excursion
+    (let ((beg (or (and emagent-chat--response-body-start
+                         (marker-position emagent-chat--response-body-start))
+                   (point-min))))
+      (goto-char beg)
+      (when (re-search-forward emagent-chat--reasoning-begin-re (point-max) t)
+        (when (re-search-forward "^#\\+end_quote\\s-*$" nil t)
+          (goto-char (match-beginning 0))
+          (skip-chars-backward "\n")
+          (point-marker))))))
+
+(defun emagent-chat--reasoning-block-tail ()
+  "Return point after the last Reasoning block in the open response, or nil."
+  (save-excursion
+    (let ((beg (or (and emagent-chat--response-body-start
+                         (marker-position emagent-chat--response-body-start))
+                   (point-min)))
+          tail)
+      (goto-char beg)
+      (while (re-search-forward emagent-chat--reasoning-begin-re (point-max) t)
+        (when (re-search-forward "^#\\+end_quote\\s-*$" nil t)
+          (setq tail (progn (skip-chars-forward "\n") (point)))))
+      tail)))
+
+(defun emagent-chat--can-resume-reasoning-p ()
+  "Return non-nil when streaming can continue in an existing Reasoning block."
+  (when-let* ((tail (emagent-chat--reasoning-block-tail))
+              (bounds (emagent-chat--open-response-body-bounds))
+              ((>= tail (car bounds))))
+    (string-empty-p
+     (string-trim (buffer-substring-no-properties tail (cdr bounds))))))
+
+(defun emagent-chat--ensure-thought-stream ()
+  "Open or resume the streaming Reasoning block in the in-flight response."
+  (cond
+   (emagent-chat--thought-open-p
+    (when (and emagent-chat--thought-marker
+               (not (marker-position emagent-chat--thought-marker)))
+      (setq emagent-chat--thought-marker (emagent-chat--reasoning-stream-marker))))
+   ((emagent-chat--can-resume-reasoning-p)
+    (setq emagent-chat--thought-marker (emagent-chat--reasoning-stream-marker)
+          emagent-chat--thought-open-p t))
+   (t
+    (emagent-chat-begin-thought))))
+
 (defun emagent-chat--begin-response (&optional at)
   "Insert a new emagent response block at AT or point."
   (let ((inhibit-read-only t))
@@ -885,162 +972,6 @@ folding the inner region only so incomplete parses never break the buffer."
         (unless (bolp)
           (insert "\n"))))))
 
-(defun emagent-chat-begin-thought ()
-  "Open a foldable Reasoning block in the in-flight emagent response."
-  (with-current-buffer (current-buffer)
-    (when (and (emagent-chat--open-response-p)
-               (not emagent-chat--thought-open-p))
-      (let ((inhibit-read-only t))
-        (emagent-chat--writable)
-        (emagent-chat--ensure-response-markers)
-        (emagent-chat--clear-progress-line)
-        (goto-char emagent-chat--response-body-start)
-        ;; Keep #+end_quote present while streaming so Org never sees an
-        ;; unclosed quote block (that corrupts org-element cache).
-        (insert "#+begin_quote Reasoning\n")
-        (setq emagent-chat--thought-marker (point-marker))
-        (insert "\n#+end_quote\n\n")
-        (setq emagent-chat--thought-open-p t
-              emagent-chat--assistant-marker (point-marker))
-        (font-lock-flush)))))
-
-(defun emagent-chat-append-thought (text)
-  "Append reasoning TEXT to the open Reasoning block."
-  (with-current-buffer (current-buffer)
-    (when (emagent-chat--open-response-p)
-      (let ((inhibit-read-only t))
-        (emagent-chat--writable)
-        (unless emagent-chat--thought-open-p
-          (emagent-chat-begin-thought))
-        (goto-char emagent-chat--thought-marker)
-        (insert text)
-        (setq emagent-chat--thought-marker (point-marker)
-              emagent-chat--assistant-marker (point-marker))
-        (font-lock-flush)))))
-
-(defun emagent-chat-close-thought ()
-  "Close and hide the open Reasoning block, if any."
-  (with-current-buffer (current-buffer)
-    (when emagent-chat--thought-open-p
-      (let ((inhibit-read-only t)
-            (hide-at nil))
-        (emagent-chat--writable)
-        (when (and emagent-chat--thought-marker
-                   (marker-position emagent-chat--thought-marker))
-          (goto-char emagent-chat--thought-marker)
-          (unless (bolp)
-            (insert "\n")))
-        (save-excursion
-          (when (re-search-backward emagent-chat--reasoning-begin-re nil t)
-            (setq hide-at (point))
-            (when (re-search-forward "^#\\+end_quote\\s-*$" nil t)
-              (goto-char (match-end 0))
-              (skip-chars-forward "\n")
-              (setq emagent-chat--assistant-marker (point-marker)))))
-        (setq emagent-chat--thought-open-p nil
-              emagent-chat--thought-marker nil)
-        (font-lock-flush)
-        (when hide-at
-          (emagent-chat--hide-reasoning-deferred hide-at))))))
-
-(defun emagent-chat-begin-executing (label)
-  "Open an Executing block or append LABEL to an existing one.
-
-If the Reasoning block is currently open, appends LABEL as a tool-use
-annotation there instead.  Otherwise, opens a single Executing block on
-the first call and appends one line per subsequent call.  The block is
-written complete (begin + end markers) so permission-dialog buttons
-inserted at `point-max' always land outside it."
-  (with-current-buffer (current-buffer)
-    (when (emagent-chat--open-response-p)
-      (let ((inhibit-read-only t))
-        (emagent-chat--writable)
-        (emagent-chat--ensure-response-markers)
-        (cond
-         ;; Tool call during Reasoning: annotate inside the Reasoning block.
-         (emagent-chat--thought-open-p
-          (when (and emagent-chat--thought-marker
-                     (marker-position emagent-chat--thought-marker))
-            (goto-char emagent-chat--thought-marker)
-            (unless (bolp) (insert "\n"))
-            (insert (format "→ %s" label))
-            (setq emagent-chat--thought-marker (point-marker))
-            (font-lock-flush)))
-         ;; Append to existing Executing block.
-         (emagent-chat--executing-open-p
-          (when (and emagent-chat--executing-marker
-                     (marker-position emagent-chat--executing-marker))
-            (goto-char emagent-chat--executing-marker)
-            (insert label "\n")
-            (setq emagent-chat--executing-marker (point-marker))
-            (font-lock-flush)))
-         ;; Open a new Executing block.
-         (t
-          (emagent-chat--clear-progress-line)
-          (goto-char emagent-chat--assistant-marker)
-          (insert "#+begin_quote Executing\n")
-          (let ((hide-at (save-excursion
-                           (re-search-backward emagent-chat--executing-begin-re nil t)
-                           (point))))
-            (setq emagent-chat--executing-hide-at hide-at)
-            (setq emagent-chat--executing-marker (point-marker))
-            (insert label "\n#+end_quote\n\n")
-            (setq emagent-chat--executing-open-p t
-                  emagent-chat--assistant-marker (point-marker)))
-          (font-lock-flush)))))))
-
-(defun emagent-chat--tool-call-display (label)
-  "Return LABEL formatted for the current tool-call display context."
-  (if emagent-chat--thought-open-p
-      (format "→ %s" label)
-    label))
-
-(defun emagent-chat--record-tool-call-line (id)
-  "Remember the buffer span for tool call ID."
-  (let ((pos (cond
-              (emagent-chat--thought-open-p emagent-chat--thought-marker)
-              (emagent-chat--executing-open-p emagent-chat--executing-marker)
-              (t nil))))
-    (when (and id pos (marker-position pos))
-      (save-excursion
-        (goto-char pos)
-        (beginning-of-line)
-        (let ((start (copy-marker (point) nil))
-              (end (copy-marker (line-end-position) nil)))
-          (puthash id (cons start end) emagent-chat--tool-call-lines))))))
-
-(defun emagent-chat--update-tool-call-line (id label)
-  "Replace the displayed tool-call line for ID with LABEL.
-Return non-nil when a line was updated."
-  (let ((entry (gethash id emagent-chat--tool-call-lines)))
-    (when (and entry
-               (markerp (car entry)) (marker-position (car entry))
-               (markerp (cdr entry)) (marker-position (cdr entry)))
-      (let* ((start (car entry))
-             (end (cdr entry))
-             (display (emagent-chat--tool-call-display label)))
-        (unless (string= (buffer-substring-no-properties start end) display)
-          (delete-region start end)
-          (goto-char start)
-          (insert display)
-          (set-marker end (point))
-          (when emagent-chat--thought-open-p
-            (setq emagent-chat--thought-marker (copy-marker end nil))))
-        t))))
-
-(defun emagent-chat-show-tool-call (id label)
-  "Show or update a tool-call line for ACP toolCallId ID with LABEL."
-  (when (and label (not (string-empty-p label)))
-    (with-current-buffer (current-buffer)
-      (when (emagent-chat--open-response-p)
-        (let ((inhibit-read-only t))
-          (emagent-chat--writable)
-          (unless (and id (emagent-chat--update-tool-call-line id label))
-            (emagent-chat-begin-executing label)
-            (when id
-              (emagent-chat--record-tool-call-line id)))
-          (font-lock-flush))))))
-
 (defun emagent-chat-close-executing ()
   "Fold and close the open Executing block, if any."
   (with-current-buffer (current-buffer)
@@ -1066,18 +997,6 @@ Return non-nil when a line was updated."
                            (org-fold-region content-start (match-beginning 0)
                                             t 'block)))))))))))))))
 
-(defun emagent-chat-append-assistant (text)
-  "Append TEXT to the current emagent response section."
-  (with-current-buffer (current-buffer)
-    (when (emagent-chat--open-response-p)
-      (let ((inhibit-read-only t))
-        (emagent-chat--writable)
-        (emagent-chat-close-thought)
-        (emagent-chat-close-executing)
-        (emagent-chat--goto-active-response-point)
-        (insert text)
-        (setq emagent-chat--assistant-marker (point-marker))
-        (font-lock-flush)))))
 
 (defun emagent-chat--lang-from-filename (file)
   "Return an org babel language tag for FILE, or nil when unknown."
@@ -1362,6 +1281,197 @@ Return non-nil when a line was updated."
         (and (emagent-chat--find-response-begin-backward)
              (not (re-search-forward emagent-chat--response-end-re (point-max) t))))))
 
+(defun emagent-chat-begin-thought ()
+  "Open a foldable Reasoning block in the in-flight emagent response."
+  (emagent-chat--with-stable-view
+    (with-current-buffer (current-buffer)
+      (when (and (emagent-chat--open-response-p)
+                 (not emagent-chat--thought-open-p))
+        (let ((inhibit-read-only t))
+          (emagent-chat--writable)
+          (emagent-chat--ensure-response-markers)
+          (if (emagent-chat--can-resume-reasoning-p)
+              (setq emagent-chat--thought-marker
+                    (emagent-chat--reasoning-stream-marker)
+                    emagent-chat--thought-open-p t)
+            (progn
+              (emagent-chat--clear-progress-line)
+              (goto-char emagent-chat--response-body-start)
+              ;; Keep #+end_quote present while streaming so Org never sees an
+              ;; unclosed quote block (that corrupts org-element cache).
+              (insert "#+begin_quote Reasoning\n")
+              (setq emagent-chat--thought-marker (point-marker))
+              (insert "\n#+end_quote\n\n")
+              (setq emagent-chat--thought-open-p t
+                    emagent-chat--assistant-marker (point-marker))
+              (font-lock-flush))))))))
+
+(defun emagent-chat-append-thought (text)
+  "Append reasoning TEXT to the open Reasoning block."
+  (when (not (string-empty-p text))
+    (emagent-chat--with-stable-view
+      (with-current-buffer (current-buffer)
+        (when (emagent-chat--open-response-p)
+          (let ((inhibit-read-only t))
+            (emagent-chat--writable)
+            (emagent-chat--ensure-response-markers)
+            (emagent-chat--ensure-thought-stream)
+            (when (and emagent-chat--thought-marker
+                       (marker-position emagent-chat--thought-marker))
+              (save-excursion
+                (goto-char emagent-chat--thought-marker)
+                (insert text)
+                (setq emagent-chat--thought-marker (point-marker)
+                      emagent-chat--assistant-marker (point-marker))))
+            (font-lock-flush)))))))
+
+(defun emagent-chat-close-thought ()
+  "Close and hide the open Reasoning block, if any."
+  (emagent-chat--with-stable-view
+    (with-current-buffer (current-buffer)
+      (when emagent-chat--thought-open-p
+        (let ((inhibit-read-only t)
+              (hide-at nil))
+          (emagent-chat--writable)
+          (when (and emagent-chat--thought-marker
+                     (marker-position emagent-chat--thought-marker))
+            (save-excursion
+              (goto-char emagent-chat--thought-marker)
+              (unless (bolp)
+                (insert "\n"))))
+          (save-excursion
+            (when (re-search-backward emagent-chat--reasoning-begin-re nil t)
+              (setq hide-at (point))
+              (when (re-search-forward "^#\\+end_quote\\s-*$" nil t)
+                (goto-char (match-end 0))
+                (skip-chars-forward "\n")
+                (setq emagent-chat--assistant-marker (point-marker)))))
+          (setq emagent-chat--thought-open-p nil
+                emagent-chat--thought-marker nil)
+          (font-lock-flush)
+          (when hide-at
+            (emagent-chat--hide-reasoning-deferred hide-at)))))))
+
+(defun emagent-chat-begin-executing (label)
+  "Open an Executing block or append LABEL to an existing one.
+
+If the Reasoning block is currently open, appends LABEL as a tool-use
+annotation there instead.  Otherwise, opens a single Executing block on
+the first call and appends one line per subsequent call.  The block is
+written complete (begin + end markers) so permission-dialog buttons
+inserted at `point-max' always land outside it."
+  (emagent-chat--with-stable-view
+    (with-current-buffer (current-buffer)
+      (when (emagent-chat--open-response-p)
+        (let ((inhibit-read-only t))
+          (emagent-chat--writable)
+          (emagent-chat--ensure-response-markers)
+          (cond
+           ;; Tool call during Reasoning: annotate inside the Reasoning block.
+           (emagent-chat--thought-open-p
+            (when (and emagent-chat--thought-marker
+                       (marker-position emagent-chat--thought-marker))
+              (save-excursion
+                (goto-char emagent-chat--thought-marker)
+                (unless (bolp) (insert "\n"))
+                (insert (format "→ %s" label))
+                (setq emagent-chat--thought-marker (point-marker)))
+              (font-lock-flush)))
+           ;; Append to existing Executing block.
+           (emagent-chat--executing-open-p
+            (when (and emagent-chat--executing-marker
+                       (marker-position emagent-chat--executing-marker))
+              (save-excursion
+                (goto-char emagent-chat--executing-marker)
+                (insert label "\n")
+                (setq emagent-chat--executing-marker (point-marker)))
+              (font-lock-flush)))
+           ;; Open a new Executing block.
+           (t
+            (emagent-chat--clear-progress-line)
+            (save-excursion
+              (goto-char emagent-chat--assistant-marker)
+              (insert "#+begin_quote Executing\n")
+              (let ((hide-at (save-excursion
+                               (re-search-backward emagent-chat--executing-begin-re nil t)
+                               (point))))
+                (setq emagent-chat--executing-hide-at hide-at)
+                (setq emagent-chat--executing-marker (point-marker))
+                (insert label "\n#+end_quote\n\n")
+                (setq emagent-chat--executing-open-p t
+                      emagent-chat--assistant-marker (point-marker))))
+            (font-lock-flush))))))))
+
+(defun emagent-chat--tool-call-display (label)
+  "Return LABEL formatted for the current tool-call display context."
+  (if emagent-chat--thought-open-p
+      (format "→ %s" label)
+    label))
+
+(defun emagent-chat--record-tool-call-line (id)
+  "Remember the buffer span for tool call ID."
+  (let ((pos (cond
+              (emagent-chat--thought-open-p emagent-chat--thought-marker)
+              (emagent-chat--executing-open-p emagent-chat--executing-marker)
+              (t nil))))
+    (when (and id pos (marker-position pos))
+      (save-excursion
+        (goto-char pos)
+        (beginning-of-line)
+        (let ((start (copy-marker (point) nil))
+              (end (copy-marker (line-end-position) nil)))
+          (puthash id (cons start end) emagent-chat--tool-call-lines))))))
+
+(defun emagent-chat--update-tool-call-line (id label)
+  "Replace the displayed tool-call line for ID with LABEL.
+Return non-nil when a line was updated."
+  (let ((entry (gethash id emagent-chat--tool-call-lines)))
+    (when (and entry
+               (markerp (car entry)) (marker-position (car entry))
+               (markerp (cdr entry)) (marker-position (cdr entry)))
+      (let* ((start (car entry))
+             (end (cdr entry))
+             (display (emagent-chat--tool-call-display label)))
+        (unless (string= (buffer-substring-no-properties start end) display)
+          (save-excursion
+            (delete-region start end)
+            (goto-char start)
+            (insert display)
+            (set-marker end (point))
+            (when emagent-chat--thought-open-p
+              (setq emagent-chat--thought-marker (copy-marker end nil))))
+        t))))
+
+(defun emagent-chat-show-tool-call (id label)
+  "Show or update a tool-call line for ACP toolCallId ID with LABEL."
+  (when (and label (not (string-empty-p label)))
+    (emagent-chat--with-stable-view
+      (with-current-buffer (current-buffer)
+        (when (emagent-chat--open-response-p)
+          (let ((inhibit-read-only t))
+            (emagent-chat--writable)
+            (unless (and id (emagent-chat--update-tool-call-line id label))
+              (emagent-chat-begin-executing label)
+              (when id
+                (emagent-chat--record-tool-call-line id)))
+            (font-lock-flush)))))))
+
+(defun emagent-chat-append-assistant (text)
+  "Append TEXT to the current emagent response section."
+  (when (not (string-empty-p text))
+    (emagent-chat--with-stable-view
+      (with-current-buffer (current-buffer)
+        (when (emagent-chat--open-response-p)
+          (let ((inhibit-read-only t))
+            (emagent-chat--writable)
+            (emagent-chat-close-thought)
+            (emagent-chat-close-executing)
+            (save-excursion
+              (emagent-chat--goto-active-response-point)
+              (insert text)
+              (setq emagent-chat--assistant-marker (point-marker)))
+            (font-lock-flush)))))))
+
 (defun emagent-chat-fail-assistant (message)
   "Close the in-flight emagent response with error MESSAGE."
   (with-current-buffer (current-buffer)
@@ -1381,40 +1491,40 @@ Return non-nil when a line was updated."
   "Finalize the latest emagent response.
 
 Optional THOUGHT-TEXT is rendered as a foldable Reasoning quote above the body."
-  (with-current-buffer (current-buffer)
-    (let ((inhibit-read-only t)
-          (converted (emagent-chat--convert-agent-markup text))
-          (thought (emagent-chat--format-thought-block thought-text))
-          (rendered nil))
-      (emagent-chat--writable)
-      (emagent-chat-close-thought)
-      (emagent-chat-close-executing)
-      (unwind-protect
-          (when-let* ((bounds (emagent-chat--finish-body-bounds))
-                      (body-beg (car bounds))
-                      (body-end (cdr bounds))
-                      ((<= body-beg body-end)))
-            (delete-region body-beg body-end)
-            (goto-char body-beg)
-            (let ((insert-start (point)))
-              (insert thought converted)
-              (setq rendered t)
-              (when (string-match-p "|" converted)
-                (ignore-errors
-                  (emagent-chat--align-org-tables-in-region
-                   (+ insert-start (length thought)) (point))))
-              (font-lock-flush)
-              (when (not (string-empty-p thought))
-                (emagent-chat--hide-reasoning-deferred insert-start))
-              (setq emagent-chat--assistant-marker (point-marker))))
-        (when rendered
-          (emagent-chat--insert-response-end))
-        (emagent-chat--reset-response-state)
-        (emagent-chat--sync-user-zone-marker)
-        (emagent-chat--insert-user-heading-stub)
-        (font-lock-flush))
-      (goto-char (point-max))
-      (emagent-chat--flush-pending-prompt))))
+  (emagent-chat--with-stable-view
+    (with-current-buffer (current-buffer)
+      (let ((inhibit-read-only t)
+            (converted (emagent-chat--convert-agent-markup text))
+            (thought (emagent-chat--format-thought-block thought-text))
+            (rendered nil))
+        (emagent-chat--writable)
+        (emagent-chat-close-thought)
+        (emagent-chat-close-executing)
+        (unwind-protect
+            (when-let* ((bounds (emagent-chat--finish-body-bounds))
+                        (body-beg (car bounds))
+                        (body-end (cdr bounds))
+                        ((<= body-beg body-end)))
+              (delete-region body-beg body-end)
+              (goto-char body-beg)
+              (let ((insert-start (point)))
+                (insert thought converted)
+                (setq rendered t)
+                (when (string-match-p "|" converted)
+                  (ignore-errors
+                    (emagent-chat--align-org-tables-in-region
+                     (+ insert-start (length thought)) (point))))
+                (font-lock-flush)
+                (when (not (string-empty-p thought))
+                  (emagent-chat--hide-reasoning-deferred insert-start))
+                (setq emagent-chat--assistant-marker (point-marker))))
+          (when rendered
+            (emagent-chat--insert-response-end))
+          (emagent-chat--reset-response-state)
+          (emagent-chat--sync-user-zone-marker)
+          (emagent-chat--insert-user-heading-stub)
+          (font-lock-flush))
+        (emagent-chat--flush-pending-prompt))))))
 
 (defun emagent-chat--clear-btw-indicator ()
   "Remove the btw queued indicator line from the buffer, if present."

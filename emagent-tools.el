@@ -20,6 +20,8 @@
 (declare-function imenu--make-index-alist "imenu")
 (declare-function imenu--subalist-p "imenu")
 
+(defvar emagent-acp-elisp-guide)
+
 (defgroup emagent-tools nil
   "Emacs tool handlers for emagent."
   :group 'emagent)
@@ -159,8 +161,10 @@ Falls back to `completing-read' when CHAT-BUFFER is nil or dead."
           (setq end (point))))
       (when-let ((win (get-buffer-window chat-buffer)))
         (with-selected-window win
-          (goto-char end)
-          (recenter -3)))
+          (when (with-current-buffer chat-buffer
+                  (pos-visible-in-window-p (point-max) nil t))
+            (goto-char end)
+            (recenter -3))))
       (unwind-protect
           (condition-case nil
               (recursive-edit)

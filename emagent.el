@@ -34,6 +34,11 @@
 
 (declare-function project-current "project")
 (declare-function project-root "project")
+(declare-function emagent-chat-append-thought "emagent-chat")
+(declare-function emagent-chat-append-assistant "emagent-chat")
+(declare-function emagent-chat-finish-assistant "emagent-chat")
+(declare-function emagent-chat-fail-assistant "emagent-chat")
+(declare-function emagent-chat-set-slash-commands "emagent-chat")
 
 ;; Optional integrations — loaded only when the dependency is present.
 (require 'emagent-consult nil t)
