@@ -74,6 +74,9 @@
 (defvar-local emagent-chat--executing-hide-at nil
   "Buffer position of the open Executing block start, for deferred folding.")
 
+(defvar-local emagent-chat--tool-call-lines (make-hash-table :test 'equal)
+  "Map ACP toolCallId to (START . END) markers for displayed tool-call lines.")
+
 (defvar-local emagent-chat--user-zone-start-marker nil
   "Position where the next user prompt may begin.")
 
@@ -986,6 +989,58 @@ inserted at `point-max' always land outside it."
                   emagent-chat--assistant-marker (point-marker)))
           (font-lock-flush)))))))
 
+(defun emagent-chat--tool-call-display (label)
+  "Return LABEL formatted for the current tool-call display context."
+  (if emagent-chat--thought-open-p
+      (format "→ %s" label)
+    label))
+
+(defun emagent-chat--record-tool-call-line (id)
+  "Remember the buffer span for tool call ID."
+  (let ((pos (cond
+              (emagent-chat--thought-open-p emagent-chat--thought-marker)
+              (emagent-chat--executing-open-p emagent-chat--executing-marker)
+              (t nil))))
+    (when (and id pos (marker-position pos))
+      (save-excursion
+        (goto-char pos)
+        (beginning-of-line)
+        (let ((start (copy-marker (point) nil))
+              (end (copy-marker (line-end-position) nil)))
+          (puthash id (cons start end) emagent-chat--tool-call-lines))))))
+
+(defun emagent-chat--update-tool-call-line (id label)
+  "Replace the displayed tool-call line for ID with LABEL.
+Return non-nil when a line was updated."
+  (let ((entry (gethash id emagent-chat--tool-call-lines)))
+    (when (and entry
+               (markerp (car entry)) (marker-position (car entry))
+               (markerp (cdr entry)) (marker-position (cdr entry)))
+      (let* ((start (car entry))
+             (end (cdr entry))
+             (display (emagent-chat--tool-call-display label)))
+        (unless (string= (buffer-substring-no-properties start end) display)
+          (delete-region start end)
+          (goto-char start)
+          (insert display)
+          (set-marker end (point))
+          (when emagent-chat--thought-open-p
+            (setq emagent-chat--thought-marker (copy-marker end nil))))
+        t))))
+
+(defun emagent-chat-show-tool-call (id label)
+  "Show or update a tool-call line for ACP toolCallId ID with LABEL."
+  (when (and label (not (string-empty-p label)))
+    (with-current-buffer (current-buffer)
+      (when (emagent-chat--open-response-p)
+        (let ((inhibit-read-only t))
+          (emagent-chat--writable)
+          (unless (and id (emagent-chat--update-tool-call-line id label))
+            (emagent-chat-begin-executing label)
+            (when id
+              (emagent-chat--record-tool-call-line id)))
+          (font-lock-flush))))))
+
 (defun emagent-chat-close-executing ()
   "Fold and close the open Executing block, if any."
   (with-current-buffer (current-buffer)
@@ -1286,7 +1341,8 @@ inserted at `point-max' always land outside it."
         emagent-chat--thought-marker nil
         emagent-chat--executing-open-p nil
         emagent-chat--executing-marker nil
-        emagent-chat--executing-hide-at nil))
+        emagent-chat--executing-hide-at nil)
+  (clrhash emagent-chat--tool-call-lines))
 
 (defun emagent-chat--ensure-response-markers ()
   "Set body markers for the open response when they were lost."

@@ -18,6 +18,7 @@
 (require 'emagent-prompts)
 
 (declare-function emagent-chat-clear-slash-commands "emagent-chat")
+(declare-function emagent-chat-show-tool-call "emagent-chat")
 
 ;; Backward compatibility (aliases before their referents).
 (define-obsolete-variable-alias 'emagent-acp-emacs-native 'emagent-acp-prefer-emacs "0.1.0")
@@ -233,6 +234,9 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :extra-context nil state)
     (puthash :replaying-history nil state)
     (puthash :current-tool nil state)
+    (puthash :tool-call-titles (make-hash-table :test 'equal) state)
+    (puthash :tool-call-inputs (make-hash-table :test 'equal) state)
+    (puthash :tool-call-labels (make-hash-table :test 'equal) state)
     ;; Rendering callbacks — set by the integration layer (emagent.el).
     ;; :cb-chunk fn(text)       — streaming assistant text chunk
     ;; :cb-thought fn(text)     — streaming reasoning text chunk
@@ -983,6 +987,150 @@ Never returns a deny option.  OPTIONS may be a list or vector."
         (map-elt (seq-find #'emagent-acp--permission-option-allow-p options)
                  'optionId))))
 
+(defconst emagent-acp--tool-call-detail-limit 120
+  "Maximum detail length shown in Executing tool-call lines.")
+
+(defun emagent-acp--tool-call-truncate (string)
+  "Return STRING truncated for tool-call display."
+  (when string
+    (if (> (length string) emagent-acp--tool-call-detail-limit)
+        (concat (substring string 0 emagent-acp--tool-call-detail-limit) "…")
+      string)))
+
+(defun emagent-acp--tool-call-data-get (data key)
+  "Return KEY from ACP tool-call DATA alist or hash-table."
+  (cond
+   ((hash-table-p data)
+    (or (gethash key data)
+        (gethash (symbol-name key) data)
+        (gethash (downcase (symbol-name key)) data)))
+   ((listp data)
+    (or (alist-get key data)
+        (cdr (assoc key data))
+        (cdr (assoc (downcase (symbol-name key)) data))))
+   (t nil)))
+
+(defun emagent-acp--tool-call-value-string (value)
+  "Return a display string for tool-call VALUE, or nil."
+  (cond
+   ((stringp value) value)
+   ((numberp value) (number-to-string value))
+   ((null value) nil)
+   (t (let ((text (prin1-to-string value)))
+        (unless (string-empty-p text) text)))))
+
+(defun emagent-acp--tool-call-normalize-data (raw)
+  "Return RAW tool input as an alist/hash-table, parsing JSON strings."
+  (cond
+   ((or (hash-table-p raw) (listp raw)) raw)
+   ((stringp raw)
+    (condition-case nil
+        (json-parse-string raw
+                           :object-type 'alist
+                           :array-type 'list
+                           :null-object nil
+                           :false-object nil)
+      (error nil)))
+   (t nil)))
+
+(defun emagent-acp--tool-call-raw-input-detail (raw)
+  "Extract a concise detail string from tool-call rawInput RAW."
+  (when-let* ((data (emagent-acp--tool-call-normalize-data raw))
+              (key (seq-find (lambda (k)
+                               (emagent-acp--tool-call-value-string
+                                (emagent-acp--tool-call-data-get data k)))
+                             '(url command query q search input text pattern path
+                                   file glob form directory dir name args))))
+    (emagent-acp--tool-call-value-string
+     (emagent-acp--tool-call-data-get data key))))
+
+(defun emagent-acp--tool-call-locations-detail (locations)
+  "Extract a file-path summary from tool-call locations LOCATIONS."
+  (when locations
+    (let ((paths (delq nil
+                       (mapcar (lambda (loc)
+                                 (cond
+                                  ((stringp loc) loc)
+                                  ((listp loc) (map-elt loc 'path))
+                                  ((hash-table-p loc)
+                                   (or (gethash "path" loc) (gethash 'path loc)))))
+                               (append locations nil)))))
+      (when paths
+        (if (= (length paths) 1)
+            (car paths)
+          (format "%s (+%d more)" (car paths) (1- (length paths))))))))
+
+(defun emagent-acp--tool-call-content-detail (content)
+  "Extract a concise detail string from tool-call content CONTENT."
+  (when content
+    (let* ((item (cond
+                  ((vectorp content) (and (> (length content) 0) (aref content 0)))
+                  ((listp content) (car content))
+                  (t nil)))
+           (text (or (map-nested-elt item '(content text))
+                     (map-nested-elt item '(text))
+                     (and (stringp item) item))))
+      (when (and (stringp text) (not (string-empty-p (string-trim text))))
+        (string-trim text)))))
+
+(defun emagent-acp--tool-call-detail (update)
+  "Return a concise detail string from ACP tool-call UPDATE, or nil."
+  (or (let ((subtitle (map-elt update 'subtitle)))
+        (when (and (stringp subtitle) (not (string-empty-p subtitle)))
+          subtitle))
+      (emagent-acp--tool-call-locations-detail (map-elt update 'locations))
+      (emagent-acp--tool-call-raw-input-detail (map-elt update 'rawInput))
+      (emagent-acp--tool-call-content-detail (map-elt update 'content))))
+
+(defun emagent-acp--tool-call-label (update)
+  "Return a display label for ACP tool-call UPDATE."
+  (let* ((title (string-trim (or (map-elt update 'title) "tool")))
+         (detail (emagent-acp--tool-call-detail update)))
+    (cond
+     ((and detail (not (string-empty-p detail))
+           (not (string-match-p (regexp-quote detail) title)))
+      (format "%s: %s" title (emagent-acp--tool-call-truncate detail)))
+     ((and detail (not (string-empty-p detail))) detail)
+     (t title))))
+
+(defun emagent-acp--merged-tool-call-update (state update)
+  "Return UPDATE merged with stored title/rawInput for STATE."
+  (let* ((id (map-elt update 'toolCallId))
+         (titles (map-elt state :tool-call-titles))
+         (inputs (map-elt state :tool-call-inputs))
+         (stored-title (and id titles (gethash id titles)))
+         (stored-input (and id inputs (gethash id inputs)))
+         (title (or (map-elt update 'title) stored-title))
+         (raw-input (or (map-elt update 'rawInput) stored-input))
+         (merged update))
+    (when (and id title)
+      (puthash id title titles))
+    (when (and id raw-input)
+      (puthash id raw-input inputs))
+    (when title
+      (setq merged (append merged (list (cons 'title title)))))
+    (when raw-input
+      (setq merged (append merged (list (cons 'rawInput raw-input)))))
+    merged))
+
+(defun emagent-acp--on-tool-call (state update)
+  "Display or refresh a tool-call line from ACP UPDATE."
+  (let* ((id (map-elt update 'toolCallId))
+         (merged (emagent-acp--merged-tool-call-update state update))
+         (label (emagent-acp--tool-call-label merged))
+         (labels (map-elt state :tool-call-labels))
+         (prev (and id labels (gethash id labels))))
+    (when (and label (not (string-empty-p label))
+               (or (null prev) (not (string= prev label))))
+      (when id (puthash id label labels))
+      (emagent-acp--notify-user state (format "emagent: tool %s" label))
+      (map-put! state :current-tool label)
+      (emagent-acp--refresh-mode-line state)
+      (emagent-acp--schedule-prompt-watchdog state)
+      (when (buffer-live-p (emagent-acp--chat-buffer state))
+        (with-current-buffer (emagent-acp--chat-buffer state)
+          (emagent-chat-show-tool-call id label))))))
+
 (cl-defun emagent-acp--on-permission (&key state emagent-acp-request)
   (let* ((options (map-nested-elt emagent-acp-request '(params options)))
          (title (or (map-nested-elt emagent-acp-request '(params toolCall title))
@@ -1043,6 +1191,11 @@ Never returns a deny option.  OPTIONS may be a list or vector."
                            (or title
                                (map-nested-elt emagent-acp-notification '(params update toolCallId))
                                "running")))
+      ("tool_call_update"
+       (emagent-acp--trace "recv tool_call_update %s"
+                           (or title
+                               (map-nested-elt emagent-acp-notification '(params update toolCallId))
+                               "running")))
       (_
        (emagent-acp--trace "recv %s" (or update-type "session/update"))))))
 
@@ -1066,19 +1219,9 @@ Never returns a deny option.  OPTIONS may be a list or vector."
          (let ((text (or (map-nested-elt emagent-acp-notification '(params update content text)) "")))
            (emagent-acp--thought-chunk state text)))
         ("tool_call"
-         (let* ((update (map-nested-elt emagent-acp-notification '(params update)))
-                (title (or (map-elt update 'title) "tool"))
-                (subtitle (map-elt update 'subtitle))
-                (label (if (and subtitle (not (string-empty-p subtitle)))
-                           (format "%s: %s" title subtitle)
-                         title)))
-           (emagent-acp--notify-user state (format "emagent: tool %s" title))
-           (map-put! state :current-tool title)
-           (emagent-acp--refresh-mode-line state)
-           (emagent-acp--schedule-prompt-watchdog state)
-           (when (buffer-live-p (emagent-acp--chat-buffer state))
-             (with-current-buffer (emagent-acp--chat-buffer state)
-               (emagent-chat-begin-executing label)))))
+         (emagent-acp--on-tool-call state (map-nested-elt emagent-acp-notification '(params update))))
+        ("tool_call_update"
+         (emagent-acp--on-tool-call state (map-nested-elt emagent-acp-notification '(params update))))
         ("config_option_update"
          (emagent-acp--save-config-options
           state
@@ -1349,6 +1492,9 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
       (map-put! state :thought-text "")
       (map-put! state :prompt-finalized nil)
       (map-put! state :prompt-finishing nil)
+      (clrhash (map-elt state :tool-call-titles))
+      (clrhash (map-elt state :tool-call-inputs))
+      (clrhash (map-elt state :tool-call-labels))
       (emagent-acp--cancel-prompt-render state)
       (emagent-acp--clear-thought-buffer state)
       (emagent-acp--schedule-prompt-watchdog state)
