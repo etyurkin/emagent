@@ -44,14 +44,17 @@ accepted at this path."
   (let ((root (emagent-trust--json-read-file path)))
     (unless (or (null root) (json-alist-p root))
       (error "Expected JSON object at top level: %s" path))
-    (let ((projects (alist-get "projects" root nil nil #'equal)))
+    (unless root (setq root '()))
+    (let* ((entry (assoc "projects" root #'equal))
+           (projects nil))
+      (unless entry
+        (setq entry (cons "projects" '()))
+        (setq root (cons entry root)))
+      (setq projects (cdr entry))
       (when (and projects (not (json-alist-p projects)))
         (user-error
          "Key `projects' must be a JSON object in %s (repair the file, then retry)"
          path))
-      (unless projects
-        (setf (alist-get "projects" root nil nil #'equal)
-              (setq projects '())))
       (cons root projects))))
 
 (defun emagent-trust-claude-trusted-p (directory)
@@ -82,15 +85,18 @@ Preserves other keys on the same `projects' entry (e.g. fixes explicit false)."
          (path emagent-trust-claude-json-file)
          (pair (emagent-trust-claude--projects-table path))
          (root (car pair))
-         (projects (cdr pair)))
+         (entry (assoc "projects" root #'equal))
+         (projects (cdr entry)))
     (let ((cell (alist-get dir projects nil nil #'equal)))
       (cond
        ((and cell (json-alist-p cell))
         (setf (alist-get "hasTrustDialogAccepted" cell nil nil #'equal) t))
        (t
-        ;; Missing key, JSON null, or a non-object (e.g. a path alias array).
         (setf (alist-get dir projects nil nil #'equal)
               (list (cons "hasTrustDialogAccepted" t))))))
+    ;; setf on an empty `projects' alist can replace the local list without
+    ;; updating the cons on ROOT; sync the entry before writing.
+    (setcdr entry projects)
     (emagent-trust--json-write-file root path)))
 
 (provide 'emagent-trust-claude)

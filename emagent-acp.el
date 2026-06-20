@@ -452,7 +452,9 @@ buffer signals \"Selecting deleted buffer\"."
 (defun emagent-acp--refresh-mode-line (state)
   (when-let ((buffer (emagent-acp--chat-buffer state)))
     (with-current-buffer buffer
-      (force-mode-line-update t))))
+      (if (fboundp 'emagent-chat--refresh-mode-line)
+          (emagent-chat--refresh-mode-line)
+        (force-mode-line-update t)))))
 
 (defun emagent-acp--usage-state (state)
   (or (map-elt state :usage)
