@@ -128,7 +128,8 @@ the user answers \"allow all\" to a tool confirmation.")
   "Slash commands for this buffer as plists (:name :description :hint).
 
 Populated from the ACP agent via =available_commands_update= after the session
-connects (Claude Code plugins, skills, and built-in slash commands).")
+connects.  Cursor sessions also seed documented built-ins and custom commands
+from ~/.cursor/commands and .cursor/commands/.")
 
 (defcustom emagent-chat-notify-slash-commands t
   "When non-nil, show a message after the agent publishes slash commands."
@@ -749,6 +750,18 @@ check is skipped so the user can re-evaluate any previous prompt."
         (or (emagent-chat--send-bounds-backward point0 zone-start)
             (user-error "No sendable text at point")))))))
 
+(defun emagent-chat--slash-command-name (name)
+  "Return slash command NAME without a leading \"/\"."
+  (if (and (stringp name) (not (string-empty-p name)) (string-prefix-p "/" name))
+      (substring name 1)
+    name))
+
+(defun emagent-chat--slash-command-plist (name description &optional hint)
+  "Return a slash-command plist for NAME."
+  `((name . ,(emagent-chat--slash-command-name name))
+    (description . ,(or description ""))
+    (hint . ,(or hint ""))))
+
 (defun emagent-chat--normalize-slash-commands (commands)
   "Normalize COMMANDS from ACP JSON into slash-command plists."
   (let ((items (cond
@@ -756,23 +769,115 @@ check is skipped so the user can re-evaluate any previous prompt."
                 ((listp commands) commands)
                 (t nil))))
     (mapcar (lambda (cmd)
-              `((name . ,(map-elt cmd 'name))
-                (description . ,(or (map-elt cmd 'description) ""))
-                (hint . ,(or (map-nested-elt cmd '(input hint)) ""))))
+              (emagent-chat--slash-command-plist
+               (map-elt cmd 'name)
+               (map-elt cmd 'description)
+               (map-nested-elt cmd '(input hint))))
             items)))
+
+(defun emagent-chat--merge-slash-commands (base extra)
+  "Merge EXTRA into BASE by command name; EXTRA overrides BASE."
+  (let ((table (make-hash-table :test 'equal)))
+    (dolist (cmd base)
+      (puthash (map-elt cmd 'name) cmd table))
+    (dolist (cmd extra)
+      (puthash (map-elt cmd 'name) cmd table))
+    (let (result)
+      (maphash (lambda (_ cmd) (push cmd result)) table)
+      (sort result (lambda (a b) (string< (map-elt a 'name) (map-elt b 'name)))))))
+
+(defun emagent-chat--bare-slash-command-p (text)
+  "Return non-nil when TEXT is a single-line slash command."
+  (let ((trimmed (string-trim text)))
+    (and (not (string-empty-p trimmed))
+         (string-prefix-p "/" trimmed)
+         (not (string-match-p "\n" trimmed))
+         (let* ((body (substring trimmed 1))
+                (space (cl-position-if (lambda (c) (memq c '(?\s ?\t))) body))
+                (cmd (if space (substring body 0 space) body)))
+           (and (> (length cmd) 0)
+                (string-match-p "\\`[-a-z0-9:]+\\'" cmd))))))
+
+(defun emagent-chat--compress-command-p (text)
+  "Return non-nil when TEXT is a conversation compression slash command."
+  (let ((trimmed (string-trim text)))
+    (when (string-prefix-p "/" trimmed)
+      (let* ((body (substring trimmed 1))
+             (space (cl-position-if (lambda (c) (memq c '(?\s ?\t))) body))
+             (cmd (if space (substring body 0 space) body)))
+        (member cmd '("compress" "compact" "summarize"))))))
+
+(defconst emagent-chat--compress-history-limit 200000
+  "Maximum conversation chars included in a /compress request.")
+
+(defun emagent-chat--compress-boundary ()
+  "Return point at the user heading before an open response, or nil."
+  (save-excursion
+    (when-let ((resp (emagent-chat--find-open-response-begin)))
+      (goto-char resp)
+      (when (re-search-backward (emagent-chat--user-heading-re) nil t)
+        (line-beginning-position)))))
+
+(defun emagent-chat--conversation-history-text ()
+  "Return prior conversation text for /compress, or \"\"."
+  (save-excursion
+    (let* ((zone (emagent-chat--metadata-end))
+           (end (or (emagent-chat--compress-boundary) (point))))
+      (when (and end (> end zone))
+        (string-trim (buffer-substring-no-properties zone end))))))
+
+(defun emagent-chat--compress-prompt-text (history)
+  "Return a summarization prompt for compression using HISTORY."
+  (let ((body (if (> (length history) emagent-chat--compress-history-limit)
+                  (concat (substring history 0 emagent-chat--compress-history-limit)
+                          "\n\n[...truncated for compression request...]")
+                history)))
+    (format "Summarize the conversation below for context compression. Preserve key decisions, file paths, errors, and open tasks. Output only the summary.\n\n<conversation>\n%s\n</conversation>"
+            body)))
+
+(defun emagent-chat-apply-compression (summary-text)
+  "Replace conversation history with compressed SUMMARY-TEXT."
+  (let ((inhibit-read-only t)
+        (summary (string-trim (or summary-text ""))))
+    (emagent-chat--with-stable-view
+     (emagent-chat--writable)
+     (let ((zone-start (emagent-chat--metadata-end)))
+       (goto-char zone-start)
+       (delete-region zone-start (point-max))
+       (unless (string-empty-p summary)
+         (insert (format "* emagent> [compressed]\n%s\n\n" summary)))
+       (insert (emagent-chat--user-heading-prefix))
+       (emagent-chat--reset-response-state)
+       (emagent-chat--sync-user-zone-marker)
+       (font-lock-flush)))))
 
 (defun emagent-chat-clear-slash-commands ()
   "Clear slash commands until the agent publishes a fresh list."
   (setq emagent-chat-slash-commands nil))
 
+(defun emagent-chat-seed-cursor-slash-commands ()
+  "Merge Cursor built-in and custom slash commands into the buffer list."
+  (when (and (eq emagent-chat-provider 'cursor)
+             (fboundp 'emagent-cursor-slash-commands))
+    (setq emagent-chat-slash-commands
+          (emagent-chat--merge-slash-commands
+           (emagent-cursor-slash-commands (emagent-chat-project-directory))
+           emagent-chat-slash-commands))))
+
 (defun emagent-chat-set-slash-commands (commands)
-  "Replace `emagent-chat-slash-commands' with normalized COMMANDS from the agent."
-  (setq emagent-chat-slash-commands
-        (emagent-chat--normalize-slash-commands commands))
-  (when (and emagent-chat-notify-slash-commands
-             emagent-chat-slash-commands)
-    (emagent-log "%d slash commands from agent"
-                 (length emagent-chat-slash-commands))))
+  "Merge normalized COMMANDS from the agent into `emagent-chat-slash-commands'."
+  (let ((incoming (emagent-chat--normalize-slash-commands commands)))
+    (setq emagent-chat-slash-commands
+          (if (and (eq emagent-chat-provider 'cursor)
+                   (fboundp 'emagent-cursor-slash-commands))
+              (emagent-chat--merge-slash-commands
+               (emagent-cursor-slash-commands (emagent-chat-project-directory))
+               incoming)
+            incoming))
+    (when (and emagent-chat-notify-slash-commands
+               emagent-chat-slash-commands)
+      (emagent-log "%d slash commands from agent"
+                   (length emagent-chat-slash-commands)))))
 
 (defun emagent-chat--command-needle-base (needle)
   "Return NEEDLE with a trailing colon removed, for skill-name matching."
@@ -812,7 +917,7 @@ check is skipped so the user can re-evaluate any previous prompt."
               (cons start end))))))))
 
 (defun emagent-chat-slash-command-completion-at-point ()
-  "Complete Claude Code slash commands (plugin skills) at point."
+  "Complete agent slash commands at point."
   (when-let* ((bounds (emagent-chat--slash-token-bounds))
               (commands emagent-chat-slash-commands)
               (slash-start (car bounds))
@@ -869,8 +974,9 @@ check is skipped so the user can re-evaluate any previous prompt."
       (when (window-live-p win)
         (if (plist-get view :at-bottom)
             (with-selected-window win
-              (goto-char (point-max))
-              (recenter -1))
+              (save-excursion
+                (goto-char (point-max))
+                (recenter -1)))
           (set-window-start win (plist-get view :start) t))))))
 
 (defmacro emagent-chat--with-stable-view (&rest body)
@@ -1433,8 +1539,15 @@ folding the inner region only so incomplete parses never break the buffer."
      (t
       (emagent-chat-begin-thought)))))
 
-(defun emagent-chat--annotate-tool-in-reasoning (label)
+(defun emagent-chat--finish-tool-line-in-reasoning ()
+  "Leave `emagent-chat--thought-marker' ready for streamed reasoning text."
+  (unless (bolp)
+    (insert "\n"))
+  (setq emagent-chat--thought-marker (point-marker)))
+
+(defun emagent-chat--annotate-tool-in-reasoning (label &optional id)
   "Append LABEL as a tool-use line in the open Reasoning block.
+When ID is non-nil, remember the line span for later in-place updates.
 Return non-nil when the annotation was inserted."
   (when (and emagent-chat--thought-open-p
              emagent-chat--thought-marker
@@ -1443,11 +1556,15 @@ Return non-nil when the annotation was inserted."
       (goto-char emagent-chat--thought-marker)
       (unless (bolp) (insert "\n"))
       (insert (format "→ %s" label))
-      (setq emagent-chat--thought-marker (point-marker)))
+      (when id
+        (let ((start (copy-marker (line-beginning-position) nil))
+              (end (copy-marker (line-end-position) nil)))
+          (puthash id (cons start end) emagent-chat--tool-call-lines)))
+      (emagent-chat--finish-tool-line-in-reasoning))
     (font-lock-flush)
     t))
 
-(defun emagent-chat-begin-executing (label)
+(defun emagent-chat-begin-executing (label &optional id)
   "Record tool LABEL in the open response, preferring the Reasoning block.
 
 While the agent is busy, tool calls are annotated inside Reasoning (opened
@@ -1460,27 +1577,13 @@ alongside it."
           (emagent-chat--writable)
           (emagent-chat--ensure-response-markers)
           (emagent-chat--resume-reasoning-for-tool-call)
-          (emagent-chat--annotate-tool-in-reasoning label))))))
+          (emagent-chat--annotate-tool-in-reasoning label id))))))
 
 (defun emagent-chat--tool-call-display (label)
   "Return LABEL formatted for the current tool-call display context."
   (if emagent-chat--thought-open-p
       (format "→ %s" label)
     label))
-
-(defun emagent-chat--record-tool-call-line (id)
-  "Remember the buffer span for tool call ID."
-  (let ((pos (cond
-              (emagent-chat--thought-open-p emagent-chat--thought-marker)
-              (emagent-chat--executing-open-p emagent-chat--executing-marker)
-              (t nil))))
-    (when (and id pos (marker-position pos))
-      (save-excursion
-        (goto-char pos)
-        (beginning-of-line)
-        (let ((start (copy-marker (point) nil))
-              (end (copy-marker (line-end-position) nil)))
-          (puthash id (cons start end) emagent-chat--tool-call-lines))))))
 
 (defun emagent-chat--update-tool-call-line (id label)
   "Replace the displayed tool-call line for ID with LABEL.
@@ -1499,22 +1602,21 @@ Return non-nil when a line was updated."
             (insert display)
             (set-marker end (point))
             (when emagent-chat--thought-open-p
-              (setq emagent-chat--thought-marker (copy-marker end nil)))))
+              (goto-char end)
+              (emagent-chat--finish-tool-line-in-reasoning))))
         t))))
 
 (defun emagent-chat-show-tool-call (id label)
   "Show or update a tool-call line for ACP toolCallId ID with LABEL."
-  (when (and label (not (string-empty-p label)))
+  (when (and label (not (string-empty-p label))
+               (emagent-chat--open-response-p))
     (emagent-chat--with-stable-view
       (with-current-buffer (current-buffer)
-        (when (emagent-chat--open-response-p)
-          (let ((inhibit-read-only t))
-            (emagent-chat--writable)
-            (unless (and id (emagent-chat--update-tool-call-line id label))
-              (emagent-chat-begin-executing label)
-              (when id
-                (emagent-chat--record-tool-call-line id)))
-            (font-lock-flush)))))))
+        (let ((inhibit-read-only t))
+          (emagent-chat--writable)
+          (unless (and id (emagent-chat--update-tool-call-line id label))
+            (emagent-chat-begin-executing label id))
+          (font-lock-flush))))))
 
 (defun emagent-chat-append-assistant (text)
   "Append TEXT to the current emagent response section."
@@ -1897,10 +1999,28 @@ the prompt text."
           emagent-chat--mode-line-tail (cdr parts)
           emagent-chat--mode-line-cache (concat (car parts) (cdr parts)))))
 
+(defvar-local emagent-chat--mode-line-refresh-timer nil
+  "One-shot idle timer that coalesces mode-line recomputes for this buffer.")
+
 (defun emagent-chat--refresh-mode-line ()
-  "Recompute and invalidate the mode line in the current buffer."
+  "Recompute and invalidate the mode line in the current buffer immediately."
+  (when emagent-chat--mode-line-refresh-timer
+    (cancel-timer emagent-chat--mode-line-refresh-timer)
+    (setq emagent-chat--mode-line-refresh-timer nil))
   (emagent-chat--mode-line-recompute)
   (force-mode-line-update t))
+
+(defun emagent-chat--refresh-mode-line-soon ()
+  "Queue a single idle mode-line recompute; drop duplicate requests."
+  (unless emagent-chat--mode-line-refresh-timer
+    (setq emagent-chat--mode-line-refresh-timer
+          (run-with-idle-timer
+           0 nil
+           (lambda ()
+             (setq emagent-chat--mode-line-refresh-timer nil)
+             (emagent-chat--mode-line-recompute)
+             (when (get-buffer-window (current-buffer) 'visible)
+               (force-mode-line-update t)))))))
 
 (defun emagent-chat--mode-line-strings ()
   "Return (HEAD . TAIL) strings for the emagent mode line."

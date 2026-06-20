@@ -18,7 +18,16 @@
 (require 'emagent-prompts)
 
 (declare-function emagent-chat-clear-slash-commands "emagent-chat")
+(declare-function emagent-chat-seed-cursor-slash-commands "emagent-chat")
+(declare-function emagent-chat--bare-slash-command-p "emagent-chat")
+(declare-function emagent-chat--compress-command-p "emagent-chat")
+(declare-function emagent-chat--conversation-history-text "emagent-chat")
+(declare-function emagent-chat--compress-prompt-text "emagent-chat")
+(declare-function emagent-chat-apply-compression "emagent-chat")
 (declare-function emagent-chat-show-tool-call "emagent-chat")
+(declare-function emagent-chat--refresh-mode-line-soon "emagent-chat")
+(declare-function emagent-cursor-enrich-tool-call-update "emagent-cursor")
+(declare-function emagent-cursor-normalize-slash-prompt "emagent-cursor")
 
 ;; Backward compatibility (aliases before their referents).
 (define-obsolete-variable-alias 'emagent-acp-emacs-native 'emagent-acp-prefer-emacs "0.1.0")
@@ -262,12 +271,14 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :finish-timer nil state)
     (puthash :prompt-watchdog nil state)
     (puthash :extra-context nil state)
+    (puthash :compress-pending nil state)
     (puthash :replaying-history nil state)
     (puthash :current-tool nil state)
     (puthash :current-tool-kind nil state)
     (puthash :tool-call-titles (make-hash-table :test 'equal) state)
     (puthash :tool-call-inputs (make-hash-table :test 'equal) state)
     (puthash :tool-call-labels (make-hash-table :test 'equal) state)
+    (puthash :cursor-tool-enrich-attempts (make-hash-table :test 'equal) state)
     ;; Rendering callbacks — set by the integration layer (emagent.el).
     ;; :cb-chunk fn(text)       — streaming assistant text chunk
     ;; :cb-thought fn(text)     — streaming reasoning text chunk
@@ -452,9 +463,11 @@ buffer signals \"Selecting deleted buffer\"."
 (defun emagent-acp--refresh-mode-line (state)
   (when-let ((buffer (emagent-acp--chat-buffer state)))
     (with-current-buffer buffer
-      (if (fboundp 'emagent-chat--refresh-mode-line)
-          (emagent-chat--refresh-mode-line)
-        (force-mode-line-update t)))))
+      (if (fboundp 'emagent-chat--refresh-mode-line-soon)
+          (emagent-chat--refresh-mode-line-soon)
+        (if (fboundp 'emagent-chat--refresh-mode-line)
+            (emagent-chat--refresh-mode-line)
+          (force-mode-line-update t))))))
 
 (defun emagent-acp--usage-state (state)
   (or (map-elt state :usage)
@@ -824,6 +837,7 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
   "Return non-nil when agent chunks may update the chat buffer live."
   (and emagent-acp-stream-to-buffer
        (map-elt state :busy)
+       (not (map-elt state :compress-pending))
        (not (map-elt state :prompt-finalized))
        (not (map-elt state :prompt-finishing))))
 
@@ -831,6 +845,7 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
   "Return non-nil when reasoning may stream into the chat buffer live."
   (and (memq emagent-acp-thought-progress '(buffer both))
        (map-elt state :busy)
+       (not (map-elt state :compress-pending))
        (not (map-elt state :prompt-finalized))
        (not (map-elt state :prompt-finishing))))
 
@@ -859,17 +874,24 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
   "Render accumulated prompt text into the chat buffer for STATE."
   (when (map-elt state :prompt-finishing)
     (when-let ((buffer (emagent-acp--chat-buffer state)))
-      (condition-case err
-          (with-current-buffer buffer
-            (when-let ((cb (map-elt state :cb-finish)))
-              (funcall cb (map-elt state :assistant-text)
-                       (map-elt state :thought-text))))
-        (error
-         (emagent-log "emagent: finish failed: %s" (error-message-string err))
-         (with-current-buffer buffer
-           (when-let ((cb (map-elt state :cb-fail)))
-             (funcall cb (format "response finalize failed: %s"
-                                 (error-message-string err))))))))
+      (if (map-elt state :compress-pending)
+          (let ((summary (map-elt state :assistant-text)))
+            (map-put! state :compress-pending nil)
+            (with-current-buffer buffer
+              (emagent-chat-apply-compression summary))
+            (emagent-log "compressed session (%d chars)" (length (or summary "")))
+            (emagent-acp--new-session :state state))
+        (condition-case err
+            (with-current-buffer buffer
+              (when-let ((cb (map-elt state :cb-finish)))
+                (funcall cb (map-elt state :assistant-text)
+                         (map-elt state :thought-text))))
+          (error
+           (emagent-log "emagent: finish failed: %s" (error-message-string err))
+           (with-current-buffer buffer
+             (when-let ((cb (map-elt state :cb-fail)))
+               (funcall cb (format "response finalize failed: %s"
+                                   (error-message-string err)))))))))
     (map-put! state :prompt-finishing nil)
     (map-put! state :prompt-finalized t)
     (emagent-acp--refresh-mode-line state)))
@@ -988,6 +1010,7 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
     (map-put! state :prompt-finishing nil)
     (map-put! state :prompt-finalized nil)
     (map-put! state :assistant-text "")
+    (map-put! state :compress-pending nil)
     (emagent-acp--trace "prompt aborted: %s" message)
     (emagent-acp--flush-thought-buffer state)
     (when-let ((buffer (emagent-acp--chat-buffer state)))
@@ -1142,6 +1165,54 @@ Never returns a deny option.  OPTIONS may be a list or vector."
 (defconst emagent-acp--tool-call-detail-limit 120
   "Maximum detail length shown in Executing tool-call lines.")
 
+(defun emagent-acp--update-put (update key value)
+  "Return UPDATE alist with KEY bound to VALUE, replacing any prior binding."
+  (cons (cons key value) (assoc-delete-all key update)))
+
+(defun emagent-acp--cursor-agent-p (state)
+  "Return non-nil when STATE's agent is Cursor's cursor-agent CLI."
+  (when-let ((launch (emagent-acp--agent-launch-string state)))
+    (string-match-p "cursor-agent" launch)))
+
+(defun emagent-acp--tool-call-label-has-detail-p (label)
+  "Return non-nil when LABEL includes a detail suffix after the title."
+  (and label (string-match-p ": " label)))
+
+(defun emagent-acp--tool-call-raw-input-empty-p (raw)
+  "Return non-nil when tool-call rawInput carries no usable parameters."
+  (or (null raw)
+      (and (stringp raw)
+           (let ((trimmed (string-trim raw)))
+             (or (string-empty-p trimmed)
+                 (member trimmed '("{}" "[]" "null"))))
+      (and (listp raw) (null raw))
+      (and (hash-table-p raw) (zerop (hash-table-count raw))))))
+
+(defun emagent-acp--maybe-schedule-cursor-tool-enrich (state update label)
+  "Retry tool-call display when Cursor store.db has not flushed args yet."
+  (when (and (fboundp 'emagent-cursor-enrich-tool-call-update)
+             (boundp 'emagent-cursor--tool-enrich-max-attempts)
+             (boundp 'emagent-cursor--tool-enrich-base-delay)
+             (emagent-acp--cursor-agent-p state)
+             (map-elt state :session-id)
+             (map-elt update 'toolCallId)
+             (not (emagent-acp--tool-call-label-has-detail-p label)))
+    (let* ((id (map-elt update 'toolCallId))
+           (attempts-table (map-elt state :cursor-tool-enrich-attempts))
+           (attempts (gethash id attempts-table 0)))
+      (when (< attempts emagent-cursor--tool-enrich-max-attempts)
+        (puthash id (1+ attempts) attempts-table)
+        (run-with-idle-timer
+         (if (zerop attempts) 0 (* emagent-cursor--tool-enrich-base-delay (expt 2 attempts)))
+         nil
+         (lambda ()
+           (when (map-elt state :session-id)
+             (let* ((merged (emagent-acp--merged-tool-call-update state update))
+                    (enriched (emagent-cursor-enrich-tool-call-update
+                               (map-elt state :session-id) merged)))
+               (unless (equal enriched merged)
+                 (emagent-acp--on-tool-call state enriched))))))))))
+
 (defun emagent-acp--tool-call-truncate (string)
   "Return STRING truncated for tool-call display."
   (when string
@@ -1158,7 +1229,9 @@ Never returns a deny option.  OPTIONS may be a list or vector."
         (gethash (downcase (symbol-name key)) data)))
    ((listp data)
     (or (alist-get key data)
+        (alist-get (symbol-name key) data)
         (cdr (assoc key data))
+        (cdr (assoc (symbol-name key) data))
         (cdr (assoc (downcase (symbol-name key)) data))))
    (t nil)))
 
@@ -1185,6 +1258,29 @@ Never returns a deny option.  OPTIONS may be a list or vector."
       (error nil)))
    (t nil)))
 
+(defun emagent-acp--tool-call-edits-detail (raw)
+  "Extract a file-path summary from tool-call edit lists in RAW."
+  (when-let ((data (emagent-acp--tool-call-normalize-data raw))
+             (edits (emagent-acp--tool-call-data-get data 'edits)))
+    (let* ((items (cond
+                   ((vectorp edits) (append edits nil))
+                   ((listp edits) edits)
+                   (t nil)))
+           (paths
+            (delq nil
+                  (mapcar
+                   (lambda (item)
+                     (emagent-acp--tool-call-value-string
+                      (or (emagent-acp--tool-call-data-get item 'path)
+                          (emagent-acp--tool-call-data-get item 'file_path)
+                          (emagent-acp--tool-call-data-get item 'target_file)
+                          (emagent-acp--tool-call-data-get item 'relativeWorkspacePath))))
+                   items))))
+      (when paths
+        (if (= (length paths) 1)
+            (car paths)
+          (format "%s (+%d more)" (car paths) (1- (length paths))))))))
+
 (defun emagent-acp--tool-call-raw-input-detail (raw)
   "Extract a concise detail string from tool-call rawInput RAW."
   (when-let* ((data (emagent-acp--tool-call-normalize-data raw))
@@ -1192,7 +1288,9 @@ Never returns a deny option.  OPTIONS may be a list or vector."
                                (emagent-acp--tool-call-value-string
                                 (emagent-acp--tool-call-data-get data k)))
                              '(url command query q search input text pattern path
-                                   file glob form directory dir name args))))
+                                   file file_path target_file filename
+                                   relativeWorkspacePath glob form
+                                   directory dir name args description))))
     (emagent-acp--tool-call-value-string
      (emagent-acp--tool-call-data-get data key))))
 
@@ -1232,6 +1330,7 @@ Never returns a deny option.  OPTIONS may be a list or vector."
           subtitle))
       (emagent-acp--tool-call-locations-detail (map-elt update 'locations))
       (emagent-acp--tool-call-raw-input-detail (map-elt update 'rawInput))
+      (emagent-acp--tool-call-edits-detail (map-elt update 'rawInput))
       (emagent-acp--tool-call-content-detail (map-elt update 'content))))
 
 (defun emagent-acp--tool-call-label (update)
@@ -1253,46 +1352,56 @@ Never returns a deny option.  OPTIONS may be a list or vector."
          (stored-title (and id titles (gethash id titles)))
          (stored-input (and id inputs (gethash id inputs)))
          (title (or (map-elt update 'title) stored-title))
-         (raw-input (or (map-elt update 'rawInput) stored-input))
+         (raw-input (or (map-elt update 'rawInput)
+                        (map-elt update 'arguments)
+                        stored-input))
          (merged update))
     (when (and id title)
       (puthash id title titles))
     (when (and id raw-input)
       (puthash id raw-input inputs))
     (when title
-      (setq merged (append merged (list (cons 'title title)))))
-    (when raw-input
-      (setq merged (append merged (list (cons 'rawInput raw-input)))))
+      (setq merged (emagent-acp--update-put merged 'title title)))
+    (when (and raw-input (not (emagent-acp--tool-call-raw-input-empty-p raw-input)))
+      (setq merged (emagent-acp--update-put merged 'rawInput raw-input)))
+    (when (and id (map-elt merged 'rawInput))
+      (puthash id (map-elt merged 'rawInput) inputs))
     merged))
 
 (defun emagent-acp--on-tool-call (state update)
   "Display or refresh a tool-call line from ACP UPDATE."
-  (let* ((id     (map-elt update 'toolCallId))
-         (status (map-elt update 'status))
-         (kind   (map-elt update 'kind))
-         (merged (emagent-acp--merged-tool-call-update state update))
-         (label  (emagent-acp--tool-call-label merged))
-         (labels (map-elt state :tool-call-labels))
-         (prev   (and id labels (gethash id labels))))
-    (when (and label (not (string-empty-p label)))
-      (emagent-acp--detect-external-refusal-in-text state label))
-    (if (member status '("completed" "failed"))
-        ;; Tool finished — clear active-tool state so mode line returns to Thinking.
-        (progn
-          (map-put! state :current-tool nil)
-          (map-put! state :current-tool-kind nil)
-          (emagent-acp--refresh-mode-line state))
-      (when (and label (not (string-empty-p label))
-                 (or (null prev) (not (string= prev label))))
+  (unless (map-elt state :replaying-history)
+    (let* ((id (map-elt update 'toolCallId))
+           (status (map-elt update 'status))
+           (kind (map-elt update 'kind))
+           (merged (emagent-acp--merged-tool-call-update state update))
+           (label (emagent-acp--tool-call-label merged))
+           (labels (map-elt state :tool-call-labels))
+           (prev (and id labels (gethash id labels)))
+           (completed (member status '("completed" "failed")))
+           (label-changed (and label (not (string-empty-p label))
+                               (or (null prev) (not (string= prev label))))))
+      (when label
+        (emagent-acp--detect-external-refusal-in-text state label))
+      (when label-changed
         (when id (puthash id label labels))
-        (emagent-acp--notify-user state (format "emagent: tool %s" label))
-        (map-put! state :current-tool label)
-        (when kind (map-put! state :current-tool-kind kind))
-        (emagent-acp--refresh-mode-line state)
-        (emagent-acp--schedule-prompt-watchdog state)
+        (unless completed
+          (emagent-acp--notify-user state (format "emagent: tool %s" label)))
         (when-let ((buf (emagent-acp--chat-buffer state)))
           (with-current-buffer buf
-            (emagent-chat-show-tool-call id label)))))))
+            (emagent-chat-show-tool-call id label))))
+      (if completed
+          (progn
+            (map-put! state :current-tool nil)
+            (map-put! state :current-tool-kind nil))
+        (when label-changed
+          (map-put! state :current-tool label)
+          (when kind (map-put! state :current-tool-kind kind))
+          (emagent-acp--schedule-prompt-watchdog state)))
+      (when (or label-changed completed)
+        (emagent-acp--refresh-mode-line state))
+      (when (and label (not (emagent-acp--tool-call-label-has-detail-p label)))
+        (emagent-acp--maybe-schedule-cursor-tool-enrich state merged label)))))
 
 (cl-defun emagent-acp--handle-one-permission (&key state emagent-acp-request)
   "Process a single queued permission request synchronously."
@@ -1531,9 +1640,11 @@ grants full plan access (including Auto model) to this ACP session."
   (emagent-acp--progress state (if resumed "resumed" "connected"))
   (when-let ((buffer (emagent-acp--chat-buffer state)))
     (with-current-buffer buffer
-      (when (and (eq emagent-chat-provider 'claude)
-                 (null emagent-chat-slash-commands))
-        (emagent-log "loading slash commands from agent…"))))
+      (pcase emagent-chat-provider
+        ('cursor (emagent-chat-seed-cursor-slash-commands))
+        ('claude
+         (when (null emagent-chat-slash-commands)
+           (emagent-log "loading slash commands from agent…"))))))
   (emagent-acp--start-rss-timer state)
   (emagent-acp--reveal-buffer state)
   (when on-ready (funcall on-ready)))
@@ -1667,6 +1778,21 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
     (cons (string-trim (apply #'concat (nreverse parts)))
           (nreverse images))))
 
+(defun emagent-acp--abort-compress-empty (state)
+  "Close an empty /compress request with an error in the chat buffer."
+  (emagent-acp--clear-prompt-watchdog state)
+  (emagent-acp--cancel-prompt-render state)
+  (map-put! state :busy nil)
+  (map-put! state :assistant-text "")
+  (map-put! state :thought-text "")
+  (map-put! state :prompt-finalized t)
+  (map-put! state :prompt-finishing nil)
+  (when-let ((buf (emagent-acp--chat-buffer state)))
+    (with-current-buffer buf
+      (when-let ((cb (map-elt state :cb-fail)))
+        (funcall cb "No conversation to compress"))))
+  (emagent-acp--refresh-mode-line state))
+
 (defun emagent-acp-send-prompt (user-text)
   "Send USER-TEXT to the current buffer's ACP session."
   (let* ((state (emagent-acp--session))
@@ -1675,14 +1801,37 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
       (user-error "Emagent is still connecting"))
     (when (map-elt state :busy)
       (user-error "Emagent is busy"))
-    (let* ((extra (map-elt state :extra-context))
-           (full-prompt (emagent-context-build-prompt user-text extra))
-           (extracted (emagent-acp--extract-image-links
-                       (substring-no-properties full-prompt)))
-           (clean-text (car extracted))
-           (images (cdr extracted))
-           (blocks `[((type . "text") (text . ,clean-text))]))
-      (map-put! state :extra-context nil)
+    (when (and (eq emagent-chat-provider 'cursor)
+               (fboundp 'emagent-cursor-normalize-slash-prompt))
+      (setq user-text (emagent-cursor-normalize-slash-prompt user-text)))
+    (let ((slash-command-p (emagent-chat--bare-slash-command-p user-text)))
+      (when (and slash-command-p
+                 (fboundp 'emagent-chat--compress-command-p)
+                 (emagent-chat--compress-command-p user-text))
+        (let ((history (with-current-buffer (emagent-acp--chat-buffer state)
+                         (emagent-chat--conversation-history-text))))
+          (if (string-empty-p history)
+              (progn
+                (emagent-acp--abort-compress-empty state)
+                (cl-return-from emagent-acp-send-prompt))
+            (setq user-text (emagent-chat--compress-prompt-text history))
+            (map-put! state :compress-pending t)
+            (setq slash-command-p nil))))
+      (let* ((extra (map-elt state :extra-context))
+             (full-prompt (if (or slash-command-p (map-elt state :compress-pending))
+                              user-text
+                            (emagent-context-build-prompt user-text extra)))
+             (extracted (emagent-acp--extract-image-links
+                         (substring-no-properties full-prompt)))
+             (clean-text (car extracted))
+             (images (cdr extracted))
+             (blocks `[((type . "text") (text . ,clean-text))]))
+        (map-put! state :extra-context nil)
+        (cond
+         ((map-elt state :compress-pending)
+          (emagent-log "compressing conversation"))
+         (slash-command-p
+          (emagent-log "send slash command: %s" user-text)))
       (map-put! state :busy t)
       (when (fboundp 'emagent-chat--spinner-start)
         (emagent-chat--spinner-start))
@@ -1693,6 +1842,7 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
       (clrhash (map-elt state :tool-call-titles))
       (clrhash (map-elt state :tool-call-inputs))
       (clrhash (map-elt state :tool-call-labels))
+      (clrhash (map-elt state :cursor-tool-enrich-attempts))
       (emagent-acp--cancel-prompt-render state)
       (emagent-acp--clear-thought-buffer state)
       (emagent-acp--schedule-prompt-watchdog state)
@@ -1710,7 +1860,7 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
            (when (eq (map-elt state :prompt-generation) gen)
              (let ((message (or (map-elt error 'message) (format "%s" error))))
                (emagent-acp--abort-prompt state (format "prompt failed: %s" message))
-               (emagent-acp--notify-user state (format "emagent: prompt failed: %s" message))))))))))
+               (emagent-acp--notify-user state (format "emagent: prompt failed: %s" message)))))))))))
 
 (defun emagent-acp-interrupt ()
   "Interrupt the in-flight prompt and close the response block cleanly.

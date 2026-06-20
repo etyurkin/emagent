@@ -5,6 +5,7 @@
 (require 'ert)
 (require 'emagent-test-utils)
 (require 'emagent-acp)
+(require 'emagent-cursor)
 
 ;;;; Stderr and logging helpers
 
@@ -67,12 +68,33 @@
 (ert-deftest emagent-acp-session-test-tool-call-detail ()
   (let ((update '((title . "Read")
                   (rawInput . "{\"path\":\"foo.el\"}"))))
-    (should (string= "foo.el" (emagent-acp--tool-call-detail update)))))
+    (should (string= "foo.el" (emagent-acp--tool-call-detail update))))
+  (let ((update '((title . "Edit File")
+                  (rawInput . (("edits" . (((path . "bar.el")))))))))
+    (should (string= "bar.el" (emagent-acp--tool-call-detail update)))))
 
 (ert-deftest emagent-acp-session-test-tool-call-label ()
   (let ((update '((title . "Grep") (rawInput . "{\"pattern\":\"defun\"}"))))
     (should (string-match-p "Grep" (emagent-acp--tool-call-label update)))
     (should (string-match-p "defun" (emagent-acp--tool-call-label update)))))
+
+(ert-deftest emagent-acp-session-test-cursor-tool-call-enrich ()
+  (let ((state (emagent-test--make-acp-state))
+        (update '((toolCallId . "tool_x") (title . "Edit") (rawInput . ()))))
+    (puthash :session-id "sess" state)
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--agent-launch-string)
+          (lambda (_state) "cursor-agent acp"))
+         ((symbol-function 'emagent-cursor-tool-call-from-store)
+          (lambda (_sid _id) '("StrReplace" . (("path" . "foo.el"))))))
+      (let* ((merged (emagent-acp--merged-tool-call-update state update))
+             (label (emagent-acp--tool-call-label merged))
+             (enriched (emagent-cursor-enrich-tool-call-update "sess" merged))
+             (enriched-label (emagent-acp--tool-call-label enriched)))
+        (should (string-match-p "Edit" label))
+        (should-not (string-match-p "foo.el" label))
+        (should (string-match-p "Edit" enriched-label))
+        (should (string-match-p "foo.el" enriched-label))))))
 
 (ert-deftest emagent-acp-session-test-tool-call-truncate ()
   (should (= 121 (length (emagent-acp--tool-call-truncate (make-string 200 ?x)))))
