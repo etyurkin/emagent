@@ -257,6 +257,61 @@
             (should (string-match-p "→ list_files" text))
             (should-not (string-match-p "Executing" text)))))))))
 
+(ert-deftest emagent-chat-test-thought-after-fake-end-quote-appends-at-tail ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "before\n#+end_quote\nmiddle")
+          (setq emagent-chat--thought-marker nil)
+          (emagent-chat-append-thought " after")
+          (emagent-chat-show-tool-call "id1" "grep: pattern")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p
+                     "before\n#\\+end_quote\nmiddle after\n→ grep: pattern"
+                     text))
+            (should-not (string-match-p "middle\n→ grep" text)))))))))
+
+(ert-deftest emagent-chat-test-stream-with-point-away-from-tail ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "line one")
+          (goto-char (point-min))
+          (emagent-chat-append-thought "\nline two")
+          (emagent-chat-show-tool-call "id1" "Read: foo.el")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "line one\nline two\n→ Read: foo.el" text)))))))))
+
+(ert-deftest emagent-chat-test-finish-keeps-tools-in-reasoning ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "planning...")
+          (emagent-chat-show-tool-call "id1" "grep: pattern")
+          (emagent-chat-show-tool-call "id1" "grep: foo")
+          (emagent-chat-finish-assistant "Done." "planning...")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "Reasoning" text))
+            (should (string-match-p "planning..." text))
+            (should (string-match-p "→ grep: foo" text))
+            (should (string-match-p "Done\\." text))
+            (should-not (string-match-p "Executing" text)))))))))
+
 (provide 'emagent-chat-test)
 
 ;;; emagent-chat-test.el ends here
