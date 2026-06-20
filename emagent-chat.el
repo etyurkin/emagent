@@ -1422,55 +1422,45 @@ folding the inner region only so incomplete parses never break the buffer."
           (when hide-at
             (emagent-chat--hide-reasoning-deferred hide-at)))))))
 
-(defun emagent-chat-begin-executing (label)
-  "Open an Executing block or append LABEL to an existing one.
+(defun emagent-chat--resume-reasoning-for-tool-call ()
+  "Ensure the open response can accept tool annotations in Reasoning."
+  (when (emagent-chat--open-response-p)
+    (cond
+     (emagent-chat--thought-open-p)
+     ((emagent-chat--reasoning-stream-marker)
+      (setq emagent-chat--thought-marker (emagent-chat--reasoning-stream-marker)
+            emagent-chat--thought-open-p t))
+     (t
+      (emagent-chat-begin-thought)))))
 
-If the Reasoning block is currently open, appends LABEL as a tool-use
-annotation there instead.  Otherwise, opens a single Executing block on
-the first call and appends one line per subsequent call.  The block is
-written complete (begin + end markers) so permission-dialog buttons
-inserted at `point-max' always land outside it."
+(defun emagent-chat--annotate-tool-in-reasoning (label)
+  "Append LABEL as a tool-use line in the open Reasoning block.
+Return non-nil when the annotation was inserted."
+  (when (and emagent-chat--thought-open-p
+             emagent-chat--thought-marker
+             (marker-position emagent-chat--thought-marker))
+    (save-excursion
+      (goto-char emagent-chat--thought-marker)
+      (unless (bolp) (insert "\n"))
+      (insert (format "→ %s" label))
+      (setq emagent-chat--thought-marker (point-marker)))
+    (font-lock-flush)
+    t))
+
+(defun emagent-chat-begin-executing (label)
+  "Record tool LABEL in the open response, preferring the Reasoning block.
+
+While the agent is busy, tool calls are annotated inside Reasoning (opened
+or resumed as needed) so a separate Executing quote block never appears
+alongside it."
   (emagent-chat--with-stable-view
     (with-current-buffer (current-buffer)
       (when (emagent-chat--open-response-p)
         (let ((inhibit-read-only t))
           (emagent-chat--writable)
           (emagent-chat--ensure-response-markers)
-          (cond
-           ;; Tool call during Reasoning: annotate inside the Reasoning block.
-           (emagent-chat--thought-open-p
-            (when (and emagent-chat--thought-marker
-                       (marker-position emagent-chat--thought-marker))
-              (save-excursion
-                (goto-char emagent-chat--thought-marker)
-                (unless (bolp) (insert "\n"))
-                (insert (format "→ %s" label))
-                (setq emagent-chat--thought-marker (point-marker)))
-              (font-lock-flush)))
-           ;; Append to existing Executing block.
-           (emagent-chat--executing-open-p
-            (when (and emagent-chat--executing-marker
-                       (marker-position emagent-chat--executing-marker))
-              (save-excursion
-                (goto-char emagent-chat--executing-marker)
-                (insert label "\n")
-                (setq emagent-chat--executing-marker (point-marker)))
-              (font-lock-flush)))
-           ;; Open a new Executing block.
-           (t
-            (emagent-chat--clear-progress-line)
-            (save-excursion
-              (goto-char emagent-chat--assistant-marker)
-              (insert "#+begin_quote Executing\n")
-              (let ((hide-at (save-excursion
-                               (re-search-backward emagent-chat--executing-begin-re nil t)
-                               (point))))
-                (setq emagent-chat--executing-hide-at hide-at)
-                (setq emagent-chat--executing-marker (point-marker))
-                (insert label "\n#+end_quote\n\n")
-                (setq emagent-chat--executing-open-p t
-                      emagent-chat--assistant-marker (point-marker))))
-            (font-lock-flush))))))))
+          (emagent-chat--resume-reasoning-for-tool-call)
+          (emagent-chat--annotate-tool-in-reasoning label))))))
 
 (defun emagent-chat--tool-call-display (label)
   "Return LABEL formatted for the current tool-call display context."

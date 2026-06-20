@@ -100,6 +100,55 @@
        (should (string-match-p "^Thinking " head))
        (should (string-match-p "●\\|○" head))))))
 
+;;;; Tool calls during thinking
+
+(ert-deftest emagent-chat-test-tool-call-during-reasoning-no-executing ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "thinking...")
+          (emagent-chat-show-tool-call "id1" "read_file")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "Reasoning" text))
+            (should (string-match-p "→ read_file" text))
+            (should-not (string-match-p "Executing" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-call-after-close-thought-no-executing ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "thinking...")
+          (emagent-chat-append-assistant "Hi")
+          (emagent-chat-show-tool-call "id2" "grep")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "Reasoning" text))
+            (should (string-match-p "→ grep" text))
+            (should-not (string-match-p "Executing" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-call-before-thought-opens-reasoning ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-show-tool-call "id3" "list_files")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "Reasoning" text))
+            (should (string-match-p "→ list_files" text))
+            (should-not (string-match-p "Executing" text)))))))))
+
 (provide 'emagent-chat-test)
 
 ;;; emagent-chat-test.el ends here
