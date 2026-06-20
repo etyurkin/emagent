@@ -171,7 +171,7 @@
           (emagent-chat-append-thought "thinking...")
           (emagent-chat-show-tool-call "id1" "read_file")
           (let ((text (substring-no-properties (buffer-string))))
-            (should (string-match-p "Reasoning" text))
+            (should (string-match-p "Thinking" text))
             (should (string-match-p "→ read_file" text))
             (should-not (string-match-p "Executing" text)))))))))
 
@@ -203,7 +203,7 @@
           (emagent-chat-append-assistant "Hi")
           (emagent-chat-show-tool-call "id2" "grep")
           (let ((text (substring-no-properties (buffer-string))))
-            (should (string-match-p "Reasoning" text))
+            (should (string-match-p "Thinking" text))
             (should (string-match-p "→ grep" text))
             (should-not (string-match-p "Executing" text)))))))))
 
@@ -253,7 +253,7 @@
           (emagent-chat--begin-response (point))
           (emagent-chat-show-tool-call "id3" "list_files")
           (let ((text (substring-no-properties (buffer-string))))
-            (should (string-match-p "Reasoning" text))
+            (should (string-match-p "Thinking" text))
             (should (string-match-p "→ list_files" text))
             (should-not (string-match-p "Executing" text)))))))))
 
@@ -306,7 +306,7 @@
           (emagent-chat-show-tool-call "id1" "grep: foo")
           (emagent-chat-finish-assistant "Done." "planning...")
           (let ((text (substring-no-properties (buffer-string))))
-            (should (string-match-p "Reasoning" text))
+            (should (string-match-p "Thinking" text))
             (should (string-match-p "planning..." text))
             (should (string-match-p "→ grep: foo" text))
             (should (string-match-p "Done\\." text))

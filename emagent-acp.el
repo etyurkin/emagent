@@ -105,7 +105,7 @@ streamed chunks or tool-call labels, then logs to `emagent-log-buffer-name'."
   "When non-nil, stream agent chunks into the chat buffer while a prompt is busy.
 
 Disabled by default because interleaved ACP notifications can finalize before
-the full reply arrives.  Reasoning and answers are rendered once the prompt
+the full reply arrives.  Thinking and answers are rendered once the prompt
 completes."
   :type 'boolean
   :group 'emagent)
@@ -113,11 +113,11 @@ completes."
 (defcustom emagent-acp-thought-progress 'buffer
   "How to surface agent reasoning from `agent_thought_chunk' updates.
 
-- nil — silent in `emagent-log-buffer-name' (Reasoning still appears on finish)
-- buffer — stream and show Reasoning in the chat buffer (default)
+- nil — silent in `emagent-log-buffer-name' (Thinking still appears on finish)
+- buffer — stream and show Thinking in the chat buffer (default)
 - minimal — truncated one-line log entries in `emagent-log-buffer-name'
 - trail — log entries keeping the sentence tail visible
-- both — Reasoning block in the chat buffer and minimal log lines"
+- both — Thinking block in the chat buffer and minimal log lines"
   :type '(choice (const :tag "Silent" nil)
                  (const :tag "Chat buffer" buffer)
                  (const :tag "Log per sentence" minimal)

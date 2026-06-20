@@ -75,7 +75,7 @@ For a local clone, add =:load-path "~/path/to/emagent"= instead of =:ensure=.
 | =M-x emagent-chat-insert-src-block=   | Pick a src block from last response and insert  |
 | =TAB= on =/command= line              | Complete slash commands (skills / built-ins)     |
 | =TAB= on =# --- emagent ---=           | Fold / unfold the response block                 |
-| =TAB= elsewhere                       | =org-cycle= (headlines, Reasoning, etc.)          |
+| =TAB= elsewhere                       | =org-cycle= (headlines, Thinking, etc.)           |
 | =C-g C-g=                             | Interrupt agent response                         |
 | =C-x k=                               | Kill buffer and disconnect agent                 |
 
@@ -138,11 +138,9 @@ fresh session — the agent has nothing stored yet to resume.
 Agent responses appear between =# --- emagent ---= / =# --- /emagent ---=
 delimiters.  TAB on the opening delimiter folds the entire block.
 
-- *Reasoning* (=#+begin_quote Reasoning=) — streamed thinking text; folds
-  automatically when reasoning finishes.  Tool calls made during reasoning
-  appear as =→ tool-name= annotations inside the block.
-- *Executing* (=#+begin_quote Executing=) — accumulates tool calls during the
-  execution phase (one line per tool); folds when the agent resumes writing.
+- *Thinking* (=#+begin_quote Thinking=) — streamed thought text and tool-use
+  lines (=→ tool-name=); folds automatically when the response finishes.
+  Older sessions may still show =Reasoning=; both titles fold the same way.
 
 ** Queued follow-ups (/btw/)
 

@@ -208,12 +208,15 @@ When nil, the spinner inherits the mode-line height."
   "^# --- /emagent ---\\s-*$"
   "Regexp matching emagent response end delimiter lines.")
 
+(defconst emagent-chat--thinking-block-label "Thinking"
+  "Org quote-block title for streamed agent thought and tool lines.")
+
 (defconst emagent-chat--reasoning-begin-re
-  "^#\\+begin_quote Reasoning\\s-*$"
-  "Regexp matching the Reasoning quote block opener.")
+  "^#\\+begin_quote \\(?:Thinking\\|Reasoning\\)\\s-*$"
+  "Regexp matching the Thinking quote block opener (Reasoning is legacy).")
 
 (defcustom emagent-chat-fold-reasoning-on-done t
-  "When non-nil, hide Reasoning quote blocks once reasoning finishes.
+  "When non-nil, hide Thinking quote blocks once the agent finishes.
 
 Uses Org block folding (`org-fold-hide-block-toggle'), like #+STARTUP:
 hideblocks / `org-cycle-hide-block-startup'."
@@ -1095,7 +1098,8 @@ contains a literal #+end_quote line cannot steal the insertion point."
   (let ((trimmed (string-trim (or text ""))))
     (if (string-empty-p trimmed)
         ""
-      (format "#+begin_quote Reasoning\n%s\n#+end_quote\n\n" trimmed))))
+      (format "#+begin_quote %s\n%s\n#+end_quote\n\n"
+              emagent-chat--thinking-block-label trimmed))))
 
 (defun emagent-chat--reasoning-block-bounds ()
   "Return (CONTENT-START . CONTENT-END) for a closed Reasoning block at point."
@@ -1474,7 +1478,7 @@ folding the inner region only so incomplete parses never break the buffer."
               (goto-char emagent-chat--response-body-start)
               ;; Keep #+end_quote present while streaming so Org never sees an
               ;; unclosed quote block (that corrupts org-element cache).
-              (insert "#+begin_quote Reasoning\n")
+              (insert (format "#+begin_quote %s\n" emagent-chat--thinking-block-label))
               (setq emagent-chat--thought-marker (point-marker))
               (insert "\n#+end_quote\n\n")
               (setq emagent-chat--thought-open-p t
