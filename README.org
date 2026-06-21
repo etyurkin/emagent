@@ -214,9 +214,18 @@ Dangerous symbols (=delete-file=, =shell-command=, =write-region=, =load-file=,
 etc.) trigger a confirmation prompt showing the full code before execution.
 =kill-emacs= and =pause-emacs= are permanently blocked.
 
-The agent is guided to call =check_elisp= (paren validator) before =eval= for
-any non-trivial form, and =elisp_guide= (built-in Elisp reference) before
-writing new code.
+The agent is guided to call =check_elisp= before =eval= and =check_elisp_file=
+before =write_file= on =.el= files when tree-sitter is not installed.
+
+When the tree-sitter elisp grammar is installed, =write_file= on =.el= files is
+rejected and all edits go through structural tools: =elisp_insert_after_form=
+(=__start__= for a new file, =__end__= or a symbol to add forms) and
+=elisp_replace_defun= for changing a function. Each call passes a complete
+top-level form and is validated (read + byte-compile) before save.
+
+Optional: install [[https://github.com/Wilfred/tree-sitter-elisp][tree-sitter-elisp]]
+(=M-x treesit-install-language-grammar= =elisp= after emagent loads).
+=elisp_guide= covers the workflow and pitfalls.
 
 ** MCP tools exposed to the agent
 
@@ -230,7 +239,12 @@ writing new code.
 | =buffer_list=     | Open files inside the project visible to Emacs            |
 | =imenu_index=     | Function/class outline for any file                       |
 | =eval=            | Execute Emacs Lisp in the live process                    |
-| =check_elisp=     | Validate Elisp paren balance before eval                  |
+| =check_elisp=     | Validate Elisp form syntax (line:column errors)           |
+| =check_elisp_file= | Validate entire .el file (read + byte-compile)           |
+| =elisp_defun_bounds= | Byte positions of a defun in a file                    |
+| =elisp_replace_defun= | Replace one defun with a complete new form              |
+| =elisp_insert_after_form= | Insert a top-level form after an existing one       |
+| =elisp_sexp_tree= | Shallow outline of top-level forms in a .el file          |
 | =elisp_guide=     | On-demand Elisp reference (patterns, pitfalls, examples)  |
 | =apropos=         | Find symbols by name fragment                             |
 | =apropos_doc=     | Find symbols by docstring meaning                         |

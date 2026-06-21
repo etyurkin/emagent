@@ -17,6 +17,8 @@
 (require 'emagent-mcp)
 (require 'emagent-prompts)
 
+(declare-function emagent-prompts--elisp-structural-policy "emagent-prompts")
+
 (declare-function emagent-chat-clear-slash-commands "emagent-chat")
 (declare-function emagent-chat-seed-cursor-slash-commands "emagent-chat")
 (declare-function emagent-chat--bare-slash-command-p "emagent-chat")
@@ -49,7 +51,9 @@ enabled so ACP file read/write route through Emacs buffers."
   (concat emagent-acp-system-prompt
           (emagent-mcp-gateway-system-prompt)
           (when emagent-acp-prefer-emacs
-            emagent-acp-system-prompt-prefer-emacs)))
+            emagent-acp-system-prompt-prefer-emacs)
+          (when emagent-acp-prefer-emacs
+            (emagent-prompts--elisp-structural-policy))))
 
 (defun emagent-acp-prefer-emacs-p ()
   "Return non-nil when emagent instructs the agent to prefer Emacs tools."
@@ -463,11 +467,16 @@ buffer signals \"Selecting deleted buffer\"."
 (defun emagent-acp--refresh-mode-line (state)
   (when-let ((buffer (emagent-acp--chat-buffer state)))
     (with-current-buffer buffer
-      (if (fboundp 'emagent-chat--refresh-mode-line-soon)
-          (emagent-chat--refresh-mode-line-soon)
-        (if (fboundp 'emagent-chat--refresh-mode-line)
-            (emagent-chat--refresh-mode-line)
-          (force-mode-line-update t))))))
+      (cond
+       ((and (fboundp 'emagent-acp-busy-p)
+             (not (emagent-acp-busy-p))
+             (fboundp 'emagent-chat--refresh-mode-line))
+        (emagent-chat--refresh-mode-line))
+       ((fboundp 'emagent-chat--refresh-mode-line-soon)
+        (emagent-chat--refresh-mode-line-soon))
+       ((fboundp 'emagent-chat--refresh-mode-line)
+        (emagent-chat--refresh-mode-line))
+       (t (force-mode-line-update t))))))
 
 (defun emagent-acp--usage-state (state)
   (or (map-elt state :usage)

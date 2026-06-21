@@ -42,10 +42,88 @@
 ;;;; Elisp syntax check
 
 (ert-deftest emagent-tools-test-check-elisp ()
-  (should (string= "OK" (emagent-tool-check-elisp "(+ 1 2)")))
-  (should (string-match-p "SYNTAX ERROR" (emagent-tool-check-elisp "(+ 1 2"))))
+  (let ((bad "(+ 1 2"))
+    (should (string= "OK" (emagent-tool-check-elisp "(+ 1 2)")))
+    (should (string-match-p "SYNTAX ERROR" (emagent-tool-check-elisp bad)))
+    (should (string-match-p "line [0-9]+, column [0-9]+"
+                            (emagent-tool-check-elisp bad)))))
 
-;;;; Blocked symbols in eval
+(ert-deftest emagent-tools-test-write-elisp-validation ()
+  (let* ((dir (make-temp-file "emagent-tools-elisp-" t))
+         (path (expand-file-name "bad.el" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-elisp-validate-on-write t)
+         (emagent-elisp-byte-compile-on-check nil))
+    (unwind-protect
+        (should-error
+         (emagent-tools--write-file-content path "(defun x ()\n  (+ 1"))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-write-elisp-structural-required ()
+  (let* ((dir (make-temp-file "emagent-tools-struct-" t))
+         (path (expand-file-name "existing.el" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-elisp-require-structural-edits t))
+    (unwind-protect
+        (progn
+          (write-region "(defun old () 1)" nil path)
+          (cl-letf (((symbol-function 'emagent-elisp-treesit-available-p) (lambda () t)))
+            (should-error
+             (emagent-tools--write-file-content path "(defun old () 2)"))
+            (let ((emagent-elisp--structural-write-p t))
+              (should (string= path
+                               (emagent-tools--write-file-content path "(defun old () 2)"))))))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-write-elisp-new-file-blocked ()
+  (let* ((dir (make-temp-file "emagent-tools-new-" t))
+         (path (expand-file-name "new.el" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-elisp-require-structural-edits t)
+         (emagent-elisp-byte-compile-on-check nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'emagent-elisp-treesit-available-p) (lambda () t)))
+          (should-error
+           (emagent-tools--write-file-content path "(provide 'new)\n")))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-structural-elisp-eval ()
+  (let* ((dir (make-temp-file "emagent-tools-eval-" t))
+         (file "loaded.el")
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-elisp-byte-compile-on-check nil)
+         (emagent-elisp-eval-after-structural-edit t))
+    (unwind-protect
+        (let ((result (emagent-tool-elisp-insert-after-form
+                       file "__start__" "(defun emagent-tools-eval-test () 'evaluated)")))
+          (should (string-match-p "Wrote and evaluated" result))
+          (should (fboundp 'emagent-tools-eval-test))
+          (should (eq (emagent-tools-eval-test) 'evaluated)))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-structural-elisp-eval-blocked ()
+  (let* ((dir (make-temp-file "emagent-tools-eval-block-" t))
+         (file "evil.el")
+         (path (expand-file-name file dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-elisp-byte-compile-on-check nil)
+         (emagent-elisp-eval-after-structural-edit t))
+    (unwind-protect
+        (progn
+          (should-error
+           (emagent-tool-elisp-insert-after-form
+            file "__start__" "(kill-emacs)"))
+          (should-not (file-exists-p path)))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-eval-form-guard-blocked ()
+  (should (string-match-p "Eval blocked (kill-emacs)"
+                          (emagent-tools--eval-form-guard "(kill-emacs)"))))
 
 (ert-deftest emagent-tools-test-symbols-in-form ()
   (should (equal '(delete-file)

@@ -1986,28 +1986,15 @@ the prompt text."
   "Return the propertized busy spinner suffix for the mode line."
   (concat " " (emagent-chat--spinner-string)))
 
-(defun emagent-chat--mode-line-busy-head (tool kind)
-  "Return the busy mode-line prefix for TOOL with kind KIND."
-  (let ((busy-face '(bold mode-line-emphasis))
-        (spinner (emagent-chat--mode-line-spinner-suffix)))
-    (if (and tool (member kind '("write" "execute")))
-        (concat (propertize "Executing" 'face busy-face) spinner)
-      (concat (propertize "Thinking" 'face busy-face) spinner))))
-
 (defun emagent-chat--spinner-refresh-buffer (buffer)
-  "Update only the spinner portion of BUFFER's cached mode line."
+  "Refresh BUFFER's cached mode line while its session is busy."
   (with-current-buffer buffer
     (when (and emagent-chat--mode-line-tail
                (fboundp 'emagent-acp-busy-p)
                (emagent-acp-busy-p))
-      (let* ((tool (and (fboundp 'emagent-acp-current-tool) (emagent-acp-current-tool)))
-             (kind (and (fboundp 'emagent-acp-current-tool-kind)
-                        (emagent-acp-current-tool-kind)))
-             (head (emagent-chat--mode-line-busy-head tool kind)))
-        (setq emagent-chat--mode-line-head head
-              emagent-chat--mode-line-cache (concat head emagent-chat--mode-line-tail))
-        (when (get-buffer-window buffer 'visible)
-          (force-mode-line-update t))))))
+      (emagent-chat--mode-line-recompute)
+      (when (get-buffer-window buffer 'visible)
+        (force-mode-line-update t)))))
 
 (defvar-local emagent-chat--mode-line-head nil
   "Cached mode-line status prefix for the current emagent buffer.")
@@ -2037,16 +2024,19 @@ the prompt text."
   (force-mode-line-update t))
 
 (defun emagent-chat--refresh-mode-line-soon ()
-  "Queue a single idle mode-line recompute; drop duplicate requests."
-  (unless emagent-chat--mode-line-refresh-timer
+  "Queue a single idle mode-line recompute for the current buffer."
+  (let ((buf (current-buffer)))
+    (when emagent-chat--mode-line-refresh-timer
+      (cancel-timer emagent-chat--mode-line-refresh-timer))
     (setq emagent-chat--mode-line-refresh-timer
           (run-with-idle-timer
            0 nil
            (lambda ()
              (setq emagent-chat--mode-line-refresh-timer nil)
-             (emagent-chat--mode-line-recompute)
-             (when (get-buffer-window (current-buffer) 'visible)
-               (force-mode-line-update t)))))))
+             (when (buffer-live-p buf)
+               (with-current-buffer buf
+                 (emagent-chat--mode-line-recompute)
+                 (force-mode-line-update t))))))))
 
 (defun emagent-chat--mode-line-strings ()
   "Return (HEAD . TAIL) strings for the emagent mode line."

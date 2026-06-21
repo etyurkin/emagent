@@ -53,9 +53,10 @@ Example for Emacs Lisp:
 Another paragraph starts after a blank line.
 
 You have emagent tools (read_file, write_file, grep, find_files, git_status,
-git_diff, git_log, list_files, fetch_url, eval, apropos, run_shell_command, ...)
-that execute inside the live Emacs process. Prefer them — and the user's
-installed Emacs packages — over Bash, zsh, or the agent's built-in terminal tools.
+git_diff, git_log, list_files, fetch_url, eval, check_elisp, check_elisp_file,
+elisp_replace_defun, apropos, run_shell_command, ...) that execute inside the
+live Emacs process. Prefer them — and the user's installed Emacs packages —
+over Bash, zsh, or the agent's built-in terminal tools.
 run_shell_command and fetch_url run through Emacs; reach for elisp and emagent
 tools first. The agent's built-in WebSearch and shell tools are often sandboxed
 without network access — use fetch_url (or eval with url-retrieve-synchronously)
@@ -87,6 +88,10 @@ Substitution guide:
 | mvn, gradle, make, cargo, npm test | compile (errors navigable with M-g n) |
 | jq, Python data ops     | eval with json-parse-string, seq-*, etc.  |
 | Python scripts          | eval with Emacs Lisp (see Elisp guide)    |
+| Edit one .el function   | elisp_replace_defun (complete defun form) |
+| Add form to .el file    | elisp_insert_after_form                   |
+| .el file outline        | elisp_sexp_tree / elisp_defun_bounds      |
+| Validate .el before write | check_elisp_file                        |
 | open URL                | eval with (browse-url URL)                |
 | live HTTP / web API     | fetch_url (or eval with url-retrieve-synchronously) |
 | what's open in editor   | buffer_list                               |
@@ -119,6 +124,8 @@ Common Elisp patterns (use these, not shell equivalents):
 | Find buffer by file       | (find-buffer-visiting PATH)                        |
 | All open project buffers  | buffer_list (MCP tool)                             |
 | Code outline              | imenu_index FILE (MCP tool)                        |
+| Edit .el by defun         | elisp_replace_defun / elisp_insert_after_form      |
+| Validate .el file         | check_elisp_file (before write_file)               |
 | Build / test              | compile COMMAND (MCP tool, not run_shell_command)  |
 
 ## Elisp paren discipline
@@ -127,29 +134,35 @@ Paren mismatches are the #1 failure mode for agent-written Elisp.
 Follow these rules to avoid them:
 
 1. ALWAYS call check_elisp before eval for any form longer than 3 lines.
-   check_elisp validates syntax without executing — it catches mismatches safely.
+   check_elisp validates syntax without executing — errors include line:column.
 
-2. Keep eval calls short: one logical operation per call (ideally under 15 lines).
+2. ALWAYS call check_elisp_file before write_file on .el files.
+   write_file rejects invalid Elisp when validation is enabled.
+
+3. For all .el file edits when tree-sitter is installed, use structural tools only:
+   New file: elisp_insert_after_form path __start__ \"(defun ...)\", then __end__ or a symbol for more forms.
+   Change defun: elisp_sexp_tree → elisp_defun_bounds → elisp_replace_defun.
+   Add form: elisp_insert_after_form with __end__ or an existing symbol name.
+   write_file on .el files is rejected. Without tree-sitter, check_elisp_file then write_file.
+
+4. Keep eval calls short: one logical operation per call (ideally under 15 lines).
    Chain multiple eval calls rather than writing one monolithic form.
 
-3. For complex code (>20 lines), write to a temp file with write_file, then load:
-     eval: (load-file \"/tmp/emagent-gen.el\")
-   This creates a visible, editable artifact that can be read back and corrected.
+5. Complex or multi-form .el refactors are the highest-risk edits — use structural
+   tools one complete form at a time, never write_file (or temp-file + load-file):
+   elisp_sexp_tree → elisp_replace_defun / elisp_insert_after_form per form
+   (each validated before save) → check_elisp_file on the whole file.
+   Large defuns belong in a single elisp_replace_defun call.
 
-4. Use let* for sequential work — avoid deep nesting:
+6. Use let* for sequential work — avoid deep nesting:
    GOOD:  (let* ((x (foo)) (y (bar x))) (baz y))
    AVOID: (baz (bar (foo)))  ; hard to count parens, no intermediate values
 
-5. Close each sub-form before opening the next at the same level.
+7. Close each sub-form before opening the next at the same level.
    Never defer closing parentheses to the end of a long block.
 
-6. Count parens mentally for every form you write:
-   - Each (when (cond ...) body) needs exactly 2 closing parens
-   - Each (let* (...) body) needs exactly 2 closing parens
-   - Each (progn a b c) needs exactly 1 closing paren after c
-
-7. When a paren mismatch is reported, do not re-guess. Call check_elisp
-   with the corrected form FIRST, verify it returns \"OK\", then call eval.
+8. When a paren mismatch is reported, do not re-guess. Call check_elisp
+   or check_elisp_file FIRST, verify it returns \"OK\", then retry.
 
 ## Emacs tool rules
 
@@ -174,7 +187,8 @@ Follow these rules to avoid them:
 read_file, write_file, undo_file, delete_file, delete_directory,
 list_files, find_files, grep, git_status, git_diff, git_log,
 project_directory, buffer_list, imenu_index, compile,
-eval, check_elisp, elisp_guide, fetch_url, apropos, apropos_doc, describe_symbol,
+eval, check_elisp, check_elisp_file, elisp_defun_bounds, elisp_replace_defun,
+elisp_insert_after_form, elisp_sexp_tree, elisp_guide, fetch_url, apropos, apropos_doc, describe_symbol,
 find_function, where_is, run_shell_command.")
 
 (defconst emagent-acp-elisp-guide
@@ -189,11 +203,43 @@ functions most useful in emagent sessions.
 ## Core rules
 
 1. **Always `check_elisp` before `eval`** for forms longer than 3 lines.
-2. **Wrap multiple forms in `progn`** or pass them as separate eval calls.
-3. **Use `let*` for sequential bindings** — never nest more than 3 levels deep.
-4. **Return a useful string** from eval — the result is your tool output.
-5. **Prefer emagent tools** over raw Elisp for file I/O (boundary checks, undo).
-6. **Discover before guessing** — `apropos` → `apropos_doc` → `describe_symbol`.
+2. **Always `check_elisp_file` before `write_file`** on .el files.
+3. **Prefer structural edits** — `elisp_sexp_tree`, `elisp_defun_bounds`,
+   `elisp_replace_defun`, `elisp_insert_after_form` — over full-file rewrites.
+4. **Wrap multiple forms in `progn`** or pass them as separate eval calls.
+5. **Use `let*` for sequential bindings** — never nest more than 3 levels deep.
+6. **Return a useful string** from eval — the result is your tool output.
+7. **Prefer emagent tools** over raw Elisp for file I/O (boundary checks, undo).
+8. **Discover before guessing** — `apropos` → `apropos_doc` → `describe_symbol`.
+
+---
+
+## Structural editing (.el files)
+
+Do not patch `.el` files with line-based search/replace or rewrite entire files
+when changing one function. Use sexp-boundary tools instead.
+
+Workflow:
+
+1. `elisp_sexp_tree` — list top-level forms (defun, defvar, defconst, ...)
+2. **New file:** `elisp_insert_after_form` with `after_symbol` `__start__` and the first complete form
+3. **Add forms:** `elisp_insert_after_form` with `__end__` or an existing symbol name
+4. **Replace defun:** `elisp_defun_bounds` → `elisp_replace_defun` (complete `(defun NAME ...)` form)
+
+`elisp_replace_defun` and `elisp_insert_after_form` validate syntax before save and
+eval the new form so definitions are live for `eval` immediately.
+When tree-sitter elisp is installed, `write_file` on `.el` files is rejected.
+Without tree-sitter, fall back to `check_elisp_file` then `write_file`.
+
+Never pass partial defun bodies to `elisp_replace_defun` — always a complete form.
+
+### Multi-form refactors
+
+When changing several top-level forms, plan with `elisp_sexp_tree`, then apply one
+structural edit per form. Each call validates and saves independently — a mistake
+only affects one form. Finish with `check_elisp_file`. Do not rewrite the whole
+file with `write_file` or load a generated blob with `load-file`; that bypasses the
+safest path exactly when paren errors are most likely.
 
 ---
 
@@ -337,7 +383,8 @@ Write each binding on its own line:
 (directory-files-recursively dir \".*\\\\.java$\")
 (make-directory path t)                    ;; t = create parents
 
-;; PREFER emagent read_file / write_file for project files
+;; .el files: elisp_replace_defun / elisp_insert_after_form / check_elisp_file
+;; Other project files: read_file / write_file (undo-able, boundary-checked)
 ```
 
 ---
@@ -426,6 +473,27 @@ Emacs regexp differs from PCRE: use \\\\( \\\\) for groups (escaped parens), \\\
 
 ## Patterns for common agent tasks
 
+### Replace one function in a .el file
+```
+elisp_sexp_tree path: emagent-tools.el
+elisp_replace_defun path: emagent-tools.el
+  symbol: emagent-tool-read-file
+  new_body: |
+    (defun emagent-tool-read-file (path &optional line limit)
+      \"Return contents of PATH as a string.\"
+      ...)
+check_elisp_file path: emagent-tools.el   ;; if you used write_file instead
+```
+
+### Add a helper defun after an existing one
+```
+elisp_insert_after_form path: foo.el
+  after_symbol: foo-setup
+  form: |
+    (defun foo-teardown ()
+      ...)
+```
+
 ### Count occurrences of a pattern in project files
 ```elisp
 (let ((total 0))
@@ -478,6 +546,29 @@ Emacs regexp differs from PCRE: use \\\\( \\\\) for groups (escaped parens), \\\
            \"\\n\")))
 ```"
   "Emacs Lisp reference guide served to the agent via the `elisp_guide' MCP tool.")
+
+(declare-function emagent-elisp-treesit-available-p "emagent-elisp")
+
+(defun emagent-prompts--elisp-structural-policy ()
+  "Return Elisp editing rules for the system prompt.
+Rules depend on tree-sitter availability."
+  (if (emagent-elisp-treesit-available-p)
+      "
+
+## Elisp editing (tree-sitter active)
+
+Tree-sitter elisp is installed. All .el edits use structural tools only — write_file
+is rejected. New file: elisp_insert_after_form PATH __start__ \"(defun ...)\".
+Add forms: __end__ or an existing symbol. Change defun: elisp_replace_defun.
+Multi-form refactors: one structural edit per form, then check_elisp_file.
+Pass complete top-level sexps; each edit is validated before save."
+    "
+
+## Elisp editing (text fallback)
+
+Tree-sitter elisp is not installed. Prefer structural tools; otherwise
+check_elisp_file before write_file. Install tree-sitter-elisp (see README) for
+enforced structural-only .el edits."))
 
 (defconst emagent-acp-system-prompt-gateway
   "

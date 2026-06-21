@@ -11,6 +11,7 @@
 
 (require 'org)
 (require 'org-element)
+(require 'emagent-elisp)
 
 ;; Declared special so binding it to suppress auto-insert is a dynamic binding.
 (defvar auto-insert)
@@ -51,9 +52,8 @@ These are too dangerous to allow even with confirmation:
     kill-buffer kill-buffer-and-save)
   "Symbols in `emagent-tool-eval' that require explicit user confirmation.
 The user sees the full code and must approve before execution.
-`load-file' / `load-library' are here (not hard-blocked) to enable the
-write-file-then-load-file pattern for complex Elisp: the agent writes code
-with write_file (user reviews diff), then loads it — both steps confirmed."
+`load-file' / `load-library' require confirmation when used in eval — not a
+shortcut for .el edits; use structural tools for project .el files."
   :type '(repeat symbol)
   :group 'emagent-tools)
 
@@ -274,6 +274,64 @@ Returns non-nil when the write is approved."
               (push (car sexp) stack))))))
     (delete-dups found)))
 
+(defun emagent-tools--eval-form-read (form-str)
+  "Return FORM-STR parsed as `(progn ,@forms)'."
+  (read (concat "(progn " (string-trim (or form-str "")) ")")))
+
+(defun emagent-tools--eval-form-dangerous-allowed-p (form-str dangerous)
+  "Return non-nil when the user allows evaluating FORM-STR with DANGEROUS symbols."
+  (let* ((ops (mapconcat #'symbol-name dangerous ", "))
+         (preview (truncate-string-to-width form-str 400 nil nil "…"))
+         (preamble (format "\n#+begin_src elisp\n%s\n#+end_src" preview))
+         (prompt (format "Eval contains: *%s*" ops)))
+    (if (and emagent-tools--chat-buffer
+             (buffer-live-p emagent-tools--chat-buffer))
+        (eq 'yes
+            (emagent-tools--buttons-prompt
+             prompt
+             '(("Allow" . yes) ("Deny" . no))
+             emagent-tools--chat-buffer
+             preamble))
+      (y-or-n-p (format "Eval contains %s — allow? " ops)))))
+
+(defun emagent-tools--eval-form-guard (form-str)
+  "Return nil when FORM-STR passes eval guardrails, else an error string."
+  (let* ((form-str (string-trim (or form-str "")))
+         (parsed (condition-case parse-err
+                     (emagent-tools--eval-form-read form-str)
+                   (error
+                    (format "Elisp read error: %s"
+                            (error-message-string parse-err)))))
+         (blocked (emagent-tools--symbols-in-form parsed emagent-tools-eval-blocked-symbols))
+         (dangerous (emagent-tools--symbols-in-form parsed emagent-tools-eval-dangerous-symbols)))
+    (cond
+     (blocked
+      (format "Eval blocked (%s). Use the dedicated emagent tools instead."
+              (mapconcat #'symbol-name blocked ", ")))
+     (dangerous
+      (unless (emagent-tools--eval-form-dangerous-allowed-p form-str dangerous)
+        (format "Eval cancelled: contains %s"
+                (mapconcat #'symbol-name dangerous ", "))))
+     (t nil))))
+
+(defun emagent-tools--eval-form-execute (form-str)
+  "Evaluate FORM-STR after guardrails; return nil on success or an error string."
+  (condition-case err
+      (progn (eval (emagent-tools--eval-form-read form-str)) nil)
+    (error (error-message-string err))))
+
+(defun emagent-tools--eval-form-safely (form-str)
+  "Evaluate FORM-STR with syntax and symbol guardrails; return a result string."
+  (let ((check-result (emagent-elisp-check-form form-str)))
+    (unless (string= "OK" check-result)
+      (user-error "%s" check-result))
+    (when-let ((err (emagent-tools--eval-form-guard form-str)))
+      (user-error "%s" err))
+    (condition-case err
+        (let ((result (eval (emagent-tools--eval-form-read form-str))))
+          (if (null result) "nil" (prin1-to-string result)))
+      (error (format "Eval error: %s" (error-message-string err))))))
+
 (defcustom emagent-tools-show-written-buffer 'magit-diff
   "How to reveal a file after emagent writes it.
 
@@ -334,6 +392,12 @@ magit-diff — run `magit-diff-buffer-file' (falls back to `display-buffer'
         (insert-file-contents resolved)
         (emagent-tools--extract-buffer-text (current-buffer) line limit)))))
 
+(defun emagent-tools--read-elisp-file-content (path)
+  "Like `emagent-tools--read-file-content' but return \"\" when PATH is missing."
+  (condition-case-unless-debug nil
+      (emagent-tools--read-file-content path)
+    (file-missing "")))
+
 (defun emagent-tool-read-file (path &optional line limit)
   "Return contents of PATH as a string."
   (when (emagent-tools--protected-fs-path-p path)
@@ -349,6 +413,12 @@ Each call is recorded as a single undoable change in the target buffer."
          (buffer (or (find-buffer-visiting resolved)
                      (let ((auto-insert nil))
                        (find-file-noselect resolved)))))
+    (when (and emagent-elisp-validate-on-write
+               (emagent-elisp-elisp-file-p resolved))
+      (if-let ((err (emagent-elisp--validate-content-strict content resolved)))
+          (user-error "Elisp validation failed for %s: %s" resolved err)))
+    (if-let ((blocked (emagent-elisp--write-file-blocked-message resolved)))
+        (user-error "%s" blocked))
     (when (and dir (not (file-exists-p dir)))
       (make-directory dir t))
     (with-temp-buffer
@@ -371,6 +441,19 @@ Each call is recorded as a single undoable change in the target buffer."
       ((pred identity)
        (display-buffer buffer)))
     resolved))
+
+(defun emagent-tools--structural-elisp-write (file content eval-form)
+  "Write validated structural CONTENT to FILE; eval EVAL-FORM when configured."
+  (when (and emagent-elisp-eval-after-structural-edit eval-form)
+    (when-let ((err (emagent-tools--eval-form-guard eval-form)))
+      (user-error "%s" err)))
+  (let* ((emagent-elisp--structural-write-p t)
+         (resolved (emagent-tools--write-file-content file content)))
+    (if (and emagent-elisp-eval-after-structural-edit eval-form)
+        (if-let ((err (emagent-tools--eval-form-execute eval-form)))
+            (format "Wrote %s but eval failed: %s" resolved err)
+          (format "Wrote and evaluated form in %s" resolved))
+      (format "Wrote %s" resolved))))
 
 (defun emagent-tool-write-file (path content)
   "Write CONTENT to PATH through Emacs after user confirmation."
@@ -472,91 +555,59 @@ Slower than apropos (scans all docstrings) but finds symbols by meaning."
 
 (defun emagent-tool-elisp-guide ()
   "Return the emagent Emacs Lisp reference guide.
-Covers core patterns, string/list/buffer/file/JSON/org-mode operations,
-error handling, common pitfalls, and ready-to-use code templates.
+Covers validation, structural editing, core patterns, string/list/buffer/file/
+JSON/org-mode operations, error handling, common pitfalls, and code templates.
 Call this before writing non-trivial Elisp."
   (require 'emagent-prompts)
   emagent-acp-elisp-guide)
-
-(defun emagent-tools--check-elisp-parens (form-str)
-  "Return nil when FORM-STR parses cleanly, or an error string on failure.
-Catches unclosed and extra closing parentheses."
-  (condition-case err
-      (with-temp-buffer
-        (insert "(progn " form-str ")")
-        ;; scan-sexps throws scan-error for unclosed '('
-        (let ((end (scan-sexps (point-min) 1)))
-          ;; Check for trailing content — catches extra ')'
-          (goto-char end)
-          (skip-chars-forward " \t\n")
-          (when (< (point) (point-max))
-            (error "Extra closing parenthesis (more ')' than '(')"))
-          nil))
-    (scan-error
-     (format "Unclosed parentheses at char %d: %s"
-             (max 0 (- (nth 2 err) 7))
-             (nth 1 err)))
-    (error
-     (format "Parse error: %s" (error-message-string err)))))
 
 (defun emagent-tool-check-elisp (form)
   "Check FORM for Emacs Lisp syntax errors without executing it.
 Returns \"OK\" when the form parses cleanly, or an error description.
 Always call this before eval for any form longer than 3 lines."
-  (let* ((form-str (if (stringp form) form (prin1-to-string form)))
-         (paren-error (emagent-tools--check-elisp-parens form-str)))
-    (if paren-error
-        (format "SYNTAX ERROR — %s\n\nFix the form and call check_elisp again before eval."
-                paren-error)
-      "OK")))
+  (emagent-elisp-check-form (if (stringp form) form (prin1-to-string form))))
+
+(defun emagent-tool-check-elisp-file (file)
+  "Validate Emacs Lisp FILE without executing it.
+Returns \"OK\" or an error description with line:column."
+  (emagent-elisp-check-file-content (emagent-tools--read-file-content file) file))
+
+(defun emagent-tool-elisp-defun-bounds (file symbol)
+  "Return \"START:END\" byte positions for SYMBOL's defun in FILE."
+  (emagent-elisp-defun-bounds (emagent-tools--read-file-content file) symbol))
+
+(defun emagent-tool-elisp-replace-defun (file symbol new-body)
+  "Replace defun SYMBOL in FILE with complete NEW-BODY form."
+  (let* ((content (emagent-tools--read-elisp-file-content file))
+         (updated (emagent-elisp-replace-defun content symbol new-body)))
+    (if (or (string-prefix-p "SYNTAX ERROR" updated)
+            (string-prefix-p "No defun" updated)
+            (string-prefix-p "new_body" updated))
+        updated
+      (emagent-tools--structural-elisp-write file updated new-body))))
+
+(defun emagent-tool-elisp-insert-after-form (file after-symbol form)
+  "Insert top-level FORM after AFTER-SYMBOL anchor in FILE."
+  (let* ((content (emagent-tools--read-elisp-file-content file))
+         (updated (emagent-elisp-insert-after-form content after-symbol form)))
+    (if (or (string-prefix-p "SYNTAX ERROR" updated)
+            (string-prefix-p "No top-level" updated))
+        updated
+      (emagent-tools--structural-elisp-write file updated form))))
+
+(defun emagent-tool-elisp-sexp-tree (file &optional depth)
+  "Return a shallow outline of top-level forms in FILE."
+  (emagent-elisp-sexp-tree (emagent-tools--read-file-content file) depth))
 
 (defun emagent-tool-eval (form)
   "Evaluate Emacs Lisp FORM and return the result as a string.
 Use this for small utilities and text processing — not Python or shell.
 Blocked symbols must go through dedicated emagent-tool-* helpers.
-For forms longer than 3 lines, call check_elisp first to validate parens."
+For forms longer than 3 lines, call check_elisp first; call check_elisp_file
+before write_file on .el files."
   (interactive)
-  (let* ((form-str (if (stringp form) form (prin1-to-string form)))
-         (paren-error (emagent-tools--check-elisp-parens form-str)))
-    (when paren-error
-      (user-error "Elisp paren/syntax error (fix before eval): %s" paren-error))
-    ;; Wrap in progn so multiple top-level forms all execute, not just the first.
-    (let* ((wrapped-str (concat "(progn " form-str ")"))
-           (parsed (condition-case parse-err
-                       (read wrapped-str)
-                     (error
-                      (user-error "Elisp read error: %s"
-                                  (error-message-string parse-err)))))
-           (blocked (emagent-tools--symbols-in-form parsed emagent-tools-eval-blocked-symbols))
-           (dangerous (emagent-tools--symbols-in-form parsed emagent-tools-eval-dangerous-symbols)))
-      (when blocked
-        (user-error
-         "Eval blocked (%s). Use the dedicated emagent tools instead."
-         (mapconcat #'symbol-name blocked ", ")))
-      (when dangerous
-        (let* ((ops (mapconcat #'symbol-name dangerous ", "))
-               (preview (truncate-string-to-width form-str 400 nil nil "…"))
-               (preamble (format "\n#+begin_src elisp\n%s\n#+end_src" preview))
-               (prompt (format "Eval contains: *%s*" ops))
-               (allowed
-                (if (and emagent-tools--chat-buffer
-                         (buffer-live-p emagent-tools--chat-buffer))
-                    (eq 'yes
-                        (emagent-tools--buttons-prompt
-                         prompt
-                         '(("Allow" . yes) ("Deny" . no))
-                         emagent-tools--chat-buffer
-                         preamble))
-                  (y-or-n-p (format "Eval contains %s — allow? " ops)))))
-          (unless allowed
-            (user-error "Eval cancelled: contains %s" ops))))
-      (condition-case err
-          (let ((result (eval parsed)))
-            (if (null result)
-                "nil"
-              (prin1-to-string result)))
-        (error
-         (format "Eval error: %s" (error-message-string err)))))))
+  (emagent-tools--eval-form-safely
+   (if (stringp form) form (prin1-to-string form))))
 
 (defun emagent-tool-org-element ()
   "Return structured org element at point as a string."

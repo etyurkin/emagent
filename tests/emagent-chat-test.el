@@ -138,6 +138,19 @@
        (should (string-match-p "^Thinking " head))
        (should (string-match-p "●\\|○" head))))))
 
+(ert-deftest emagent-chat-test-mode-line-idle-when-busy-clears ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (setq emagent-acp--session (make-hash-table :test 'eq))
+     (puthash :busy t emagent-acp--session)
+     (puthash :ready t emagent-acp--session)
+     (with-current-buffer buffer
+       (emagent-chat--mode-line-recompute)
+       (should (string-match-p "^Thinking " emagent-chat--mode-line-head))
+       (puthash :busy nil emagent-acp--session)
+       (emagent-chat--refresh-mode-line)
+       (should (string-match-p "Idle" emagent-chat--mode-line-head))))))
+
 (ert-deftest emagent-chat-test-restore-window-views-keeps-point ()
   (with-temp-buffer
     (insert "line1\nline2\n")

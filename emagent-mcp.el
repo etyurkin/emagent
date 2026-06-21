@@ -129,7 +129,7 @@ instead; emagent then writes whatever port it gets into the agent config."
                                    (emagent-mcp--arg args "line")
                                    (emagent-mcp--arg args "limit"))))
    (list "write_file"
-         "Write CONTENT to a file through an Emacs buffer (one undoable change). Prompts the user."
+         "Write CONTENT to a file through an Emacs buffer (one undoable change). Rejected for .el files when tree-sitter elisp is installed — use elisp_insert_after_form and elisp_replace_defun instead."
          '(("path" . ((type . "string")
                       (description . "Absolute path, or relative to the session root.")))
            ("content" . ((type . "string")
@@ -304,14 +304,67 @@ instead; emagent then writes whatever port it gets into the agent config."
          (lambda (args)
            (emagent-tool-imenu-index (emagent-mcp--arg args "file"))))
    (list "check_elisp"
-         "Check an Emacs Lisp form for syntax errors (paren balance, read errors) WITHOUT executing it. Returns \"OK\" or an error description. Always call this before eval for forms longer than 3 lines."
+         "Check an Emacs Lisp form for syntax errors (paren balance, read errors) WITHOUT executing it. Returns \"OK\" or an error description with line:column. Always call this before eval for forms longer than 3 lines."
          '(("form" . ((type . "string")
                       (description . "An Emacs Lisp form as a string to validate."))))
          '("form")
          (lambda (args)
            (emagent-tool-check-elisp (emagent-mcp--arg args "form"))))
+   (list "check_elisp_file"
+         "Validate an entire .el file (read, paren balance, byte-compile) without executing it. Returns \"OK\" or an error with line:column. Call before write_file on Elisp files."
+         '(("path" . ((type . "string")
+                      (description . "Path to the .el file, relative to session root."))))
+         '("path")
+         (lambda (args)
+           (emagent-tool-check-elisp-file (emagent-mcp--arg args "path"))))
+   (list "elisp_defun_bounds"
+         "Return byte positions START:END for a defun in a .el file. Use before elisp_replace_defun to verify the target."
+         '(("path" . ((type . "string")
+                      (description . "Path to the .el file.")))
+           ("symbol" . ((type . "string")
+                        (description . "Defun name to locate."))))
+         '("path" "symbol")
+         (lambda (args)
+           (emagent-tool-elisp-defun-bounds (emagent-mcp--arg args "path")
+                                            (emagent-mcp--arg args "symbol"))))
+   (list "elisp_replace_defun"
+         "Replace one defun in a .el file with a complete new (defun ...) form. Validates and writes via write_file."
+         '(("path" . ((type . "string")
+                      (description . "Path to the .el file.")))
+           ("symbol" . ((type . "string")
+                        (description . "Defun name to replace.")))
+           ("new_body" . ((type . "string")
+                          (description . "Complete (defun name ...) form as a string."))))
+         '("path" "symbol" "new_body")
+         (lambda (args)
+           (emagent-tool-elisp-replace-defun (emagent-mcp--arg args "path")
+                                               (emagent-mcp--arg args "symbol")
+                                               (emagent-mcp--arg args "new_body"))))
+   (list "elisp_insert_after_form"
+         "Insert a complete top-level form into a .el file. after_symbol: __start__ (first form, new file), __end__ (append), or an existing form name. Validates before save."
+         '(("path" . ((type . "string")
+                      (description . "Path to the .el file.")))
+           ("after_symbol" . ((type . "string")
+                              (description . "__start__, __end__, or name of an existing top-level form.")))
+           ("form" . ((type . "string")
+                      (description . "Complete top-level form to insert."))))
+         '("path" "after_symbol" "form")
+         (lambda (args)
+           (emagent-tool-elisp-insert-after-form (emagent-mcp--arg args "path")
+                                                  (emagent-mcp--arg args "after_symbol")
+                                                  (emagent-mcp--arg args "form"))))
+   (list "elisp_sexp_tree"
+         "Return a shallow outline of top-level forms in a .el file (one line per defun/defvar/etc.). Uses tree-sitter with @line:col when read fails and the elisp grammar is installed."
+         '(("path" . ((type . "string")
+                      (description . "Path to the .el file.")))
+           ("depth" . ((type . "integer")
+                       (description . "Reserved; ignored for now."))))
+         '()
+         (lambda (args)
+           (emagent-tool-elisp-sexp-tree (emagent-mcp--arg args "path")
+                                           (emagent-mcp--arg args "depth"))))
    (list "elisp_guide"
-         "Return the emagent Emacs Lisp reference guide: patterns, idioms, string/list/buffer/file/JSON/org operations, error handling, common pitfalls, and code templates. Call this before writing non-trivial Elisp."
+         "Return the emagent Emacs Lisp reference guide: patterns, idioms, structural editing tools (elisp_replace_defun, elisp_insert_after_form), validation (check_elisp, check_elisp_file), string/list/buffer/file/JSON/org operations, error handling, common pitfalls, and code templates. Call before writing non-trivial Elisp."
          '()
          '()
          (lambda (_args)
