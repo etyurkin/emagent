@@ -55,6 +55,7 @@
     (define-key map (kbd "C-g C-g") #'emagent-chat-interrupt)
     (define-key map (kbd "C-c p")   #'emagent-chat-new-prompt)
     (define-key map (kbd "C-c ?")   #'emagent-dispatch)
+    (define-key map (kbd "C-a")     #'emagent-chat-beginning-of-line)
     map)
   "Keymap for `emagent-mode'.")
 
@@ -561,6 +562,25 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
   "Return a regexp matching the user heading prefix at start of line."
   (format "^\\* %s> ?" (regexp-quote (user-login-name))))
 
+(defun emagent-chat--user-prompt-input-pos ()
+  "Return point after the user heading prefix on the current line, or nil."
+  (save-excursion
+    (beginning-of-line)
+    (when (looking-at (emagent-chat--user-heading-re))
+      (match-end 0))))
+
+(defun emagent-chat-beginning-of-line ()
+  "On a user prompt heading, first \\[emagent-chat-beginning-of-line] jumps after \">\"."
+  (interactive)
+  (let ((input (emagent-chat--user-prompt-input-pos)))
+    (cond
+     ((and input (= (point) input))
+      (move-beginning-of-line 1))
+     ((and input (not (= (point) (line-beginning-position))))
+      (goto-char input))
+     (t
+      (move-beginning-of-line 1)))))
+
 (defun emagent-chat--strip-user-heading (text)
   "Strip the '* username> ' prefix from the first line of TEXT."
   (let* ((re (emagent-chat--user-heading-re))
@@ -617,9 +637,10 @@ including) the next '* user>' heading, whether bare or with content."
     (looking-at (emagent-chat--user-heading-re))))
 
 (defun emagent-chat--insert-user-heading-stub ()
-  "Insert a user heading stub unless one already follows the current position."
+  "Insert a user heading stub unless one already follows the user zone."
   (let ((inhibit-read-only t))
     (emagent-chat--writable)
+    (goto-char (emagent-chat--user-zone-start))
     (unless (emagent-chat--user-heading-follows-p)
       (unless (bolp) (insert "\n"))
       (insert (emagent-chat--user-heading-prefix)))
@@ -1708,7 +1729,7 @@ THOUGHT-TEXT."
           (emagent-chat--insert-response-end))
         (emagent-chat--reset-response-state)
         (emagent-chat--sync-user-zone-marker)
-        (emagent-chat--insert-user-heading-stub)
+        (setq emagent-chat--view-saved-point (emagent-chat--insert-user-heading-stub))
         (font-lock-flush)
         (when hide-at
           (emagent-chat--hide-reasoning-deferred hide-at))

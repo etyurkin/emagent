@@ -305,6 +305,40 @@
           (let ((text (substring-no-properties (buffer-string))))
             (should (string-match-p "line one\nline two\n→ Read: foo.el" text)))))))))
 
+(ert-deftest emagent-chat-test-beginning-of-line-on-user-prompt ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (emagent-chat--sync-user-zone-marker)
+       (emagent-chat--insert-user-heading-stub)
+       (insert "hello")
+       (let ((input (emagent-chat--user-prompt-input-pos))
+             (bol (line-beginning-position)))
+         (end-of-line)
+         (emagent-chat-beginning-of-line)
+         (should (= (point) input))
+         (emagent-chat-beginning-of-line)
+         (should (= (point) bol))
+         (emagent-chat-beginning-of-line)
+         (should (= (point) bol)))))))
+
+(ert-deftest emagent-chat-test-finish-moves-point-to-user-prompt ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "planning...")
+          (goto-char (point-min))
+          (emagent-chat-finish-assistant "Done.")
+          (should (>= (point) (emagent-chat--user-zone-start)))
+          (save-excursion
+            (beginning-of-line)
+            (should (looking-at (emagent-chat--user-heading-re))))))))))
+
 (ert-deftest emagent-chat-test-finish-keeps-tools-in-reasoning ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)

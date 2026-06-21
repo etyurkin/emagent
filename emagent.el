@@ -22,6 +22,34 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(defmacro emagent--this-file ()
+  "`.el' path for the file being loaded or byte-compiled."
+  `(let ((file (or load-file-name
+                   (when (boundp 'byte-compile-dest-file)
+                     (let ((dest byte-compile-dest-file))
+                       (when (string-match "\\.elc\\'" dest)
+                         (substring dest 0 -1)))))))
+     (when file
+       (if (string-match "\\.elc\\'" file)
+           (substring file 0 -1)
+         file))))
+
+(defmacro emagent--bootstrap-load-path ()
+  "Load `emagent-load-path' and register grouped `lisp/' directories."
+  `(let ((this-file (emagent--this-file)))
+     (when this-file
+       (let* ((root (file-name-directory (file-truename this-file)))
+              (bootstrap (expand-file-name "lisp/core/emagent-load-path.el" root)))
+         (unless (featurep 'emagent-load-path)
+           (if (file-exists-p bootstrap)
+               (load bootstrap nil t)
+             (require 'emagent-load-path nil t)))
+         (emagent--register-load-path root)
+         (emagent--register-elpaca-recipe)))))
+
+(eval-and-compile (emagent--bootstrap-load-path))
+(emagent--bootstrap-load-path)
+
 (require 'emagent-acp-protocol)
 (require 'emagent-log)
 (require 'emagent-tools)

@@ -11,7 +11,11 @@
 
 (setq load-prefer-newer t)
 
-(add-to-list 'load-path (expand-file-name ".." (file-name-directory load-file-name)))
+(let* ((root (expand-file-name ".." (file-name-directory load-file-name)))
+       (bootstrap (expand-file-name "lisp/core/emagent-load-path.el" root)))
+  (add-to-list 'load-path root)
+  (load bootstrap nil t)
+  (emagent--register-load-path root))
 
 (require 'emagent-acp-protocol)
 (require 'emagent-mcp)

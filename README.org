@@ -37,7 +37,8 @@ to be on Emacs's own =exec-path= (e.g. =cursor-agent=, =claude-agent-acp=).
 
 #+BEGIN_SRC emacs-lisp
 (use-package emagent
-  :ensure (:host github :repo "etyurkin/emagent" :depth 1)
+  :ensure (:host github :repo "etyurkin/emagent" :depth 1
+           :files (:defaults ("lisp" . ("lisp/*/*.el"))))
   :commands (emagent emagent-cursor-start emagent-claude-start emagent-trust-workspace
                      emagent-trust-claude-reconnect emagent-mode emagent-set-model)
   :custom (emagent-default-provider (if (equal (getenv "EMAGENT_AGENT") "claude")
@@ -48,7 +49,8 @@ to be on Emacs's own =exec-path= (e.g. =cursor-agent=, =claude-agent-acp=).
 Set =EMAGENT_AGENT= to =claude= or =cursor= to pick the default provider when
 Emacs starts.
 
-For a local clone, add =:load-path "~/path/to/emagent"= instead of =:ensure=.
+For a local clone, add =:load-path "~/path/to/emagent"= (the repo root, not =lisp/=).
+Modules live under =lisp/= grouped by feature; =emagent.el= registers those paths at load time.
 
 * Usage
 

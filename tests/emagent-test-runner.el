@@ -4,9 +4,9 @@
 ;;
 ;; Run all tests:
 ;;
-;;   make test
+;;   emacs --batch -L . -L lisp/core -L lisp/acp ... -l tests/emagent-test-runner.el
 ;;
-;;   emacs --batch -L . -l tests/emagent-test-runner.el
+;;   make test
 ;;
 ;; From inside Emacs:
 ;;
