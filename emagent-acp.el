@@ -17,7 +17,7 @@
 (require 'emagent-mcp)
 (require 'emagent-prompts)
 
-(declare-function emagent-prompts--elisp-structural-policy "emagent-prompts")
+(declare-function emagent-prompts--structural-policy "emagent-prompts")
 
 (declare-function emagent-chat-clear-slash-commands "emagent-chat")
 (declare-function emagent-chat-seed-cursor-slash-commands "emagent-chat")
@@ -53,7 +53,7 @@ enabled so ACP file read/write route through Emacs buffers."
           (when emagent-acp-prefer-emacs
             emagent-acp-system-prompt-prefer-emacs)
           (when emagent-acp-prefer-emacs
-            (emagent-prompts--elisp-structural-policy))))
+            (emagent-prompts--structural-policy))))
 
 (defun emagent-acp-prefer-emacs-p ()
   "Return non-nil when emagent instructs the agent to prefer Emacs tools."

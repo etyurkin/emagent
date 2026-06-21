@@ -22,7 +22,7 @@
   :group 'emagent-elisp)
 
 (defcustom emagent-elisp-byte-compile-on-check t
-  "When non-nil, run `byte-compile-file' during `check_elisp_file' validation."
+  "When non-nil, run `byte-compile-file' during structural .el file validation."
   :type 'boolean
   :group 'emagent-elisp)
 
@@ -31,19 +31,10 @@
   :type 'boolean
   :group 'emagent-elisp)
 
-(defcustom emagent-elisp-require-structural-edits t
-  "When non-nil and tree-sitter elisp is available, reject write_file on .el files.
-Use elisp_replace_defun and elisp_insert_after_form instead."
-  :type 'boolean
-  :group 'emagent-elisp)
-
 (defcustom emagent-elisp-eval-after-structural-edit t
   "When non-nil, eval the new/changed form after a successful structural .el write."
   :type 'boolean
   :group 'emagent-elisp)
-
-(defvar emagent-elisp--structural-write-p nil
-  "Internal flag: allow write_file from structural Elisp tools.")
 
 (defconst emagent-elisp-anchor-start "__start__"
   "Anchor for `emagent-elisp-insert-after-form': first form in a new/empty file.")
@@ -299,7 +290,7 @@ Return a list of (POS . FORM) or signal with read error string."
 (defun emagent-elisp-check-file-content (content &optional path)
   "Validate Elisp file CONTENT.  Return \"OK\" or an error description."
   (if-let ((err (emagent-elisp--validate-content-strict content path)))
-      (format "SYNTAX ERROR — %s\n\nFix the file and call check_elisp_file before writing."
+      (format "SYNTAX ERROR — %s\n\nFix the file and call check_structural_file before writing."
               err)
     "OK"))
 
@@ -307,14 +298,6 @@ Return a list of (POS . FORM) or signal with read error string."
   "Return non-nil when PATH looks like an Emacs Lisp file."
   (and (stringp path)
        (string-match-p "\\.el\\'" path)))
-
-(defun emagent-elisp--write-file-blocked-message (path)
-  "Return an error string when direct write to PATH must be refused."
-  (when (and emagent-elisp-require-structural-edits
-             (not emagent-elisp--structural-write-p)
-             (emagent-elisp-treesit-available-p)
-             (emagent-elisp-elisp-file-p path))
-    "Tree-sitter elisp is available: use elisp_replace_defun or elisp_insert_after_form (__start__, __end__, or a symbol), not write_file."))
 
 (defun emagent-elisp--defun-name-p (form)
   "Return defined name when FORM is a defun-like top-level form."

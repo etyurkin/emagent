@@ -65,14 +65,14 @@
          (path (expand-file-name "existing.el" dir))
          (emagent-tools--root-boundary dir)
          (emagent-tools--project-directory dir)
-         (emagent-elisp-require-structural-edits t))
+         (emagent-struct-require-edits t))
     (unwind-protect
         (progn
           (write-region "(defun old () 1)" nil path)
           (cl-letf (((symbol-function 'emagent-elisp-treesit-available-p) (lambda () t)))
             (should-error
              (emagent-tools--write-file-content path "(defun old () 2)"))
-            (let ((emagent-elisp--structural-write-p t))
+            (let ((emagent-struct--structural-write-p t))
               (should (string= path
                                (emagent-tools--write-file-content path "(defun old () 2)"))))))
       (delete-directory dir t))))
@@ -82,7 +82,7 @@
          (path (expand-file-name "new.el" dir))
          (emagent-tools--root-boundary dir)
          (emagent-tools--project-directory dir)
-         (emagent-elisp-require-structural-edits t)
+         (emagent-struct-require-edits t)
          (emagent-elisp-byte-compile-on-check nil))
     (unwind-protect
         (cl-letf (((symbol-function 'emagent-elisp-treesit-available-p) (lambda () t)))
@@ -98,7 +98,7 @@
          (emagent-elisp-byte-compile-on-check nil)
          (emagent-elisp-eval-after-structural-edit t))
     (unwind-protect
-        (let ((result (emagent-tool-elisp-insert-after-form
+        (let ((result (emagent-tool-structural-insert
                        file "__start__" "(defun emagent-tools-eval-test () 'evaluated)")))
           (should (string-match-p "Wrote and evaluated" result))
           (should (fboundp 'emagent-tools-eval-test))
@@ -116,7 +116,7 @@
     (unwind-protect
         (progn
           (should-error
-           (emagent-tool-elisp-insert-after-form
+           (emagent-tool-structural-insert
             file "__start__" "(kill-emacs)"))
           (should-not (file-exists-p path)))
       (delete-directory dir t))))

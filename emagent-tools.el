@@ -11,6 +11,7 @@
 
 (require 'org)
 (require 'org-element)
+(require 'emagent-struct)
 (require 'emagent-elisp)
 
 ;; Declared special so binding it to suppress auto-insert is a dynamic binding.
@@ -405,6 +406,29 @@ magit-diff — run `magit-diff-buffer-file' (falls back to `display-buffer'
                 (emagent-tools--root-directory path)))
   (emagent-tools--read-file-content path line limit))
 
+(defun emagent-tools--read-structural-file-content (path)
+  "Like `emagent-tools--read-file-content' but return \"\" when PATH is missing."
+  (condition-case-unless-debug nil
+      (emagent-tools--read-file-content path)
+    (file-missing "")))
+
+(defun emagent-tools--structural-write (file content node)
+  "Write validated structural CONTENT to FILE; run plugin hooks for NODE."
+  (when-let ((plugin (emagent-struct-plugin-for-path file)))
+    (when-let ((before (plist-get plugin :before-save))
+               (err (funcall before node file)))
+      (user-error "%s" err)))
+  (let* ((emagent-struct--structural-write-p t)
+         (resolved (emagent-tools--write-file-content file content)))
+    (if-let ((plugin (emagent-struct-plugin-for-path file))
+             (after (plist-get plugin :after-save))
+             (err (funcall after node file)))
+        (format "Wrote %s but post-save failed: %s" resolved err)
+      (if (and (emagent-struct-plugin-for-path file)
+               (plist-get (emagent-struct-plugin-for-path file) :after-save))
+          (format "Wrote and evaluated form in %s" resolved)
+        (format "Wrote %s" resolved)))))
+
 (defun emagent-tools--write-file-content (path content)
   "Write CONTENT to PATH through an Emacs buffer.
 Each call is recorded as a single undoable change in the target buffer."
@@ -413,11 +437,9 @@ Each call is recorded as a single undoable change in the target buffer."
          (buffer (or (find-buffer-visiting resolved)
                      (let ((auto-insert nil))
                        (find-file-noselect resolved)))))
-    (when (and emagent-elisp-validate-on-write
-               (emagent-elisp-elisp-file-p resolved))
-      (if-let ((err (emagent-elisp--validate-content-strict content resolved)))
-          (user-error "Elisp validation failed for %s: %s" resolved err)))
-    (if-let ((blocked (emagent-elisp--write-file-blocked-message resolved)))
+    (when-let ((err (emagent-struct-validate-write resolved content)))
+      (user-error "Validation failed for %s: %s" resolved err))
+    (if-let ((blocked (emagent-struct-write-blocked-message resolved)))
         (user-error "%s" blocked))
     (when (and dir (not (file-exists-p dir)))
       (make-directory dir t))
@@ -441,19 +463,6 @@ Each call is recorded as a single undoable change in the target buffer."
       ((pred identity)
        (display-buffer buffer)))
     resolved))
-
-(defun emagent-tools--structural-elisp-write (file content eval-form)
-  "Write validated structural CONTENT to FILE; eval EVAL-FORM when configured."
-  (when (and emagent-elisp-eval-after-structural-edit eval-form)
-    (when-let ((err (emagent-tools--eval-form-guard eval-form)))
-      (user-error "%s" err)))
-  (let* ((emagent-elisp--structural-write-p t)
-         (resolved (emagent-tools--write-file-content file content)))
-    (if (and emagent-elisp-eval-after-structural-edit eval-form)
-        (if-let ((err (emagent-tools--eval-form-execute eval-form)))
-            (format "Wrote %s but eval failed: %s" resolved err)
-          (format "Wrote and evaluated form in %s" resolved))
-      (format "Wrote %s" resolved))))
 
 (defun emagent-tool-write-file (path content)
   "Write CONTENT to PATH through Emacs after user confirmation."
@@ -561,50 +570,58 @@ Call this before writing non-trivial Elisp."
   (require 'emagent-prompts)
   emagent-acp-elisp-guide)
 
+(defun emagent-tools--structural-error-p (result prefixes)
+  "Return non-nil when RESULT looks like an error string from PREFIXES."
+  (or (string-prefix-p "SYNTAX ERROR" result)
+      (seq-some (lambda (p) (string-prefix-p p result)) prefixes)))
+
+(defun emagent-tool-check-structural-file (file)
+  "Validate FILE with its structural language plugin."
+  (emagent-struct-check-file file (emagent-tools--read-structural-file-content file)))
+
+(defun emagent-tool-check-structural-node (file node)
+  "Validate NODE text for FILE's structural language plugin."
+  (emagent-struct-check-node file node))
+
+(defun emagent-tool-structural-tree (file &optional depth)
+  "Return a shallow structural outline of FILE."
+  (emagent-struct-outline file (emagent-tools--read-structural-file-content file)
+                          depth))
+
+(defun emagent-tool-structural-bounds (file symbol)
+  "Return START:END byte positions for SYMBOL in FILE."
+  (emagent-struct-node-bounds file (emagent-tools--read-structural-file-content file)
+                              symbol))
+
+(defun emagent-tool-structural-replace (file symbol new-body)
+  "Replace top-level node SYMBOL in FILE with complete NEW-BODY text."
+  (let* ((content (emagent-tools--read-structural-file-content file))
+         (updated (emagent-struct-replace-node file content symbol new-body)))
+    (if (emagent-tools--structural-error-p
+         updated '("No " "new_body" "node must"))
+        updated
+      (emagent-tools--structural-write file updated new-body))))
+
+(defun emagent-tool-structural-insert (file after-symbol node)
+  "Insert complete top-level NODE after AFTER-SYMBOL in FILE."
+  (let* ((content (emagent-tools--read-structural-file-content file))
+         (updated (emagent-struct-insert-after file content after-symbol node)))
+    (if (emagent-tools--structural-error-p
+         updated '("No " "node must" "__start__"))
+        updated
+      (emagent-tools--structural-write file updated node))))
+
 (defun emagent-tool-check-elisp (form)
   "Check FORM for Emacs Lisp syntax errors without executing it.
 Returns \"OK\" when the form parses cleanly, or an error description.
 Always call this before eval for any form longer than 3 lines."
   (emagent-elisp-check-form (if (stringp form) form (prin1-to-string form))))
 
-(defun emagent-tool-check-elisp-file (file)
-  "Validate Emacs Lisp FILE without executing it.
-Returns \"OK\" or an error description with line:column."
-  (emagent-elisp-check-file-content (emagent-tools--read-file-content file) file))
-
-(defun emagent-tool-elisp-defun-bounds (file symbol)
-  "Return \"START:END\" byte positions for SYMBOL's defun in FILE."
-  (emagent-elisp-defun-bounds (emagent-tools--read-file-content file) symbol))
-
-(defun emagent-tool-elisp-replace-defun (file symbol new-body)
-  "Replace defun SYMBOL in FILE with complete NEW-BODY form."
-  (let* ((content (emagent-tools--read-elisp-file-content file))
-         (updated (emagent-elisp-replace-defun content symbol new-body)))
-    (if (or (string-prefix-p "SYNTAX ERROR" updated)
-            (string-prefix-p "No defun" updated)
-            (string-prefix-p "new_body" updated))
-        updated
-      (emagent-tools--structural-elisp-write file updated new-body))))
-
-(defun emagent-tool-elisp-insert-after-form (file after-symbol form)
-  "Insert top-level FORM after AFTER-SYMBOL anchor in FILE."
-  (let* ((content (emagent-tools--read-elisp-file-content file))
-         (updated (emagent-elisp-insert-after-form content after-symbol form)))
-    (if (or (string-prefix-p "SYNTAX ERROR" updated)
-            (string-prefix-p "No top-level" updated))
-        updated
-      (emagent-tools--structural-elisp-write file updated form))))
-
-(defun emagent-tool-elisp-sexp-tree (file &optional depth)
-  "Return a shallow outline of top-level forms in FILE."
-  (emagent-elisp-sexp-tree (emagent-tools--read-file-content file) depth))
-
 (defun emagent-tool-eval (form)
   "Evaluate Emacs Lisp FORM and return the result as a string.
 Use this for small utilities and text processing — not Python or shell.
 Blocked symbols must go through dedicated emagent-tool-* helpers.
-For forms longer than 3 lines, call check_elisp first; call check_elisp_file
-before write_file on .el files."
+For forms longer than 3 lines, call check_elisp first."
   (interactive)
   (emagent-tools--eval-form-safely
    (if (stringp form) form (prin1-to-string form))))

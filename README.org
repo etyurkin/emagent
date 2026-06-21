@@ -214,18 +214,18 @@ Dangerous symbols (=delete-file=, =shell-command=, =write-region=, =load-file=,
 etc.) trigger a confirmation prompt showing the full code before execution.
 =kill-emacs= and =pause-emacs= are permanently blocked.
 
-The agent is guided to call =check_elisp= before =eval= and =check_elisp_file=
-before =write_file= on =.el= files when tree-sitter is not installed.
+The agent is guided to call =check_elisp= before =eval= and =check_structural_file=
+before =write_file= on structural files (=.el=, =.py=, =.lisp=, =.cl=) when
+tree-sitter is not installed.
 
-When the tree-sitter elisp grammar is installed, =write_file= on =.el= files is
-rejected and all edits go through structural tools: =elisp_insert_after_form=
-(=__start__= for a new file, =__end__= or a symbol to add forms) and
-=elisp_replace_defun= for changing a function. Each call passes a complete
-top-level form and is validated (read + byte-compile) before save.
+When a matching tree-sitter grammar is installed, =write_file= on those files is
+rejected and all edits go through =structural_insert= (=__start__= for a new file,
+=__end__= or a symbol to add nodes) and =structural_replace= for changing a node.
+Each call passes complete node text and is validated before save; =.el= files also
+byte-compile and eval the new form after save.
 
-Optional: install [[https://github.com/Wilfred/tree-sitter-elisp][tree-sitter-elisp]]
-(=M-x treesit-install-language-grammar= =elisp= after emagent loads).
-=elisp_guide= covers the workflow and pitfalls.
+Optional: install tree-sitter grammars (=elisp=, =python=, =commonlisp= via
+=M-x treesit-install-language-grammar=). =elisp_guide= covers Elisp patterns and pitfalls.
 
 ** MCP tools exposed to the agent
 
@@ -239,12 +239,13 @@ Optional: install [[https://github.com/Wilfred/tree-sitter-elisp][tree-sitter-el
 | =buffer_list=     | Open files inside the project visible to Emacs            |
 | =imenu_index=     | Function/class outline for any file                       |
 | =eval=            | Execute Emacs Lisp in the live process                    |
-| =check_elisp=     | Validate Elisp form syntax (line:column errors)           |
-| =check_elisp_file= | Validate entire .el file (read + byte-compile)           |
-| =elisp_defun_bounds= | Byte positions of a defun in a file                    |
-| =elisp_replace_defun= | Replace one defun with a complete new form              |
-| =elisp_insert_after_form= | Insert a top-level form after an existing one       |
-| =elisp_sexp_tree= | Shallow outline of top-level forms in a .el file          |
+| =check_elisp=     | Validate Elisp form syntax before eval (line:column errors) |
+| =check_structural_file= | Validate whole file via language plugin (.el byte-compiles) |
+| =check_structural_node= | Validate one top-level node without saving            |
+| =structural_tree= | Shallow outline of top-level nodes in a file              |
+| =structural_bounds= | Byte positions of a top-level node in a file            |
+| =structural_replace= | Replace one top-level node with complete new text      |
+| =structural_insert= | Insert a top-level node after __start__, __end__, or a symbol |
 | =elisp_guide=     | On-demand Elisp reference (patterns, pitfalls, examples)  |
 | =apropos=         | Find symbols by name fragment                             |
 | =apropos_doc=     | Find symbols by docstring meaning                         |
