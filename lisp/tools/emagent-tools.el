@@ -142,12 +142,14 @@ Falls back to `completing-read' when CHAT-BUFFER is nil or dead."
       (let* ((labels (mapcar #'car choices))
              (label (completing-read (concat prompt " ") labels nil t)))
         (cdr (assoc label choices)))
-    (let ((result nil) start end)
+    (let ((result nil) start-mark end-mark)
       (with-current-buffer chat-buffer
         (let ((inhibit-read-only t))
+          (when (fboundp 'emagent-chat--writable)
+            (funcall #'emagent-chat--writable))
           (goto-char (point-max))
           (unless (bolp) (insert "\n"))
-          (setq start (point))
+          (setq start-mark (copy-marker (point) nil))
           (when preamble (insert preamble))
           (insert "\n" prompt "\n")
           (dolist (choice choices)
@@ -159,20 +161,26 @@ Falls back to `completing-read' when CHAT-BUFFER is nil or dead."
                            'follow-link t)
             (insert "  "))
           (insert "\n")
-          (setq end (point))))
+          (setq end-mark (copy-marker (point) nil))))
       (when-let ((win (get-buffer-window chat-buffer)))
         (with-selected-window win
           (when (with-current-buffer chat-buffer
                   (pos-visible-in-window-p (point-max) nil t))
-            (goto-char end)
+            (goto-char (marker-position end-mark))
             (recenter -3))))
       (unwind-protect
           (condition-case nil
               (recursive-edit)
             (quit nil))
-        (with-current-buffer chat-buffer
-          (let ((inhibit-read-only t))
-            (delete-region start end))))
+        (when (and start-mark end-mark
+                   (marker-buffer start-mark)
+                   (marker-buffer end-mark))
+          (with-current-buffer chat-buffer
+            (let ((inhibit-read-only t))
+              (when (fboundp 'emagent-chat--writable)
+                (funcall #'emagent-chat--writable))
+              (delete-region (marker-position start-mark)
+                             (marker-position end-mark))))))
       result)))
 
 (defun emagent-tools--remember-allowed-tool (tool-name)

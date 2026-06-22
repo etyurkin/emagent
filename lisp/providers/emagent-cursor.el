@@ -30,13 +30,14 @@ from ~/.cursor/mcp.json (see `emagent-mcp-ensure-cursor-config')."
   :group 'emagent-cursor)
 
 (defcustom emagent-cursor-acp-extra-args
-  '("--approve-mcps" "--force" "--sandbox" "disabled")
+  '("--sandbox" "disabled")
   "Extra arguments appended after \"acp\" when spawning cursor-agent.
 
 Cursor documents these flags on the top-level agent command; passing them
-here may still take effect depending on the CLI version.  They reduce
-sandbox blocks on WebSearch, shell, and MCP tool calls in ACP sessions.
-Set to nil to pass no extra flags."
+here may still take effect depending on the CLI version.  The default
+disables the agent sandbox so MCP and shell tools reach emagent; Emacs
+tool permission prompts use ACP `session/request_permission' (see
+`emagent-acp-auto-approve-permissions').  Set to nil to pass no extra flags."
   :type '(repeat string)
   :group 'emagent-cursor)
 
@@ -53,12 +54,6 @@ Set to nil to pass no extra flags."
   "Directory where Cursor stores ACP session data."
   :type 'directory
   :group 'emagent-cursor)
-
-(defconst emagent-cursor--tool-enrich-max-attempts 8
-  "Maximum store.db polls when Cursor ACP omits tool-call rawInput.")
-
-(defconst emagent-cursor--tool-enrich-base-delay 0.05
-  "Initial idle delay between Cursor store.db enrichment retries.")
 
 (defun emagent-cursor-command ()
   "Return the Cursor ACP command name."
@@ -97,15 +92,17 @@ invocation to its own in-Emacs MCP session."
 
 (defun emagent-cursor--json-field (data key)
   "Return KEY from JSON DATA alist or hash-table."
-  (cond
-   ((hash-table-p data)
-    (or (gethash key data)
-        (gethash (symbol-name key) data)
-        (gethash (downcase (symbol-name key)) data)))
-   ((listp data)
-    (or (alist-get key data)
-        (alist-get (downcase (symbol-name key)) data)))
-   (t nil)))
+  (let ((str (symbol-name key)))
+    (cond
+     ((hash-table-p data)
+      (or (gethash key data)
+          (gethash str data)
+          (gethash (downcase str) data)))
+     ((listp data)
+      (or (alist-get key data)
+          (alist-get str data)
+          (alist-get (downcase str) data)))
+     (t nil))))
 
 (defun emagent-cursor--tool-call-raw-empty-p (raw)
   "Return non-nil when Cursor ACP rawInput/arguments carry no parameters."
@@ -147,15 +144,30 @@ invocation to its own in-Emacs MCP session."
          (replace-regexp-in-string "^call_" "tool_" tool-call-id)
          (replace-regexp-in-string "^tool_" "call_" tool-call-id))))
 
+(defun emagent-cursor--parse-blob-json (text)
+  "Parse JSON embedded in a store.db blob TEXT, skipping binary prefixes."
+  (when (and (stringp text) (not (string-empty-p text)))
+    (let ((start (or (string-match-p "{\"role\":" text)
+                     (string-match-p "{\"id\":" text))))
+      (when start
+        (condition-case nil
+            (json-parse-string (substring text start)
+                               :object-type 'alist
+                               :array-type 'list
+                               :null-object nil
+                               :false-object nil)
+          (error nil))))))
+
 (defun emagent-cursor--tool-call-from-blob-json (json tool-call-id)
   "Parse assistant/tool blob JSON and return (NAME . ARGS) for TOOL-CALL-ID."
-  (when-let* ((data (condition-case nil
-                        (json-parse-string json
-                                           :object-type 'alist
-                                           :array-type 'list
-                                           :null-object nil
-                                           :false-object nil)
-                      (error nil)))
+  (when-let* ((data (or (condition-case nil
+                           (json-parse-string json
+                                              :object-type 'alist
+                                              :array-type 'list
+                                              :null-object nil
+                                              :false-object nil)
+                         (error nil))
+                        (emagent-cursor--parse-blob-json json)))
               (content (emagent-cursor--json-field data 'content)))
     (catch 'found
       (dolist (item (if (vectorp content) (append content nil) (append content nil)))
@@ -163,8 +175,10 @@ invocation to its own in-Emacs MCP session."
                    (equal (emagent-cursor--json-field item 'toolCallId) tool-call-id))
           (let ((name (emagent-cursor--json-field item 'toolName))
                 (args (emagent-cursor--json-field item 'args)))
-            (when (and name args (not (emagent-cursor--tool-call-raw-empty-p args)))
-              (throw 'found (cons name args)))))))))
+            (when name
+              (throw 'found (cons name
+                                  (unless (emagent-cursor--tool-call-raw-empty-p args)
+                                    args))))))))))
 
 (defun emagent-cursor-tool-call-from-store (session-id tool-call-id)
   "Return (TOOL-NAME . ARGS-ALIST) for TOOL-CALL-ID from Cursor store.db."
@@ -185,6 +199,34 @@ invocation to its own in-Emacs MCP session."
             (when-let ((entry (emagent-cursor--tool-call-from-blob-json line variant)))
               (throw 'found entry))))))))
 
+(defconst emagent-cursor--generic-acp-titles
+  '("MCP" "Read File" "Read" "Edit" "Write" "grep" "Grep" "Shell" "tool")
+  "ACP tool titles replaced by store.db toolName when available.")
+
+(defun emagent-cursor--generic-acp-title-p (title)
+  "Return non-nil when Cursor ACP TITLE is too generic to keep after store lookup."
+  (and (stringp title)
+       (let ((trimmed (string-trim title)))
+         (or (member trimmed emagent-cursor--generic-acp-titles)
+             (string-match-p "\\`MCP" trimmed)))))
+
+(defun emagent-cursor--tool-display-name (name)
+  "Return a concise label for Cursor store.db toolName NAME."
+  (cond
+   ((not (stringp name)) "tool")
+   ((string-match "\\`mcp_emagent_\\(.+\\)\\'" name)
+    (match-string 1 name))
+   ((string-match "\\`mcp_\\(.+\\)\\'" name)
+    (match-string 1 name))
+   (t name)))
+
+(defun emagent-cursor--enriched-tool-title (acp-title store-name)
+  "Prefer store NAME over generic ACP TITLE."
+  (let ((display (emagent-cursor--tool-display-name store-name)))
+    (if (emagent-cursor--generic-acp-title-p acp-title)
+        display
+      (or acp-title display))))
+
 (defun emagent-cursor--update-put (update key value)
   "Return UPDATE alist with KEY bound to VALUE, replacing any prior binding."
   (cons (cons key value) (assoc-delete-all key update)))
@@ -197,9 +239,12 @@ invocation to its own in-Emacs MCP session."
                         (entry (emagent-cursor-tool-call-from-store session-id id)))
               (emagent-cursor--update-put
                (emagent-cursor--update-put
-                (assoc-delete-all 'rawInput (assoc-delete-all 'arguments update))
-                'rawInput (cdr entry))
-               'title (or (map-elt update 'title) (car entry))))
+                (emagent-cursor--update-put
+                 (assoc-delete-all 'rawInput (assoc-delete-all 'arguments update))
+                 'rawInput (or (cdr entry) '()))
+                'title (emagent-cursor--enriched-tool-title
+                         (map-elt update 'title) (car entry)))
+               'subtitle nil))
             update)
       update)))
 

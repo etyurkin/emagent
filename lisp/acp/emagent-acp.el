@@ -75,8 +75,16 @@ iCloud Drive prompts.  Set to nil only if you prefer the agent's own file tools.
   :type 'boolean
   :group 'emagent)
 
-(defcustom emagent-acp-auto-approve-permissions t
+(defcustom emagent-acp-auto-approve-permissions nil
   "Automatically approve ACP session permission requests.
+
+Cursor and other ACP agents block on this response before running a tool.
+When nil (default), emagent prompts in the chat buffer and does not reply
+until you choose Allow or Deny.  MCP tools invoked through an emagent ACP
+session do not show a separate MCP confirmation prompt.
+
+Set to t for frictionless sessions when you also want to skip Emacs-side ACP
+prompts.
 
 These gates do not replace the external agent's own tool permissions; they
 only unblock the ACP session handshake."
@@ -259,6 +267,7 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :mcp-http nil state)
     (puthash :permission-queue nil state)
     (puthash :permission-busy nil state)
+    (puthash :permission-drain-timer nil state)
     (puthash :session-auto-approve nil state)
     (puthash :external-tool-gate-reasons nil state)
     (puthash :external-tool-gate-proactive-logged nil state)
@@ -282,7 +291,10 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :tool-call-titles (make-hash-table :test 'equal) state)
     (puthash :tool-call-inputs (make-hash-table :test 'equal) state)
     (puthash :tool-call-labels (make-hash-table :test 'equal) state)
-    (puthash :cursor-tool-enrich-attempts (make-hash-table :test 'equal) state)
+    (puthash :tool-call-pending (make-hash-table :test 'equal) state)
+    (puthash :cursor-tool-resolve-queue nil state)
+    (puthash :cursor-tool-resolve-worker nil state)
+    (puthash :cursor-tool-resolve-attempts (make-hash-table :test 'equal) state)
     ;; Rendering callbacks — set by the integration layer (emagent.el).
     ;; :cb-chunk fn(text)       — streaming assistant text chunk
     ;; :cb-thought fn(text)     — streaming reasoning text chunk
@@ -397,6 +409,10 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
 (defun emagent-acp-busy-p ()
   "Return non-nil when the current buffer's ACP session is processing a prompt."
   (and emagent-acp--session (map-elt emagent-acp--session :busy)))
+
+(defun emagent-acp-waiting-permission-p ()
+  "Return non-nil while an interactive permission prompt is open."
+  (and emagent-acp--session (map-elt emagent-acp--session :permission-busy)))
 
 (defun emagent-acp-ready-p ()
   "Return non-nil when the current buffer's ACP session is connected and idle."
@@ -1183,44 +1199,157 @@ Never returns a deny option.  OPTIONS may be a list or vector."
   (when-let ((launch (emagent-acp--agent-launch-string state)))
     (string-match-p "cursor-agent" launch)))
 
-(defun emagent-acp--tool-call-label-has-detail-p (label)
-  "Return non-nil when LABEL includes a detail suffix after the title."
-  (and label (string-match-p ": " label)))
+(defconst emagent-acp--cursor-tool-resolve-max-attempts 8
+  "Maximum store.db lookups while waiting for Cursor tool-call args.")
+
+(defconst emagent-acp--cursor-tool-resolve-base-delay 0.05
+  "Initial idle delay between Cursor store.db resolve retries.")
+
+(defun emagent-acp--cursor-tool-resolve-active-p (state)
+  "Return non-nil while Cursor store.db tool-call lookups are pending."
+  (and (emagent-acp--cursor-agent-p state)
+       (or (map-elt state :cursor-tool-resolve-worker)
+           (map-elt state :cursor-tool-resolve-queue))))
+
+(defun emagent-acp--schedule-permission-drain (state)
+  "Run `emagent-acp--drain-permission-queue' after pending tool updates."
+  (unless (map-elt state :permission-drain-timer)
+    (map-put! state :permission-drain-timer
+              (run-at-time 0 nil
+                           (lambda ()
+                             (map-put! state :permission-drain-timer nil)
+                             (emagent-acp--drain-permission-queue state))))))
+
+(defun emagent-acp--enqueue-cursor-tool-resolve (state id &optional delay)
+  "Queue ID for a serialized Cursor store.db lookup."
+  (let ((queue (map-elt state :cursor-tool-resolve-queue)))
+    (unless (member id queue)
+      (map-put! state :cursor-tool-resolve-queue (append queue (list id)))))
+  (unless (map-elt state :cursor-tool-resolve-worker)
+    (emagent-acp--drain-cursor-tool-resolve-queue state delay)))
+
+(defun emagent-acp--drain-cursor-tool-resolve-queue (state &optional delay)
+  "Resolve one queued Cursor tool call via `run-at-time'."
+  (unless (map-elt state :cursor-tool-resolve-worker)
+    (if-let ((id (car (map-elt state :cursor-tool-resolve-queue))))
+        (progn
+          (map-put! state :cursor-tool-resolve-worker t)
+          (run-at-time
+           (or delay 0) nil
+           (lambda ()
+             (map-put! state :cursor-tool-resolve-worker nil)
+             (map-put! state :cursor-tool-resolve-queue
+                         (cdr (map-elt state :cursor-tool-resolve-queue)))
+             (let ((retry-delay (emagent-acp--resolve-cursor-tool-from-store state id)))
+               (if retry-delay
+                   (emagent-acp--drain-cursor-tool-resolve-queue state retry-delay)
+                 (emagent-acp--drain-cursor-tool-resolve-queue state 0))))))
+      (emagent-acp--drain-permission-queue state))))
+
+(defun emagent-acp--resolve-cursor-tool-from-store (state id)
+  "Look up tool-call ID in Cursor store.db; return retry delay or nil when done."
+  (when-let* ((pending-table (map-elt state :tool-call-pending))
+              (merged (gethash id pending-table))
+              (session-id (map-elt state :session-id))
+              (fboundp 'emagent-cursor-enrich-tool-call-update))
+    (let* ((enriched (emagent-cursor-enrich-tool-call-update session-id merged))
+           (merged (if (equal enriched merged) merged
+                     (emagent-acp--merged-tool-call-update state enriched)))
+           (label (emagent-acp--tool-call-label merged))
+           (status (map-elt merged 'status))
+           (kind (map-elt merged 'kind))
+           (attempts-table (map-elt state :cursor-tool-resolve-attempts))
+           (attempts (gethash id attempts-table 0)))
+      (cond
+       ((emagent-acp--tool-call-meaningful-detail-p merged)
+        (puthash id 0 attempts-table)
+        (emagent-acp--emit-tool-call-display state id kind merged label status)
+        (remhash id pending-table)
+        nil)
+       ((>= attempts emagent-acp--cursor-tool-resolve-max-attempts)
+        (puthash id 0 attempts-table)
+        (emagent-acp--emit-tool-call-display state id kind merged label status)
+        (remhash id pending-table)
+        nil)
+       (t
+        (puthash id (1+ attempts) attempts-table)
+        (let ((queue (map-elt state :cursor-tool-resolve-queue)))
+          (unless (member id queue)
+            (map-put! state :cursor-tool-resolve-queue (append queue (list id)))))
+        (* emagent-acp--cursor-tool-resolve-base-delay (expt 2 attempts)))))))
+
+(defun emagent-acp--tool-call-elisp-prin1-p (value)
+  "Return non-nil when VALUE looks like a printed Elisp object."
+  (and (stringp value)
+       (string-match-p "\\`#s(" (string-trim value))))
+
+(defun emagent-acp--tool-call-prin1-hash-detail (raw)
+  "Extract a display string from a printed hash-table RAW, or nil."
+  (when (emagent-acp--tool-call-elisp-prin1-p raw)
+    (cl-loop for key in '(command path file pattern form directory args)
+             when (string-match (format "(%s \\([^)]*\\))" key) raw)
+             return (string-trim (match-string 1 raw)))))
 
 (defun emagent-acp--tool-call-raw-input-empty-p (raw)
   "Return non-nil when tool-call rawInput carries no usable parameters."
   (or (null raw)
+      (emagent-acp--tool-call-elisp-prin1-p raw)
       (and (stringp raw)
            (let ((trimmed (string-trim raw)))
              (or (string-empty-p trimmed)
-                 (member trimmed '("{}" "[]" "null"))))
+                 (member trimmed '("{}" "[]" "null")))))
       (and (listp raw) (null raw))
-      (and (hash-table-p raw) (zerop (hash-table-count raw))))))
+      (and (hash-table-p raw) (zerop (hash-table-count raw)))))
 
-(defun emagent-acp--maybe-schedule-cursor-tool-enrich (state update label)
-  "Retry tool-call display when Cursor store.db has not flushed args yet."
-  (when (and (fboundp 'emagent-cursor-enrich-tool-call-update)
-             (boundp 'emagent-cursor--tool-enrich-max-attempts)
-             (boundp 'emagent-cursor--tool-enrich-base-delay)
-             (emagent-acp--cursor-agent-p state)
-             (map-elt state :session-id)
-             (map-elt update 'toolCallId)
-             (not (emagent-acp--tool-call-label-has-detail-p label)))
-    (let* ((id (map-elt update 'toolCallId))
-           (attempts-table (map-elt state :cursor-tool-enrich-attempts))
-           (attempts (gethash id attempts-table 0)))
-      (when (< attempts emagent-cursor--tool-enrich-max-attempts)
-        (puthash id (1+ attempts) attempts-table)
-        (run-with-idle-timer
-         (if (zerop attempts) 0 (* emagent-cursor--tool-enrich-base-delay (expt 2 attempts)))
-         nil
-         (lambda ()
-           (when (map-elt state :session-id)
-             (let* ((merged (emagent-acp--merged-tool-call-update state update))
-                    (enriched (emagent-cursor-enrich-tool-call-update
-                               (map-elt state :session-id) merged)))
-               (unless (equal enriched merged)
-                 (emagent-acp--on-tool-call state enriched))))))))))
+(defun emagent-acp--tool-call-update-from-request (tool-call)
+  "Return an ACP tool-call UPDATE alist from a permission TOOL-CALL object."
+  (when-let ((id (map-elt tool-call 'toolCallId)))
+    (append `((toolCallId . ,id))
+            (cl-remove nil
+                       (list (when-let ((v (map-elt tool-call 'title)))
+                               (cons 'title v))
+                             (when-let ((v (map-elt tool-call 'rawInput)))
+                               (cons 'rawInput v))
+                             (when-let ((v (map-elt tool-call 'arguments)))
+                               (cons 'arguments v))
+                             (when-let ((v (map-elt tool-call 'subtitle)))
+                               (cons 'subtitle v))
+                             (when-let ((v (map-elt tool-call 'kind)))
+                               (cons 'kind v))
+                             (when-let ((v (map-elt tool-call 'status)))
+                               (cons 'status v)))))))
+
+(defun emagent-acp--ingest-tool-call-request (state tool-call)
+  "Merge TOOL-CALL from session/request_permission and refresh display."
+  (when-let ((update (emagent-acp--tool-call-update-from-request tool-call)))
+    (emagent-acp--on-tool-call state update)))
+
+(defun emagent-acp--emit-tool-call-display (state id kind _merged label status)
+  "Push TOOL-CALL LABEL to the chat buffer and update session UI."
+  (let* ((labels (map-elt state :tool-call-labels))
+         (prev (and id labels (gethash id labels)))
+         (completed (member status '("completed" "failed")))
+         (label-changed (and label (not (string-empty-p label))
+                             (or (null prev) (not (string= prev label))))))
+    (when label
+      (emagent-acp--detect-external-refusal-in-text state label))
+    (when label-changed
+      (when id (puthash id label labels))
+      (unless completed
+        (emagent-acp--notify-user state (format "emagent: tool %s" label)))
+      (when-let ((buf (emagent-acp--chat-buffer state)))
+        (with-current-buffer buf
+          (emagent-chat-show-tool-call id label))))
+    (if completed
+        (progn
+          (map-put! state :current-tool nil)
+          (map-put! state :current-tool-kind nil))
+      (when label-changed
+        (map-put! state :current-tool label)
+        (when kind (map-put! state :current-tool-kind kind))
+        (emagent-acp--schedule-prompt-watchdog state)))
+    (when (or label-changed completed)
+      (emagent-acp--refresh-mode-line state))))
 
 (defun emagent-acp--tool-call-truncate (string)
   "Return STRING truncated for tool-call display."
@@ -1250,6 +1379,13 @@ Never returns a deny option.  OPTIONS may be a list or vector."
    ((stringp value) value)
    ((numberp value) (number-to-string value))
    ((null value) nil)
+   ((hash-table-p value)
+    (cl-loop for key in '(command path file file_path target_file filename
+                               relativeWorkspacePath url query q search input
+                               text pattern glob form directory dir name args)
+             for v = (emagent-acp--tool-call-data-get value key)
+             when (and (stringp v) (not (string-empty-p (string-trim v))))
+             return (string-trim v)))
    (t (let ((text (prin1-to-string value)))
         (unless (string-empty-p text) text)))))
 
@@ -1292,16 +1428,18 @@ Never returns a deny option.  OPTIONS may be a list or vector."
 
 (defun emagent-acp--tool-call-raw-input-detail (raw)
   "Extract a concise detail string from tool-call rawInput RAW."
-  (when-let* ((data (emagent-acp--tool-call-normalize-data raw))
-              (key (seq-find (lambda (k)
-                               (emagent-acp--tool-call-value-string
-                                (emagent-acp--tool-call-data-get data k)))
-                             '(url command query q search input text pattern path
-                                   file file_path target_file filename
-                                   relativeWorkspacePath glob form
-                                   directory dir name args description))))
-    (emagent-acp--tool-call-value-string
-     (emagent-acp--tool-call-data-get data key))))
+  (or
+   (when-let* ((data (emagent-acp--tool-call-normalize-data raw))
+               (key (seq-find (lambda (k)
+                                (emagent-acp--tool-call-value-string
+                                 (emagent-acp--tool-call-data-get data k)))
+                              '(path file file_path target_file filename
+                                    relativeWorkspacePath url command query q
+                                    search input text pattern glob form
+                                    directory dir name args description))))
+     (emagent-acp--tool-call-value-string
+      (emagent-acp--tool-call-data-get data key)))
+   (emagent-acp--tool-call-prin1-hash-detail raw)))
 
 (defun emagent-acp--tool-call-locations-detail (locations)
   "Extract a file-path summary from tool-call locations LOCATIONS."
@@ -1332,19 +1470,44 @@ Never returns a deny option.  OPTIONS may be a list or vector."
       (when (and (stringp text) (not (string-empty-p (string-trim text))))
         (string-trim text)))))
 
+(defun emagent-acp--tool-call-input (update)
+  "Return raw tool input from ACP UPDATE.
+
+Cursor often sends a useless `#s(hash-table …)' string in rawInput while the
+real parameters live in arguments; prefer arguments when both are present."
+  (let ((args (map-elt update 'arguments))
+        (raw (map-elt update 'rawInput)))
+    (cond
+     ((and args (not (emagent-acp--tool-call-raw-input-empty-p args))) args)
+     ((and raw (not (emagent-acp--tool-call-raw-input-empty-p raw))) raw)
+     (t (or args raw)))))
+
 (defun emagent-acp--tool-call-detail (update)
   "Return a concise detail string from ACP tool-call UPDATE, or nil."
-  (or (let ((subtitle (map-elt update 'subtitle)))
-        (when (and (stringp subtitle) (not (string-empty-p subtitle)))
-          subtitle))
-      (emagent-acp--tool-call-locations-detail (map-elt update 'locations))
-      (emagent-acp--tool-call-raw-input-detail (map-elt update 'rawInput))
-      (emagent-acp--tool-call-edits-detail (map-elt update 'rawInput))
-      (emagent-acp--tool-call-content-detail (map-elt update 'content))))
+  (let ((input (emagent-acp--tool-call-input update)))
+    (or (emagent-acp--tool-call-raw-input-detail input)
+        (emagent-acp--tool-call-edits-detail input)
+        (emagent-acp--tool-call-locations-detail (map-elt update 'locations))
+        (let ((subtitle (map-elt update 'subtitle)))
+          (when (emagent-acp--human-tool-detail-p subtitle)
+            subtitle))
+        (emagent-acp--tool-call-content-detail (map-elt update 'content)))))
+
+(defconst emagent-acp--tool-call-weak-details
+  '("tool" "Tool" "running" "pending")
+  "ACP tool-call detail strings too generic to display without store.db lookup.")
+
+(defun emagent-acp--tool-call-meaningful-detail-p (update)
+  "Return non-nil when UPDATE has useful path, command, or similar detail."
+  (when-let ((detail (emagent-acp--tool-call-detail update)))
+    (let ((trimmed (string-trim detail)))
+      (and (not (string-empty-p trimmed))
+           (not (member trimmed emagent-acp--tool-call-weak-details))))))
 
 (defun emagent-acp--tool-call-label (update)
   "Return a display label for ACP tool-call UPDATE."
   (let* ((title (string-trim (or (map-elt update 'title) "tool")))
+         (title (if (string-match-p "\\`MCP:? *tool\\'" title) "MCP" title))
          (detail (emagent-acp--tool-call-detail update)))
     (cond
      ((and detail (not (string-empty-p detail))
@@ -1385,39 +1548,60 @@ Never returns a deny option.  OPTIONS may be a list or vector."
            (kind (map-elt update 'kind))
            (merged (emagent-acp--merged-tool-call-update state update))
            (label (emagent-acp--tool-call-label merged))
-           (labels (map-elt state :tool-call-labels))
-           (prev (and id labels (gethash id labels)))
-           (completed (member status '("completed" "failed")))
-           (label-changed (and label (not (string-empty-p label))
-                               (or (null prev) (not (string= prev label))))))
-      (when label
-        (emagent-acp--detect-external-refusal-in-text state label))
-      (when label-changed
-        (when id (puthash id label labels))
-        (unless completed
-          (emagent-acp--notify-user state (format "emagent: tool %s" label)))
-        (when-let ((buf (emagent-acp--chat-buffer state)))
-          (with-current-buffer buf
-            (emagent-chat-show-tool-call id label))))
-      (if completed
-          (progn
-            (map-put! state :current-tool nil)
-            (map-put! state :current-tool-kind nil))
-        (when label-changed
-          (map-put! state :current-tool label)
-          (when kind (map-put! state :current-tool-kind kind))
-          (emagent-acp--schedule-prompt-watchdog state)))
-      (when (or label-changed completed)
-        (emagent-acp--refresh-mode-line state))
-      (when (and label (not (emagent-acp--tool-call-label-has-detail-p label)))
-        (emagent-acp--maybe-schedule-cursor-tool-enrich state merged label)))))
+           (pending-table (map-elt state :tool-call-pending))
+           (has-detail (emagent-acp--tool-call-meaningful-detail-p merged))
+           (defer (and (emagent-acp--cursor-agent-p state)
+                       id
+                       (not has-detail)))
+           (show (and label (not (string-empty-p label)) (not defer))))
+      (when defer
+        (puthash id merged pending-table)
+        (emagent-acp--enqueue-cursor-tool-resolve state id))
+      (when show
+        (emagent-acp--emit-tool-call-display state id kind merged label status)
+        (when id (remhash id pending-table)))
+      (when (map-elt state :permission-queue)
+        (emagent-acp--drain-permission-queue state)))))
+
+(defun emagent-acp--human-tool-detail-p (detail)
+  "Return non-nil when DETAIL is safe to show in a permission prompt."
+  (and (stringp detail)
+       (let ((trimmed (string-trim detail)))
+         (and (not (string-empty-p trimmed))
+              (not (member trimmed emagent-acp--tool-call-weak-details))
+              (not (emagent-acp--tool-call-elisp-prin1-p trimmed))))))
+
+(defun emagent-acp--tool-call-detail-from-tool-call (tool-call)
+  "Return a human-readable detail string from permission TOOL-CALL."
+  (when tool-call
+    (let ((update (emagent-acp--tool-call-update-from-request tool-call)))
+      (or (and update (emagent-acp--tool-call-detail update))
+          (emagent-acp--tool-call-raw-input-detail (map-elt tool-call 'arguments))
+          (emagent-acp--tool-call-raw-input-detail (map-elt tool-call 'rawInput))))))
+
+(defun emagent-acp--permission-prompt-title (emagent-acp-request)
+  "Return the primary permission question line from EMagent-ACP-REQUEST."
+  (when-let ((raw (or (map-nested-elt emagent-acp-request '(params title))
+                       (map-nested-elt emagent-acp-request '(params toolCall title))
+                       "Permission request")))
+    (car (split-string raw "\n" t))))
+
+(defun emagent-acp--permission-prompt-text (emagent-acp-request)
+  "Return user-facing permission prompt text for EMagent-ACP-REQUEST."
+  (let* ((title (emagent-acp--permission-prompt-title emagent-acp-request))
+         (tool-call (map-nested-elt emagent-acp-request '(params toolCall)))
+         (detail (emagent-acp--tool-call-detail-from-tool-call tool-call)))
+    (if (and (emagent-acp--human-tool-detail-p detail)
+             (not (string-match-p (regexp-quote detail) title)))
+        (format "%s\n%s" title (emagent-acp--tool-call-truncate detail))
+      title)))
 
 (cl-defun emagent-acp--handle-one-permission (&key state emagent-acp-request)
   "Process a single queued permission request synchronously."
+  (when-let ((tool-call (map-nested-elt emagent-acp-request '(params toolCall))))
+    (emagent-acp--ingest-tool-call-request state tool-call))
   (let* ((options (map-nested-elt emagent-acp-request '(params options)))
-         (title (or (map-nested-elt emagent-acp-request '(params toolCall title))
-                    (map-nested-elt emagent-acp-request '(params title))
-                    "Permission request"))
+         (title (emagent-acp--permission-prompt-text emagent-acp-request))
          (choices (mapcar (lambda (opt)
                             (cons (or (map-elt opt 'name) (map-elt opt 'optionId))
                                   (map-elt opt 'optionId)))
@@ -1429,16 +1613,21 @@ Never returns a deny option.  OPTIONS may be a list or vector."
               (emagent-acp--permission-option-id options)
             (progn
               (emagent-acp--prepare-interactive-context state)
-              (let ((raw (emagent-tools--buttons-prompt
-                          title
-                          (append choices '(("Allow All (session)" . :allow-all)))
-                          (emagent-acp--chat-buffer state))))
-                (if (eq raw :allow-all)
-                    (progn
-                      (map-put! state :session-auto-approve t)
-                      (emagent-log "permission: Allow All (session) — auto-approving all future requests")
-                      (emagent-acp--permission-option-id options))
-                  raw))))))
+              (emagent-acp--clear-prompt-watchdog state)
+              (unwind-protect
+                  (let ((raw (emagent-tools--buttons-prompt
+                              title
+                              (append choices '(("Allow All (session)" . :allow-all)))
+                              (emagent-acp--chat-buffer state))))
+                    (if (eq raw :allow-all)
+                        (progn
+                          (map-put! state :session-auto-approve t)
+                          (emagent-log "permission: Allow All (session) — auto-approving all future requests")
+                          (emagent-acp--permission-option-id options))
+                      raw))
+                (when (map-elt state :busy)
+                  (emagent-acp--schedule-prompt-watchdog state))
+                (emagent-acp--refresh-mode-line state))))))
     (when auto-approve
       (emagent-log "permission auto-approve: %s → %s"
                    title (or choice "cancelled (no allow option)")))
@@ -1460,11 +1649,16 @@ Prevents nested `recursive-edit' calls when two permission requests arrive
 while an interactive prompt is already blocking for user input."
   (unless (map-elt state :permission-busy)
     (when-let ((request (car (map-elt state :permission-queue))))
-      (map-put! state :permission-queue (cdr (map-elt state :permission-queue)))
-      (map-put! state :permission-busy t)
-      (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
-      (map-put! state :permission-busy nil)
-      (emagent-acp--drain-permission-queue state))))
+      (unless (and (emagent-acp--cursor-tool-resolve-active-p state)
+                   (not (or emagent-acp-auto-approve-permissions
+                            (map-elt state :session-auto-approve))))
+        (map-put! state :permission-queue (cdr (map-elt state :permission-queue)))
+        (map-put! state :permission-busy t)
+        (emagent-acp--refresh-mode-line state)
+        (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
+        (map-put! state :permission-busy nil)
+        (emagent-acp--refresh-mode-line state)
+        (emagent-acp--drain-permission-queue state)))))
 
 (cl-defun emagent-acp--on-permission (&key state emagent-acp-request)
   (map-put! state :permission-queue
@@ -1733,7 +1927,8 @@ CALLBACKS is an alist of rendering callbacks keyed by:
     (emagent-mcp-register-session :token (emagent-mcp-buffer-token)
                                   :cwd (emagent-chat--session-directory)
                                   :buffer chat-buffer
-                                  :prefer-emacs emagent-acp-prefer-emacs)
+                                  :prefer-emacs emagent-acp-prefer-emacs
+                                  :acp t)
     (emagent-acp--progress emagent-acp--session "starting agent…")
     (emagent-acp--subscribe :state emagent-acp--session)
     (emagent-acp--initialize :state emagent-acp--session :on-ready on-ready)
@@ -1851,7 +2046,13 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
       (clrhash (map-elt state :tool-call-titles))
       (clrhash (map-elt state :tool-call-inputs))
       (clrhash (map-elt state :tool-call-labels))
-      (clrhash (map-elt state :cursor-tool-enrich-attempts))
+      (clrhash (map-elt state :tool-call-pending))
+      (map-put! state :cursor-tool-resolve-queue nil)
+      (map-put! state :cursor-tool-resolve-worker nil)
+      (clrhash (map-elt state :cursor-tool-resolve-attempts))
+      (when-let ((timer (map-elt state :permission-drain-timer)))
+        (cancel-timer timer)
+        (map-put! state :permission-drain-timer nil))
       (emagent-acp--cancel-prompt-render state)
       (emagent-acp--clear-thought-buffer state)
       (emagent-acp--schedule-prompt-watchdog state)

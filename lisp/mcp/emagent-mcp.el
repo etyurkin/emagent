@@ -491,6 +491,9 @@ The agent process may still enforce its own policy."
      (format "  delete directory: %s%s"
              (emagent-mcp--truncate-detail (or (emagent-mcp--arg args "path") "") 200)
              (if (emagent-mcp--bool args "recursive") " (recursive)" "")))
+    ("compile"
+     (format "  command: %s"
+             (emagent-mcp--truncate-detail (or (emagent-mcp--arg args "command") "") 400)))
     (_ (format "  %s" (emagent-mcp--truncate-detail (format "%s" args) 200)))))
 
 (defun emagent-mcp--tool-confirm-prompt (name args &optional root)
@@ -532,6 +535,7 @@ BUFFER is the chat buffer; when NAME is write_file it is passed to
                                        (and (boundp 'emagent-acp-prefer-emacs)
                                             emagent-acp-prefer-emacs))))
       (when (and (emagent-mcp--tool-needs-confirmation-p name args)
+                 (not (emagent-mcp--acp-session-p session))
                  (not (emagent-mcp--confirm-tool name args root buffer)))
         (user-error "Tool call cancelled"))
       (emagent-mcp--string-result (funcall handler args)))))
@@ -765,8 +769,11 @@ is sent on PROC when the call completes."
     (setq emagent-mcp--server nil
           emagent-mcp--port nil)))
 
-(cl-defun emagent-mcp-register-session (&key token cwd buffer prefer-emacs)
+(cl-defun emagent-mcp-register-session (&key token cwd buffer prefer-emacs acp)
   "Register session TOKEN with project CWD, owning BUFFER, and EMACS-ONLY flag.
+
+When ACP is non-nil, the session is driven by an emagent ACP chat; MCP tool
+confirmation is handled via ACP `session/request_permission' instead.
 
 Starts the server if needed and returns the port."
   (emagent-mcp-ensure-server)
@@ -774,9 +781,14 @@ Starts the server if needed and returns the port."
            (list :root (and cwd (expand-file-name cwd))
                  :cwd cwd
                  :buffer buffer
-                 :prefer-emacs prefer-emacs)
+                 :prefer-emacs prefer-emacs
+                 :acp acp)
            emagent-mcp--sessions)
   emagent-mcp--port)
+
+(defun emagent-mcp--acp-session-p (session)
+  "Return non-nil when SESSION is owned by an emagent ACP chat buffer."
+  (and session (plist-get session :acp)))
 
 (defun emagent-mcp-deregister-session (token)
   "Deregister session TOKEN and stop the server if it was the last one."

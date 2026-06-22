@@ -72,6 +72,10 @@
     (puthash :tool-call-titles (make-hash-table :test 'equal) state)
     (puthash :tool-call-inputs (make-hash-table :test 'equal) state)
     (puthash :tool-call-labels (make-hash-table :test 'equal) state)
+    (puthash :tool-call-pending (make-hash-table :test 'equal) state)
+    (puthash :cursor-tool-resolve-queue nil state)
+    (puthash :cursor-tool-resolve-worker nil state)
+    (puthash :cursor-tool-resolve-attempts (make-hash-table :test 'equal) state)
     (puthash :external-tool-gate-reasons nil state)
     state))
 
@@ -87,18 +91,18 @@
 (defun emagent-test--capturing-response-sender (responses)
   "Return a response sender that pushes each RESPONSE onto list RESPONSES."
   (cl-function
-   (lambda (&rest _ &key _client response &allow-other-keys)
+   (lambda (&key _client response &allow-other-keys)
      (push response responses))))
 
 (defvar emagent-test--last-sent-request nil)
 
-(cl-defun emagent-test--record-request-sender (&rest _ &key request on-success &allow-other-keys)
+(cl-defun emagent-test--record-request-sender (&key request on-success &allow-other-keys)
   (setq emagent-test--last-sent-request request)
   (when on-success (funcall on-success '((ok . t)))))
 
 (defvar emagent-test--captured-responses nil)
 
-(cl-defun emagent-test--capture-response-sender (&rest _ &key _client response &allow-other-keys)
+(cl-defun emagent-test--capture-response-sender (&key _client response &allow-other-keys)
   (push response emagent-test--captured-responses))
 
 (defun emagent-test--response-content (response)
@@ -127,7 +131,7 @@
                       (currentValue . "auto")
                       (options . [((value . "auto") (name . "Auto"))]))])))
 
-(cl-defun emagent-test--fake-request-sender (&rest _ &key request on-success on-failure &allow-other-keys)
+(cl-defun emagent-test--fake-request-sender (&key request on-success on-failure &allow-other-keys)
   "ACP request sender that auto-responds to the standard connect handshake."
   (pcase (map-elt request :method)
     ("initialize"
@@ -204,7 +208,7 @@ FN receives (BUFFER PROJECT-DIR)."
 (defun emagent-test--recording-request-sender (prompt-request)
   "Return a request sender that records session/prompt in PROMPT-REQUEST cell."
   (cl-function
-   (lambda (&rest _ &key request on-success &allow-other-keys)
+   (lambda (&key request on-success &allow-other-keys)
      (pcase (map-elt request :method)
        ("initialize"
         (when on-success (funcall on-success (emagent-test--initialize-response))))

@@ -3,7 +3,9 @@
 ;;; Code:
 
 (require 'ert)
+(require 'emagent-test-utils)
 (require 'emagent-mcp)
+(require 'emagent-tools)
 
 ;;;; Tokens
 
@@ -59,7 +61,28 @@
     (puthash "directory" "src" args)
     (let ((detail (emagent-mcp--tool-prompt-detail "run_shell_command" args "/proj")))
       (should (string-match-p "make test" detail))
-      (should (string-match-p "src" detail)))))
+      (should (string-match-p "src" detail))))
+  (let ((args (make-hash-table :test 'equal)))
+    (puthash "command" "emacs --batch -l tests/emagent-test-runner.el" args)
+    (should (string-match-p "emacs --batch"
+                            (emagent-mcp--tool-prompt-detail "compile" args "/proj")))))
+
+(ert-deftest emagent-mcp-test-acp-session-skips-confirm ()
+  (let* ((token "abc")
+         (session (list :root "/proj" :buffer (get-buffer-create "*mcp-test*") :acp t))
+         (args (make-hash-table :test 'equal))
+         (confirmed nil))
+    (puthash "command" "make test" args)
+    (puthash token session emagent-mcp--sessions)
+    (unwind-protect
+        (emagent-test--with-mocks
+            (((symbol-function 'emagent-mcp--confirm-tool)
+              (lambda (&rest _args) (setq confirmed t) t))
+             ((symbol-function 'emagent-tool-compile)
+              (lambda (&rest _args) "ok")))
+          (should (string= "ok" (emagent-mcp--run-tool "compile" args session)))
+          (should-not confirmed))
+      (remhash token emagent-mcp--sessions))))
 
 ;;;; RPC helpers
 

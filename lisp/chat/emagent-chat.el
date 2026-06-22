@@ -108,10 +108,7 @@
   "ACP provider symbol (`cursor' or `claude') for the current emagent buffer.")
 
 (defvar-local emagent-chat-cursor-acp-extra-args nil
-  "When non-nil, replaces `emagent-cursor-acp-extra-args' for this buffer only.
-
-Set from `emagent-trust--configure' when the user answers the workspace trust
-prompt for the Cursor provider.")
+  "When non-nil, replaces `emagent-cursor-acp-extra-args' for this buffer only.")
 
 (defvar-local emagent-chat-allowed-tools nil
   "Tools allowed without confirmation for the current emagent buffer.
@@ -145,8 +142,7 @@ from ~/.cursor/commands and .cursor/commands/.")
              emagent-chat--spinner-timer)
     (cancel-timer emagent-chat--spinner-timer)
     (setq emagent-chat--spinner-timer
-          (run-with-timer 0 emagent-chat-spinner-interval
-                          #'emagent-chat--spinner-tick)))
+          (run-with-timer 0 val #'emagent-chat--spinner-tick)))
   (dolist (buf (buffer-list))
     (when (buffer-live-p buf)
       (with-current-buffer buf
@@ -191,6 +187,11 @@ When nil, the spinner inherits the mode-line height."
 (defface emagent-chat-spinner
   '((t (:inherit (bold mode-line-emphasis))))
   "Face for the mode-line busy spinner glyph."
+  :group 'emagent-chat)
+
+(defface emagent-tool-detail
+  '((t (:inherit fixed-pitch :slant normal)))
+  "Face for paths and commands on tool-call lines."
   :group 'emagent-chat)
 
 (defconst emagent-chat-default-slug "emagent")
@@ -440,6 +441,12 @@ the newest begin delimiter through `point-max'."
   "Return the #+EMAGENT_MODEL value at the top of the buffer."
   (emagent-chat--read-top-property "EMAGENT_MODEL"))
 
+(defun emagent-chat--normalize-model-id (model)
+  "Return user-facing model id, mapping Cursor default[] to auto."
+  (when model
+    (let ((stripped (replace-regexp-in-string "\\[.*\\]" "" model)))
+      (if (string= stripped "default") "auto" stripped))))
+
 (defun emagent-chat--read-session-property ()
   "Return the #+EMAGENT_SESSION value at the top of the buffer."
   (emagent-chat--read-top-property "EMAGENT_SESSION"))
@@ -461,6 +468,7 @@ the newest begin delimiter through `point-max'."
 
 (defun emagent-chat-set-model (model)
   "Store ACP MODEL id in the current buffer."
+  (setq model (emagent-chat--normalize-model-id model))
   (unless (equal emagent-chat-model model)
     (setq emagent-chat-model model)
     (emagent-chat--write-top-property "EMAGENT_MODEL" model))
@@ -468,7 +476,8 @@ the newest begin delimiter through `point-max'."
 
 (defun emagent-chat-model ()
   "Return the ACP model id for the current emagent buffer."
-  (or emagent-chat-model (emagent-chat--read-model-property)))
+  (emagent-chat--normalize-model-id
+   (or emagent-chat-model (emagent-chat--read-model-property))))
 
 (defun emagent-chat-set-session-id (session-id)
   "Store ACP SESSION-ID in the current buffer."
@@ -849,6 +858,44 @@ check is skipped so the user can re-evaluate any previous prompt."
     (format "Summarize the conversation below for context compression. Preserve key decisions, file paths, errors, and open tasks. Output only the summary.\n\n<conversation>\n%s\n</conversation>"
             body)))
 
+(defun emagent-chat--window-at-bottom-p (window)
+  "Return non-nil when WINDOW shows the end of the current buffer."
+  (and window (window-live-p window)
+       (with-selected-window window
+         (pos-visible-in-window-p (point-max) nil t))))
+
+(defun emagent-chat--save-window-views ()
+  "Return saved scroll state for windows displaying the current buffer."
+  (let (views)
+    (dolist (win (get-buffer-window-list (current-buffer) nil t))
+      (push `(:window ,win
+              :start ,(window-start win)
+              :at-bottom ,(emagent-chat--window-at-bottom-p win))
+            views))
+    views))
+
+(defun emagent-chat--restore-window-views (views)
+  "Restore scroll state from VIEWS returned by `emagent-chat--save-window-views'."
+  (dolist (view views)
+    (let ((win (plist-get view :window)))
+      (when (window-live-p win)
+        (if (plist-get view :at-bottom)
+            (with-selected-window win
+              (save-excursion
+                (goto-char (point-max))
+                (recenter -1)))
+          (set-window-start win (plist-get view :start) t))))))
+
+(defmacro emagent-chat--with-stable-view (&rest body)
+  "Run BODY while preserving window scroll unless already at buffer end."
+  (declare (indent 0))
+  `(let* ((emagent-chat--view-saved-point (point))
+          (emagent-chat--view-saved-windows (emagent-chat--save-window-views)))
+     (unwind-protect
+         (progn ,@body)
+       (goto-char emagent-chat--view-saved-point)
+       (emagent-chat--restore-window-views emagent-chat--view-saved-windows))))
+
 (defun emagent-chat-apply-compression (summary-text)
   "Replace conversation history with compressed SUMMARY-TEXT."
   (let ((inhibit-read-only t)
@@ -964,44 +1011,6 @@ check is skipped so the user can re-evaluate any previous prompt."
     (emagent-log "slash commands load after the agent connects"))
    (t
     (call-interactively #'emagent-chat-cycle-or-org-cycle))))
-
-(defun emagent-chat--window-at-bottom-p (window)
-  "Return non-nil when WINDOW shows the end of the current buffer."
-  (and window (window-live-p window)
-       (with-selected-window window
-         (pos-visible-in-window-p (point-max) nil t))))
-
-(defun emagent-chat--save-window-views ()
-  "Return saved scroll state for windows displaying the current buffer."
-  (let (views)
-    (dolist (win (get-buffer-window-list (current-buffer) nil t))
-      (push `(:window ,win
-              :start ,(window-start win)
-              :at-bottom ,(emagent-chat--window-at-bottom-p win))
-            views))
-    views))
-
-(defun emagent-chat--restore-window-views (views)
-  "Restore scroll state from VIEWS returned by `emagent-chat--save-window-views'."
-  (dolist (view views)
-    (let ((win (plist-get view :window)))
-      (when (window-live-p win)
-        (if (plist-get view :at-bottom)
-            (with-selected-window win
-              (save-excursion
-                (goto-char (point-max))
-                (recenter -1)))
-          (set-window-start win (plist-get view :start) t))))))
-
-(defmacro emagent-chat--with-stable-view (&rest body)
-  "Run BODY while preserving window scroll unless already at buffer end."
-  (declare (indent 0))
-  `(let* ((emagent-chat--view-saved-point (point))
-          (emagent-chat--view-saved-windows (emagent-chat--save-window-views)))
-     (unwind-protect
-         (progn ,@body)
-       (goto-char emagent-chat--view-saved-point)
-       (emagent-chat--restore-window-views emagent-chat--view-saved-windows))))
 
 (defun emagent-chat--open-reasoning-begin ()
   "Return point at the last Reasoning opener in the open response body."
@@ -1520,7 +1529,7 @@ folding the inner region only so incomplete parses never break the buffer."
                        (marker-position emagent-chat--thought-marker))
               (save-excursion
                 (goto-char emagent-chat--thought-marker)
-                (insert text)
+                (emagent-chat--insert-reasoning-text text)
                 (setq emagent-chat--thought-marker (point-marker)
                       emagent-chat--assistant-marker (point-marker)
                       emagent-chat--reasoning-streamed-p t)))
@@ -1559,9 +1568,63 @@ folding the inner region only so incomplete parses never break the buffer."
 
 (defun emagent-chat--finish-tool-line-in-reasoning ()
   "Leave `emagent-chat--thought-marker' ready for streamed reasoning text."
-  (unless (bolp)
-    (insert "\n"))
-  (setq emagent-chat--thought-marker (point-marker)))
+  (let ((end (line-end-position)))
+    (if (save-excursion
+          (goto-char end)
+          (and (not (eobp))
+               (looking-at "\n")
+               (progn (forward-line 1) t)
+               (looking-at "#\\+end_quote")))
+        (setq emagent-chat--thought-marker (copy-marker end nil))
+      (goto-char end)
+      (unless (bolp) (insert "\n"))
+      (setq emagent-chat--thought-marker (point-marker)))))
+
+(defun emagent-chat--insert-reasoning-text (text)
+  "Insert TEXT at `emagent-chat--thought-marker' before the Reasoning tail."
+  (if (and (eolp)
+           (save-excursion
+             (forward-line 1)
+             (looking-at "#\\+end_quote"))
+           (save-excursion
+             (beginning-of-line)
+             (looking-at "→ ")))
+      (insert "\n" text)
+    (insert text)))
+
+(defun emagent-chat--org-verbatim-paths (text)
+  "Wrap absolute paths in org =verbatim= so /Users/ is not parsed as /italic/."
+  (replace-regexp-in-string "\\(/[^ \t\n]+\\)" "=\\1=" text))
+
+(defun emagent-chat--format-tool-line (label)
+  "Return a Thinking-block tool line for LABEL, safe in org-mode."
+  (format "→ %s" (emagent-chat--org-verbatim-paths label)))
+
+(defun emagent-chat--repair-tool-line-faces (start end)
+  "Re-apply path faces after org font-lock on tool-call lines."
+  (when (and start end (< start end))
+    (save-excursion
+      (goto-char start)
+      (while (and (< (point) end)
+                  (re-search-forward "\\=/[^ \t\n]+" end t))
+        (let ((s (match-beginning 0))
+              (e (match-end 0)))
+          (remove-list-of-text-properties s e '(face))
+          (put-text-property s e 'face 'emagent-tool-detail))))))
+
+(defun emagent-chat--after-fontify-repair-tool-lines (beg end)
+  "Repair org /italic/ on tool-call lines after each font-lock pass."
+  (save-excursion
+    (goto-char beg)
+    (while (re-search-forward "^→ " end t)
+      (emagent-chat--repair-tool-line-faces (line-beginning-position)
+                                             (line-end-position)))))
+
+(defun emagent-chat--fontify-tool-line (start end)
+  "Font-lock tool line START..END and repair org emphasis on paths."
+  (when (and start end (<= start end))
+    (font-lock-flush)
+    (emagent-chat--repair-tool-line-faces start end)))
 
 (defun emagent-chat--ensure-reasoning-for-tool ()
   "Ensure the open response can accept tool annotations in Reasoning."
@@ -1593,13 +1656,15 @@ When ID is non-nil, remember the line span for later in-place updates."
              (save-excursion
                (goto-char emagent-chat--thought-marker)
                (unless (bolp) (insert "\n"))
-               (insert (format "→ %s" label))
-               (when id
-                 (let ((start (copy-marker (line-beginning-position) nil))
-                       (end (copy-marker (line-end-position) nil)))
-                   (puthash id (cons start end) emagent-chat--tool-call-lines)))
-               (emagent-chat--finish-tool-line-in-reasoning)))
-           (font-lock-flush)))))))
+               (let ((line-start (line-beginning-position)))
+                 (insert (emagent-chat--format-tool-line label))
+                 (let ((line-end (line-end-position)))
+                   (when id
+                     (puthash id (cons (copy-marker line-start nil)
+                                       (copy-marker line-end nil))
+                              emagent-chat--tool-call-lines))
+                   (emagent-chat--fontify-tool-line line-start line-end))
+                 (emagent-chat--finish-tool-line-in-reasoning))))))))))
 
 (defun emagent-chat--update-tool-call-line (id label)
   "Replace the displayed tool-call line for ID with LABEL.
@@ -1610,13 +1675,15 @@ Return non-nil when a line was updated."
                (markerp (cdr entry)) (marker-position (cdr entry)))
       (let* ((start (car entry))
              (end (cdr entry))
-             (display (format "→ %s" label)))
+             (display (emagent-chat--format-tool-line label)))
         (unless (string= (buffer-substring-no-properties start end) display)
           (save-excursion
             (delete-region start end)
             (goto-char start)
             (insert display)
             (set-marker end (point))
+            (emagent-chat--fontify-tool-line (marker-position start)
+                                             (marker-position end))
             (when emagent-chat--thought-open-p
               (setq emagent-chat--thought-marker
                     (emagent-chat--reasoning-stream-marker)))))
@@ -2007,6 +2074,15 @@ the prompt text."
   "Return the propertized busy spinner suffix for the mode line."
   (concat " " (emagent-chat--spinner-string)))
 
+(defvar-local emagent-chat--mode-line-head nil
+  "Cached mode-line status prefix for the current emagent buffer.")
+
+(defvar-local emagent-chat--mode-line-tail nil
+  "Cached mode-line metadata suffix for the current emagent buffer.")
+
+(defvar-local emagent-chat--mode-line-cache nil
+  "Cached full mode-line string for `emagent-mode-line'.")
+
 (defun emagent-chat--spinner-refresh-buffer (buffer)
   "Refresh BUFFER's cached mode line while its session is busy."
   (with-current-buffer buffer
@@ -2016,15 +2092,6 @@ the prompt text."
       (emagent-chat--mode-line-recompute)
       (when (get-buffer-window buffer 'visible)
         (force-mode-line-update t)))))
-
-(defvar-local emagent-chat--mode-line-head nil
-  "Cached mode-line status prefix for the current emagent buffer.")
-
-(defvar-local emagent-chat--mode-line-tail nil
-  "Cached mode-line metadata suffix for the current emagent buffer.")
-
-(defvar-local emagent-chat--mode-line-cache nil
-  "Cached full mode-line string for `emagent-mode-line'.")
 
 (defun emagent-chat--mode-line-recompute ()
   "Rebuild cached mode-line strings for the current emagent buffer."
@@ -2062,15 +2129,19 @@ the prompt text."
 (defun emagent-chat--mode-line-strings ()
   "Return (HEAD . TAIL) strings for the emagent mode line."
   (let* ((busy  (and (fboundp 'emagent-acp-busy-p)  (emagent-acp-busy-p)))
+         (waiting-permission (and (fboundp 'emagent-acp-waiting-permission-p)
+                                  (emagent-acp-waiting-permission-p)))
          (ready (and (fboundp 'emagent-acp-ready-p) (emagent-acp-ready-p)))
          (tool  (and (fboundp 'emagent-acp-current-tool) (emagent-acp-current-tool)))
          (kind  (and (fboundp 'emagent-acp-current-tool-kind) (emagent-acp-current-tool-kind)))
          (rss   (and (fboundp 'emagent-acp-agent-rss) (emagent-acp-agent-rss)))
          (connected (or busy ready))
-         (spinner (when busy
+         (spinner (when (and busy (not waiting-permission))
                     (emagent-chat--mode-line-spinner-suffix)))
          (busy-face '(bold mode-line-emphasis))
          (head (cond
+                (waiting-permission
+                 (propertize "emagent:Idle" 'face 'success))
                 ((and busy tool (member kind '("write" "execute")))
                  (concat (propertize "Executing" 'face busy-face)
                          spinner))
@@ -2082,11 +2153,8 @@ the prompt text."
                 (t "emagent")))
          (model (emagent-chat-model))
          (sep (propertize " | " 'face 'shadow))
-         (model-display (when (and model (not (string-empty-p model)))
-                          (let ((stripped (replace-regexp-in-string "\\[.*\\]" "" model)))
-                            (if (string= stripped "default") "auto" stripped))))
-         (model-str (when (and model-display (not (string-empty-p model-display)))
-                      (propertize model-display 'face 'shadow)))
+         (model-str (when (and model (not (string-empty-p model)))
+                      (propertize model 'face 'shadow)))
          (context (emagent-chat--mode-line-context-usage))
          (rss-str (when rss
                     (propertize (format "mem:%dMB" rss)
@@ -2257,12 +2325,13 @@ Run \\[emagent-mode] to reconnect a saved session."
   (emagent-chat--writable)
   (setq emagent-chat-project-directory
         (or emagent-chat-project-directory (emagent-chat--read-project-property))
-        emagent-chat-model (or emagent-chat-model (emagent-chat--read-model-property))
         emagent-chat-session-id (or emagent-chat-session-id
                                     (emagent-chat--read-session-property))
         emagent-chat-provider (emagent-chat-agent)
         emagent-chat-allowed-tools (or emagent-chat-allowed-tools
                                        (emagent-chat--read-allowed-tools-property)))
+  (when-let ((model (or emagent-chat-model (emagent-chat--read-model-property))))
+    (emagent-chat-set-model model))
   (setq-local default-directory (emagent-chat--session-directory))
   (if (bound-and-true-p doom-modeline-mode)
       (emagent-chat--setup-doom-modeline)
@@ -2278,6 +2347,8 @@ Run \\[emagent-mode] to reconnect a saved session."
   (add-hook 'completion-at-point-functions
             #'emagent-chat-slash-command-completion-at-point -90 t)
   (setq-local imenu-create-index-function #'emagent-chat--imenu-create-index)
+  (add-hook 'font-lock-after-fontify-region-hook
+            #'emagent-chat--after-fontify-repair-tool-lines nil t)
   (setq-local bookmark-make-record-function #'emagent-chat--bookmark-make-record)
   (emagent-chat--setup-faces)
   (emagent-chat--mode-line-recompute)

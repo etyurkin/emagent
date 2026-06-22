@@ -39,6 +39,54 @@
           (should (string-match-p "new" diff)))
       (delete-directory dir t))))
 
+(ert-deftest emagent-tools-test-buttons-prompt-removes-block ()
+  (with-temp-buffer
+    (insert "before\n")
+    (let ((buf (current-buffer)))
+      (run-at-time 0.01 nil
+                   (lambda ()
+                     (with-current-buffer buf
+                       (save-excursion
+                         (goto-char (point-min))
+                         (while (and (not (eobp)) (not (button-at (point))))
+                           (forward-char 1))
+                         (when (button-at (point))
+                           (push-button (point)))))))
+      (let ((result (emagent-tools--buttons-prompt
+                      "Allow test?"
+                      '(("Allow" . ok))
+                      buf)))
+        (should (eq result 'ok))
+        (should (string= "before\n" (buffer-string)))))))
+
+(ert-deftest emagent-tools-test-buttons-prompt-survives-insert-before ()
+  "Prompt cleanup still works when streaming inserts before the block."
+  (with-temp-buffer
+    (insert "before\n")
+    (let ((buf (current-buffer)))
+      (run-at-time 0.005 nil
+                   (lambda ()
+                     (with-current-buffer buf
+                       (goto-char (point-min))
+                       (insert "streamed "))))
+      (run-at-time 0.01 nil
+                   (lambda ()
+                     (with-current-buffer buf
+                       (save-excursion
+                         (goto-char (point-min))
+                         (while (and (not (eobp)) (not (button-at (point))))
+                           (forward-char 1))
+                         (when (button-at (point))
+                           (push-button (point)))))))
+      (let ((result (emagent-tools--buttons-prompt
+                      "Allow compile?"
+                      '(("Allow" . ok))
+                      buf)))
+        (should (eq result 'ok))
+        (should (string-match-p "\\`streamed before\n\\'" (buffer-string)))
+        (should-not (string-match-p "Allow compile?" (buffer-string)))
+        (should-not (string-match-p "\\[Allow\\]" (buffer-string)))))))
+
 ;;;; Elisp syntax check
 
 (ert-deftest emagent-tools-test-check-elisp ()

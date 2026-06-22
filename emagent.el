@@ -298,17 +298,13 @@ current buffer."
       (emagent--read-project-directory)
     (emagent--project-directory-initial)))
 
-(defun emagent--start-with-provider (provider project-dir connect &optional model-id handshake)
+(defun emagent--start-with-provider (provider project-dir connect &optional model-id _handshake)
   "Start emagent using PROVIDER in PROJECT-DIR.
-When MODEL-ID is non-nil, persist it before connecting.
-HANDSHAKE is the plist returned by `emagent-trust--configure' (Cursor extra
-args, etc.)."
+When MODEL-ID is non-nil, persist it before connecting."
   (let ((buffer (emagent-chat-open :project-dir project-dir)))
     (with-current-buffer buffer
       (when (eq provider 'cursor)
         (kill-local-variable 'emagent-chat-cursor-acp-extra-args))
-      (when-let ((args (and handshake (plist-get handshake :cursor-acp-extra-args))))
-        (setq-local emagent-chat-cursor-acp-extra-args args))
       (emagent-chat-set-agent provider)
       (when (and model-id (not (string-empty-p model-id)))
         (emagent-chat-set-model model-id))
@@ -353,7 +349,6 @@ otherwise the project.el root, otherwise ~/."
 (declare-function emagent-trust--ensure-provider-features "emagent-trust")
 (declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
 (declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
-(declare-function emagent-trust-cursor-extra-args-after-yes "emagent-trust-cursor")
 (declare-function emagent-acp--connected-p "emagent-acp")
 
 ;;;###autoload
@@ -367,12 +362,10 @@ By default updates trust only for this buffer's agent.  With a prefix
 argument, updates *both* Claude (=~/.claude.json=) and Cursor
 (=~/.cursor/projects/...=).
 
-This command does not run the startup y/n/q trust dialog.  For Claude, the
+This command does not run the startup trust dialog.  For Claude, the
 running agent does not reload ~/.claude.json on session/load; after recording
 trust use `emagent-trust-claude-reconnect' in this buffer (or clear
-#+EMAGENT_SESSION and toggle `emagent-mode') so a new session picks it up.
-For Cursor buffers, `--trust' is merged into buffer-local extra args when this
-buffer's agent is Cursor."
+#+EMAGENT_SESSION and toggle `emagent-mode') so a new session picks it up."
   (interactive "P")
   (unless (derived-mode-p 'emagent-mode)
     (user-error "emagent-trust-workspace must be called from an emagent buffer"))
@@ -397,10 +390,6 @@ buffer's agent is Cursor."
       (pcase p
         ('claude (emagent-trust-claude-record-trust dir))
         ('cursor (emagent-trust-cursor-record-trust dir))))
-    (when (and (memq 'cursor providers)
-               (eq (emagent-chat-agent) 'cursor))
-      (setq-local emagent-chat-cursor-acp-extra-args
-                  (emagent-trust-cursor-extra-args-after-yes)))
     (message "Recorded trust for %s (%s).%s"
              (mapconcat #'symbol-name providers ", ")
              dir

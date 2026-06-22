@@ -105,10 +105,11 @@ After you choose an agent, emagent checks whether that workspace is already
 trusted for Claude Code (=~/.claude.json=) or Cursor (=~/.cursor/projects/...=).
 For Claude, that means a =projects= entry with =hasTrustDialogAccepted= true
 for this directory or an ancestor; no entry, a missing flag, or JSON =false=
-counts as untrusted at that path (parents are still checked).  If not trusted,
-it asks the same =y= / =n= / =q= question: =y= records trust on disk, =n=
-continues with Cursor’s sandbox tightened for that session, =q= cancels.  Set
-=emagent-trust-enabled= to =nil= to skip this step.
+counts as untrusted at that path (parents are still checked).  If Claude is
+not trusted, emagent asks =y= / =n= / =q=: =y= records trust on disk, =n=
+continues without recording, =q= cancels.  For Cursor, emagent writes
+=~/.cursor/projects/.../.workspace-trusted= automatically when it is missing
+(no prompt).  Set =emagent-trust-enabled= to =nil= to skip trust setup.
 
 =emagent-mode= reconnects the saved ACP session only; it does *not* run the
 startup trust prompt again (trust is whatever is already in =~/.claude.json= /
@@ -120,9 +121,8 @@ via =#+EMAGENT_SESSION= (=session/load=).  Closing and reopening the org file
 only reconnects that saved session, so new trust can look ignored.  After
 =emagent-trust-workspace=, run =M-x emagent-trust-claude-reconnect= in the chat
 buffer (or =M-x emagent-chat-clear-session-id=, then turn =emagent-mode= off and
-on) so Claude runs =session/new= and re-reads trust.  For Cursor, reconnect or
-use =emagent-trust-workspace= with an already-connected Cursor buffer to merge
-=--trust= into buffer-local args.
+on) so Claude runs =session/new= and re-reads trust.  For Cursor, reconnect
+the buffer after =emagent-trust-workspace= if the session was already connected.
 
 ** Saved sessions
 
@@ -141,8 +141,8 @@ Agent responses appear between =# --- emagent ---= / =# --- /emagent ---=
 delimiters.  TAB on the opening delimiter folds the entire block.
 
 - *Thinking* (=#+begin_quote Thinking=) — streamed thought text and tool-use
-  lines (=→ tool-name=); folds automatically when the response finishes.
-  Older sessions may still show =Reasoning=; both titles fold the same way.
+  lines (=→ tool-name: path=).  With Cursor, paths are read from =store.db=
+  (one lookup at a time per session).  Folds when the response finishes.
 
 ** Queued follow-ups (/btw/)
 
@@ -175,9 +175,10 @@ some other way — for example run =claude= once in the project root and complet
 the prompt, or put =permissions.defaultMode= (e.g. =acceptEdits= or =auto=) in
 your *user* =~/.claude/settings.json=, which does not depend on directory trust.
 
-ACP permission auto-approve in emagent (=emagent-acp-auto-approve-permissions=)
-only answers the ACP =session/request_permission= channel; it does not replace
-Claude Code’s own permission and trust layers inside the agent process.
+ACP tool permission in emagent uses =session/request_permission= (prompts in
+the chat buffer by default; set =emagent-acp-auto-approve-permissions= to t for
+frictionless approval).  That does not replace Claude Code’s own permission and
+trust layers inside the agent process.
 
 Workspace trust helpers are split across =emagent-trust.el= (shared JSON and the
 =y/n/q= prompt), =emagent-trust-claude.el= (=~/.claude.json= / =hasTrustDialogAccepted=),

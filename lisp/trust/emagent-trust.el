@@ -124,8 +124,6 @@ as `{}').  Optional pretty-print uses `json-pretty-print-buffer'."
 
 (declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
 (declare-function emagent-trust-claude-trusted-p "emagent-trust-claude" (directory))
-(declare-function emagent-trust-cursor-extra-args-after-no "emagent-trust-cursor" ())
-(declare-function emagent-trust-cursor-extra-args-after-yes "emagent-trust-cursor" ())
 (declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
 (declare-function emagent-trust-cursor-trusted-p "emagent-trust-cursor" (directory))
 
@@ -145,12 +143,12 @@ Loads lazily so `require' is not recursive at top level."
     (_ t)))
 
 (defun emagent-trust--configure (provider project-dir)
-  "Handle trust prompts for PROVIDER at PROJECT-DIR.
+  "Handle trust setup for PROVIDER at PROJECT-DIR.
 
-Signals `user-error' when the user chooses quit.  Otherwise returns a plist
-with optional keys:
-  `:cursor-acp-extra-args' — list overriding `emagent-cursor-acp-extra-args'
-    for the new chat buffer only."
+For Cursor, writes =~/.cursor/projects/.../.workspace-trusted= when missing.
+For Claude, prompts y/n/q when the workspace is not yet trusted on disk.
+
+Signals `user-error' when the user chooses quit."
   (emagent-trust--ensure-provider-features)
   (cond
    ((not (and emagent-trust-enabled (memq provider '(claude cursor))))
@@ -158,31 +156,25 @@ with optional keys:
    ((emagent-trust--remote-p project-dir)
     (message "emagent: skipping workspace trust (remote directory)")
     nil)
+   ((eq provider 'cursor)
+    (unless (emagent-trust-cursor-trusted-p project-dir)
+      (let ((dir (emagent-trust--normalize-dir project-dir)))
+        (condition-case err
+            (emagent-trust-cursor-record-trust dir)
+          (error (signal (car err) (cdr err))))))
+    nil)
    ((emagent-trust--already-trusted-p provider project-dir)
     nil)
    (t
     (let* ((dir (emagent-trust--normalize-dir project-dir))
-           (agent (pcase provider
-                    ('claude "Claude Code")
-                    ('cursor "Cursor")
-                    (_ "agent")))
-           (choice (emagent-trust--prompt-ynq dir agent)))
+           (choice (emagent-trust--prompt-ynq dir "Claude Code")))
       (pcase choice
         ('q (user-error "emagent session cancelled"))
-        ('n (pcase provider
-              ('cursor (list :cursor-acp-extra-args
-                             (emagent-trust-cursor-extra-args-after-no)))
-              (_ nil)))
-        ('y (progn
-              (condition-case err
-                  (pcase provider
-                    ('claude (emagent-trust-claude-record-trust dir))
-                    ('cursor (emagent-trust-cursor-record-trust dir)))
-                (error (signal (car err) (cdr err))))
-              (pcase provider
-                ('cursor (list :cursor-acp-extra-args
-                               (emagent-trust-cursor-extra-args-after-yes)))
-                (_ nil)))))))))
+        ('n nil)
+        ('y (condition-case err
+                (emagent-trust-claude-record-trust dir)
+              (error (signal (car err) (cdr err))))
+            nil))))))
 
 (provide 'emagent-trust)
 

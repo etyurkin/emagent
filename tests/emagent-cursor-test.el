@@ -10,16 +10,29 @@
 (require 'emagent-cursor)
 (require 'emagent-acp)
 
-(ert-deftest emagent-cursor-test-tool-call-from-blob-json ()
-  (let ((json "{\"role\":\"assistant\",\"content\":[{\"type\":\"tool-call\",\"toolCallId\":\"tool_abc\",\"toolName\":\"StrReplace\",\"args\":{\"path\":\"foo.el\"}}]}"))
-    (should (string= "foo.el"
-                     (emagent-acp--tool-call-raw-input-detail
-                      (cdr (emagent-cursor--tool-call-from-blob-json json "tool_abc")))))))
-
 (ert-deftest emagent-cursor-test-enrich-tool-call-update ()
   (let ((update '((toolCallId . "tool_abc") (title . "Edit"))))
     (should (eq update
-                (emagent-cursor-enrich-tool-call-update "missing-session" update)))))
+                (emagent-cursor-enrich-tool-call-update "missing-session" update))))
+  (let ((store (lambda (_sid _id)
+                 '("mcp_emagent_git_log" . (("args" . "-5 --oneline"))))))
+    (cl-letf (((symbol-function 'emagent-cursor-tool-call-from-store) store))
+      (let* ((update '((toolCallId . "tool_abc") (title . "MCP")
+                       (subtitle . "tool") (rawInput . ())))
+             (enriched (emagent-cursor-enrich-tool-call-update "sess" update)))
+        (should (equal "git_log" (map-elt enriched 'title)))
+        (should (equal "-5 --oneline"
+                       (emagent-acp--tool-call-detail enriched)))))))
+
+(ert-deftest emagent-cursor-test-tool-display-name ()
+  (should (string= "git_log" (emagent-cursor--tool-display-name "mcp_emagent_git_log")))
+  (should (string= "Read" (emagent-cursor--tool-display-name "Read"))))
+
+(ert-deftest emagent-cursor-test-tool-call-from-blob-empty-args ()
+  (let ((json "{\"content\":[{\"type\":\"tool-call\",\"toolCallId\":\"tool_mcp\",\"toolName\":\"mcp_emagent_git_diff\",\"args\":{}}]}"))
+    (let ((result (emagent-cursor--tool-call-from-blob-json json "tool_mcp")))
+      (should (string= "mcp_emagent_git_diff" (car result)))
+      (should (null (cdr result))))))
 
 (ert-deftest emagent-cursor-test-normalize-slash-prompt ()
   (should (string= "/compress" (emagent-cursor-normalize-slash-prompt "/compact")))

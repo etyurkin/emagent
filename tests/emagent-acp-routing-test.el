@@ -24,8 +24,8 @@
                :object '((jsonrpc . "2.0") (id . 1) (result . ((sessionId . "sess-1")))))))
     (emagent-acp--route-incoming-message
      :client client :message msg
-     :on-notification (lambda (_) nil)
-     :on-request (lambda (_) nil))
+     :on-notification (lambda (_msg) nil)
+     :on-request (lambda (_req) nil))
     (should (equal '((sessionId . "sess-1")) (car box)))
     (should (null (map-elt client :pending-requests)))))
 
@@ -38,8 +38,8 @@
                          (error . ((code . -32600) (message . "bad")))))))
     (emagent-acp--route-incoming-message
      :client client :message msg
-     :on-notification (lambda (_) nil)
-     :on-request (lambda (_) nil))
+     :on-notification (lambda (_msg) nil)
+     :on-request (lambda (_req) nil))
     (should (= -32600 (alist-get 'code (car box))))
     (should (string= "bad" (alist-get 'message (car box))))))
 
@@ -54,7 +54,7 @@
     (emagent-acp--route-incoming-message
      :client client :message msg
      :on-notification (lambda (n) (setq got n))
-     :on-request (lambda (_) nil))
+     :on-request (lambda (_req) nil))
     (should (equal (alist-get 'method got) "session/update"))))
 
 (ert-deftest emagent-acp-routing-test-incoming-request ()
@@ -66,7 +66,7 @@
                         (params . ((path . "foo.txt")))))))
     (emagent-acp--route-incoming-message
      :client client :message msg
-     :on-notification (lambda (_) nil)
+     :on-notification (lambda (_msg) nil)
      :on-request (lambda (r) (setq got r)))
     (should (= 9 (alist-get 'id got)))
     (should (equal (alist-get 'method got) "fs/read_text_file"))))
@@ -74,7 +74,7 @@
 (ert-deftest emagent-acp-routing-test-fail-pending ()
   (let* ((failures nil)
          (client (emagent-test--route-client
-                  (lambda (_) (error "should not succeed"))
+                  (lambda (_result) (error "should not succeed"))
                   (lambda (e _m) (push e failures))))
          (pending (map-elt client :pending-requests)))
     (should (= 1 (length pending)))

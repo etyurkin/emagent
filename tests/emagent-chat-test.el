@@ -130,6 +130,22 @@
              (emagent-chat--spinner-frame-count)))
     (should (string= "●○○" (substring-no-properties (emagent-chat--spinner-dot-grid))))))
 
+(ert-deftest emagent-chat-test-normalize-model-id ()
+  (should (string= "auto" (emagent-chat--normalize-model-id "default[]")))
+  (should (string= "auto" (emagent-chat--normalize-model-id "default")))
+  (should (string= "claude-sonnet-4-6"
+                   (emagent-chat--normalize-model-id
+                    "claude-sonnet-4-6[thinking=true]")))
+  (should (string= "gpt-4" (emagent-chat--normalize-model-id "gpt-4"))))
+
+(ert-deftest emagent-chat-test-set-model-normalizes-default ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (emagent-chat-set-model "default[]")
+       (should (string= "auto" (emagent-chat-model)))
+       (should (string-match-p "^#\\+EMAGENT_MODEL: auto" (buffer-string)))))))
+
 (ert-deftest emagent-chat-test-mode-line-thinking ()
   (emagent-test--with-busy-session
    (lambda ()
@@ -200,7 +216,7 @@
           (emagent-chat-show-tool-call "id1" "Read: /some/file.txt")
           (emagent-chat-append-thought "Test 123")
           (let ((text (substring-no-properties (buffer-string))))
-            (should (string-match-p "→ Read: /some/file.txt\nTest 123" text))
+            (should (string-match-p "→ Read: =/some/file.txt=\nTest 123" text))
             (should-not (string-match-p "/some/file.txtTest" text)))))))))
 
 (ert-deftest emagent-chat-test-tool-call-after-close-thought-no-executing ()
@@ -253,7 +269,7 @@
           (emagent-chat-show-tool-call "id1" "Read: /some/file.txt")
           (emagent-chat-append-thought "more thinking")
           (let ((text (substring-no-properties (buffer-string))))
-            (should (string-match-p "→ Read: /some/file.txt\nmore thinking" text))
+            (should (string-match-p "→ Read: =/some/file.txt=\nmore thinking" text))
             (should-not (string-match-p "/some/file.txtmore" text)))))))))
 
 (ert-deftest emagent-chat-test-tool-call-before-thought-opens-reasoning ()
@@ -321,6 +337,12 @@
          (should (= (point) bol))
          (emagent-chat-beginning-of-line)
          (should (= (point) bol)))))))
+
+(ert-deftest emagent-chat-test-org-verbatim-paths ()
+  (should (string= "Read: =/Users/etyurkin/foo.el="
+                   (emagent-chat--org-verbatim-paths "Read: /Users/etyurkin/foo.el")))
+  (should (string= "→ Read: =/tmp/x="
+                   (emagent-chat--format-tool-line "Read: /tmp/x"))))
 
 (ert-deftest emagent-chat-test-finish-moves-point-to-user-prompt ()
   (emagent-test--with-emagent-buffer

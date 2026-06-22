@@ -13,12 +13,13 @@
 
 (ert-deftest emagent-providers-test-cursor-command ()
   (should (string= "cursor-agent" (emagent-cursor-command)))
-  (should (member "acp" (emagent-cursor-command-params))))
+  (should (member "acp" (emagent-cursor-command-params)))
+  (should (equal emagent-cursor-acp-extra-args '("--sandbox" "disabled"))))
 
 (ert-deftest emagent-providers-test-cursor-buffer-local-extra-args ()
   (with-temp-buffer
-    (setq-local emagent-chat-cursor-acp-extra-args '("--trust"))
-    (should (equal '("--trust")
+    (setq-local emagent-chat-cursor-acp-extra-args '("--sandbox" "enabled"))
+    (should (equal '("--sandbox" "enabled")
                    (cdr (emagent-cursor-command-params-for-context (current-buffer)))))))
 
 (ert-deftest emagent-providers-test-cursor-environment-token ()
