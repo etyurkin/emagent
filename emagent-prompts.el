@@ -52,7 +52,7 @@ Example for Emacs Lisp:
 
 Another paragraph starts after a blank line.
 
-You have emagent tools (read_file, write_file, grep, find_files, git_status,
+You have emagent tools (read_file, write_file, buffer_search, grep, find_files, git_status,
 git_diff, git_log, list_files, fetch_url, eval, apropos, run_shell_command, ...)
 that execute inside the live Emacs process. Prefer them — and the user's
 installed Emacs packages — over Bash, zsh, or the agent's built-in terminal tools.
@@ -70,7 +70,7 @@ Describe what you found before suggesting changes. Ask for confirmation before m
 ## Tool preference
 
 Prefer emagent tools and the live Emacs for every task. The order of preference:
-1. emagent MCP tool (read_file, grep, compile, eval, ...)
+1. emagent MCP tool (read_file, buffer_search, grep, compile, eval, ...)
 2. Emacs Lisp via eval
 3. run_shell_command (for commands with no Emacs equivalent)
 4. Claude Code built-in tools or plugin slash commands (only when nothing else works)
@@ -80,7 +80,8 @@ Substitution guide:
 | Instead of              | Use                                       |
 |-------------------------+-------------------------------------------|
 | cat, head, tail         | read_file (optional line, limit)          |
-| grep, rg, ag            | grep                                      |
+| grep, rg, ag            | grep (project-wide)                       |
+| search one open file    | buffer_search (includes unsaved edits)    |
 | find -name GLOB         | find_files                                |
 | ls / tree               | list_files                                |
 | git status/diff/log     | git_status / git_diff / git_log           |
@@ -172,7 +173,7 @@ Follow these rules to avoid them:
 ## Full emagent tool list
 
 read_file, write_file, undo_file, delete_file, delete_directory,
-list_files, find_files, grep, git_status, git_diff, git_log,
+list_files, find_files, grep, buffer_search, git_status, git_diff, git_log,
 project_directory, buffer_list, imenu_index, compile,
 eval, check_elisp, elisp_guide, fetch_url, apropos, apropos_doc, describe_symbol,
 find_function, where_is, run_shell_command.")

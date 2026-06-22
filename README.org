@@ -227,6 +227,7 @@ writing new code.
 | =read_file=       | Read through Emacs (includes unsaved buffer content)      |
 | =write_file=      | Write via Emacs buffer (undo-able, diff shown to user)    |
 | =grep=, =find_files=, =list_files= | File search within session root          |
+| =buffer_search=   | Regex/literal search in one file (includes unsaved edits) |
 | =git_status/diff/log= | Git info via Emacs                                    |
 | =compile=         | Build/test via compilation-mode (errors navigable with =M-g n=) |
 | =buffer_list=     | Open files inside the project visible to Emacs            |

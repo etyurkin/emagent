@@ -580,6 +580,157 @@ For forms longer than 3 lines, call check_elisp first to validate parens."
 
 (defconst emagent-tools--grep-max-results 50)
 
+(defconst emagent-tools--buffer-search-default-limit 20
+  "Default max matches returned by `emagent-tool-buffer-search'.")
+
+(defconst emagent-tools--buffer-search-max-context 3
+  "Maximum context lines per side in `emagent-tool-buffer-search'.")
+
+(defun emagent-tools--pos-at-line (line)
+  "Return point at beginning of 1-based LINE in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (when (> line 1)
+      (forward-line (1- line)))
+    (point)))
+
+(defun emagent-tools--pos-after-line (line)
+  "Return point after end of 1-based LINE in the current buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (forward-line line)
+    (point)))
+
+(defun emagent-tools--buffer-display-name (resolved)
+  "Return a display path for RESOLVED relative to the session root."
+  (let ((root emagent-tools--project-directory))
+    (if root
+        (file-relative-name resolved root)
+      (abbreviate-file-name resolved))))
+
+(defun emagent-tools--buffer-search-context-block (center-line context)
+  "Return a context block string around 1-based CENTER-LINE in current buffer."
+  (let* ((start-line (max 1 (- center-line context)))
+         (end-line (+ center-line context))
+         (lines nil))
+    (save-excursion
+      (goto-char (point-min))
+      (forward-line (1- start-line))
+      (while (and (<= (line-number-at-pos) end-line)
+                  (not (eobp)))
+        (push (format "  %d| %s"
+                      (line-number-at-pos)
+                      (string-trim (buffer-substring-no-properties
+                                    (line-beginning-position)
+                                    (line-end-position))))
+              lines)
+        (forward-line 1)))
+    (concat "  --- context ---\n"
+            (string-join (nreverse lines) "\n")
+            "\n  --- /context ---")))
+
+(defun emagent-tools--buffer-search-run (display-name pattern limit context
+                                           search-fn ignore-case backward)
+  "Search current narrowed buffer; return result string or nil when no matches."
+  (save-excursion
+    (let ((output nil)
+          (count 0)
+          (more nil)
+          (resume-from-line nil))
+      (if backward
+          (goto-char (point-max))
+        (goto-char (point-min)))
+      (let ((case-fold-search ignore-case))
+        (while (and (< count limit)
+                    (funcall search-fn pattern nil t))
+          (let* ((line (line-number-at-pos))
+                 (col (1+ (current-column)))
+                 (text (string-trim (buffer-substring-no-properties
+                                     (line-beginning-position)
+                                     (line-end-position)))))
+            (setq output
+                  (append output
+                          (list (format "%s:%s:%s:%s"
+                                        display-name line col text))
+                          (if (> context 0)
+                              (list (emagent-tools--buffer-search-context-block
+                                     line context))
+                            nil))
+                  count (1+ count))))
+        (when (and (= count limit)
+                   (funcall search-fn pattern nil t))
+          (setq more t
+                resume-from-line (line-number-at-pos))))
+      (list output count more resume-from-line))))
+
+(defun emagent-tool-buffer-search (file pattern &optional from-line to-line limit
+                                     literal ignore-case backward context)
+  "Search FILE for PATTERN in Emacs, including unsaved buffer content.
+
+Returns grep-style lines (path:line:col:text) plus an optional footer with
+pagination hints.  PATTERN is an Emacs regexp unless LITERAL is non-nil.
+FROM-LINE and TO-LINE bound the search region (1-based, inclusive)."
+  (unless (and file (not (string-empty-p file)))
+    (user-error "buffer_search requires file"))
+  (unless (and pattern (not (string-empty-p pattern)))
+    (user-error "buffer_search requires pattern"))
+  (when (emagent-tools--protected-fs-path-p file)
+    (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
+                (emagent-tools--root-directory file)))
+  (let* ((resolved (emagent-tools--root-directory file))
+         (display-name (emagent-tools--buffer-display-name resolved))
+         (buf (or (find-buffer-visiting resolved)
+                  (find-file-noselect resolved)))
+         (from-line (max 1 (or from-line 1)))
+         (limit (min (max 1 (or limit emagent-tools--buffer-search-default-limit))
+                     emagent-tools--grep-max-results))
+         (context (min emagent-tools--buffer-search-max-context
+                       (max 0 (or context 0))))
+         (mode-label (if literal "literal" "regex"))
+         (search-fn (if backward
+                        (if literal #'search-backward #'re-search-backward)
+                      (if literal #'search-forward #'re-search-forward))))
+    (with-current-buffer buf
+      (save-restriction
+        (widen)
+        (let* ((region-end-line (or to-line (line-number-at-pos (point-max))))
+               (region-beg (emagent-tools--pos-at-line from-line))
+               (region-end (emagent-tools--pos-after-line region-end-line)))
+          (when (> region-beg region-end)
+            (user-error "from_line (%d) is after to_line (%d)"
+                        from-line region-end-line))
+          (narrow-to-region region-beg region-end)
+          (condition-case err
+              (let* ((run (emagent-tools--buffer-search-run
+                           display-name pattern limit context search-fn
+                           ignore-case backward))
+                     (output (nth 0 run))
+                     (count (nth 1 run))
+                     (more (nth 2 run))
+                     (resume-from-line (nth 3 run)))
+                (if (zerop count)
+                    (format "No matches in %s (%s, lines %d–%d)"
+                            display-name mode-label from-line region-end-line)
+                  (let ((footer
+                         (format (concat "---\n"
+                                         "matches: %d\n"
+                                         "more: %s\n"
+                                         "resume_from_line: %s\n"
+                                         "search: %s from_line=%d to_line=%d "
+                                         "ignore_case=%s backward=%s")
+                                 count
+                                 (if more "true" "false")
+                                 (or (and more (number-to-string resume-from-line))
+                                     "null")
+                                 mode-label
+                                 from-line
+                                 region-end-line
+                                 (if ignore-case "true" "false")
+                                 (if backward "true" "false"))))
+                    (string-join (append output (list footer)) "\n"))))
+            (invalid-regexp
+             (format "Invalid regexp: %s" (error-message-string err)))))))))
+
 (defun emagent-tools--grep-emacs (regexp root max)
   "Search REGEXP under ROOT in Emacs, returning at most MAX lines."
   (let ((lines nil)
