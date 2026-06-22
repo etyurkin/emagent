@@ -76,6 +76,10 @@
     (puthash :cursor-tool-resolve-queue nil state)
     (puthash :cursor-tool-resolve-worker nil state)
     (puthash :cursor-tool-resolve-attempts (make-hash-table :test 'equal) state)
+    (puthash :permission-queue nil state)
+    (puthash :permission-busy nil state)
+    (puthash :permission-drain-timer nil state)
+    (puthash :deferred-complete-response nil state)
     (puthash :external-tool-gate-reasons nil state)
     state))
 

@@ -194,6 +194,11 @@ When nil, the spinner inherits the mode-line height."
   "Face for paths and commands on tool-call lines."
   :group 'emagent-chat)
 
+(defface emagent-permission-prompt
+  '((t (:inherit font-lock-warning-face :weight bold)))
+  "Face for the permission question line in the Thinking block."
+  :group 'emagent-chat)
+
 (defconst emagent-chat-default-slug "emagent")
 
 (defconst emagent-chat-response-begin "# --- emagent ---")
@@ -1031,6 +1036,57 @@ check is skipped so the user can re-evaluate any previous prompt."
         (setq last (match-beginning 0)))
       last)))
 
+(defun emagent-chat--insert-reasoning-scaffold ()
+  "Insert an empty Thinking block at `emagent-chat--response-body-start'."
+  (when (and emagent-chat--response-body-start
+             (marker-position emagent-chat--response-body-start))
+    (goto-char emagent-chat--response-body-start)
+    (insert (format "#+begin_quote %s\n" emagent-chat--thinking-block-label))
+    (setq emagent-chat--thought-marker (point-marker))
+    (insert "\n#+end_quote\n\n")
+    (setq emagent-chat--thought-open-p t
+          emagent-chat--assistant-marker (point-marker))
+    (font-lock-flush)))
+
+(defun emagent-chat--ensure-reasoning-end-quote ()
+  "Insert #+end_quote when the open Thinking block has no closing line."
+  (when-let* ((beg (emagent-chat--open-reasoning-begin))
+              (bounds (emagent-chat--open-response-body-bounds))
+              (limit (cdr bounds))
+              (search-from (save-excursion (goto-char beg) (line-end-position))))
+    (unless (emagent-chat--last-reasoning-end-quote-pos search-from limit)
+      (let ((insert-at (or (and emagent-chat--thought-marker
+                                (marker-position emagent-chat--thought-marker))
+                           (save-excursion
+                             (goto-char beg)
+                             (forward-line 1)
+                             (point)))))
+        (save-excursion
+          (goto-char insert-at)
+          (unless (bolp) (insert "\n"))
+          (insert "#+end_quote\n\n")
+          (setq emagent-chat--assistant-marker (point-marker)))
+        (font-lock-flush)
+        t))))
+
+(defun emagent-chat--ensure-reasoning-scaffold ()
+  "Ensure the open response has a Thinking block with #+end_quote present."
+  (when (emagent-chat--open-response-p)
+    (cond
+     (emagent-chat--thought-open-p
+      (emagent-chat--ensure-reasoning-end-quote)
+      (emagent-chat--sync-thought-marker))
+     ((emagent-chat--reasoning-stream-marker)
+      (setq emagent-chat--thought-marker (emagent-chat--reasoning-stream-marker)
+            emagent-chat--thought-open-p t))
+     ((not (emagent-chat--open-reasoning-begin))
+      (emagent-chat--insert-reasoning-scaffold))
+     (t
+      (emagent-chat--ensure-reasoning-end-quote)
+      (when-let ((stream (emagent-chat--reasoning-stream-marker)))
+        (setq emagent-chat--thought-marker stream
+              emagent-chat--thought-open-p t))))))
+
 (defun emagent-chat--reasoning-stream-marker ()
   "Return insert marker before the closing #+end_quote in the open Reasoning block.
 
@@ -1081,14 +1137,7 @@ contains a literal #+end_quote line cannot steal the insertion point."
 
 (defun emagent-chat--ensure-thought-stream ()
   "Open or resume the streaming Reasoning block in the in-flight response."
-  (cond
-   (emagent-chat--thought-open-p
-    (emagent-chat--sync-thought-marker))
-   ((emagent-chat--can-resume-reasoning-p)
-    (setq emagent-chat--thought-marker (emagent-chat--reasoning-stream-marker)
-          emagent-chat--thought-open-p t))
-   (t
-    (emagent-chat-begin-thought))))
+  (emagent-chat--ensure-reasoning-scaffold))
 
 (defun emagent-chat--begin-response (&optional at)
   "Insert a new emagent response block at AT or point."
@@ -1099,11 +1148,7 @@ contains a literal #+end_quote line cannot steal the insertion point."
       (insert "\n"))
     (insert (format "\n%s\n" emagent-chat-response-begin))
     (setq emagent-chat--response-body-start (point-marker))
-    (insert emagent-chat--progress-line)
-    (setq emagent-chat--assistant-marker (point-marker)
-          emagent-chat--thought-open-p nil
-          emagent-chat--thought-marker nil)
-    (font-lock-flush)))
+    (emagent-chat--insert-reasoning-scaffold)))
 
 (defun emagent-chat-insert-system (message)
   "Append system MESSAGE to `emagent-log-buffer-name'."
@@ -1491,29 +1536,14 @@ folding the inner region only so incomplete parses never break the buffer."
              (not (re-search-forward emagent-chat--response-end-re (point-max) t))))))
 
 (defun emagent-chat-begin-thought ()
-  "Open a foldable Reasoning block in the in-flight emagent response."
+  "Resume or open the Thinking block in the in-flight emagent response."
   (emagent-chat--with-stable-view
     (with-current-buffer (current-buffer)
-      (when (and (emagent-chat--open-response-p)
-                 (not emagent-chat--thought-open-p))
+      (when (emagent-chat--open-response-p)
         (let ((inhibit-read-only t))
           (emagent-chat--writable)
           (emagent-chat--ensure-response-markers)
-          (if (emagent-chat--can-resume-reasoning-p)
-              (setq emagent-chat--thought-marker
-                    (emagent-chat--reasoning-stream-marker)
-                    emagent-chat--thought-open-p t)
-            (progn
-              (emagent-chat--clear-progress-line)
-              (goto-char emagent-chat--response-body-start)
-              ;; Keep #+end_quote present while streaming so Org never sees an
-              ;; unclosed quote block (that corrupts org-element cache).
-              (insert (format "#+begin_quote %s\n" emagent-chat--thinking-block-label))
-              (setq emagent-chat--thought-marker (point-marker))
-              (insert "\n#+end_quote\n\n")
-              (setq emagent-chat--thought-open-p t
-                    emagent-chat--assistant-marker (point-marker))
-              (font-lock-flush))))))))
+          (emagent-chat--ensure-reasoning-scaffold))))))
 
 (defun emagent-chat-append-thought (text)
   "Append reasoning TEXT to the open Reasoning block."
@@ -1531,7 +1561,6 @@ folding the inner region only so incomplete parses never break the buffer."
                 (goto-char emagent-chat--thought-marker)
                 (emagent-chat--insert-reasoning-text text)
                 (setq emagent-chat--thought-marker (point-marker)
-                      emagent-chat--assistant-marker (point-marker)
                       emagent-chat--reasoning-streamed-p t)))
             (font-lock-flush)))))))
 
@@ -1543,6 +1572,7 @@ folding the inner region only so incomplete parses never break the buffer."
         (let ((inhibit-read-only t)
               (hide-at nil))
           (emagent-chat--writable)
+          (emagent-chat--ensure-reasoning-end-quote)
           (when (and emagent-chat--thought-marker
                      (marker-position emagent-chat--thought-marker))
             (save-excursion
@@ -1600,6 +1630,10 @@ folding the inner region only so incomplete parses never break the buffer."
   "Return a Thinking-block tool line for LABEL, safe in org-mode."
   (format "→ %s" (emagent-chat--org-verbatim-paths label)))
 
+(defun emagent-chat--format-permission-line (question)
+  "Return a Thinking-block permission question line for QUESTION."
+  (format "? %s" (emagent-chat--org-verbatim-paths question)))
+
 (defun emagent-chat--repair-tool-line-faces (start end)
   "Re-apply path faces after org font-lock on tool-call lines."
   (when (and start end (< start end))
@@ -1629,14 +1663,7 @@ folding the inner region only so incomplete parses never break the buffer."
 (defun emagent-chat--ensure-reasoning-for-tool ()
   "Ensure the open response can accept tool annotations in Reasoning."
   (when (emagent-chat--open-response-p)
-    (cond
-     (emagent-chat--thought-open-p
-      (emagent-chat--sync-thought-marker))
-     ((emagent-chat--reasoning-stream-marker)
-      (setq emagent-chat--thought-marker (emagent-chat--reasoning-stream-marker)
-            emagent-chat--thought-open-p t))
-     (t
-      (emagent-chat-begin-thought)))))
+    (emagent-chat--ensure-reasoning-scaffold)))
 
 (defun emagent-chat--append-tool-line (label &optional id)
   "Append tool LABEL to the open Reasoning block.
@@ -1693,6 +1720,80 @@ Return non-nil when a line was updated."
   "Show or update a tool-call line for ACP toolCallId ID with LABEL."
   (emagent-chat--append-tool-line label id))
 
+(defun emagent-chat-permission-prompt (question choices)
+  "Show QUESTION inside the Thinking block; CHOICES as buttons below #+end_quote.
+
+CHOICES is a list of (LABEL . VALUE) pairs.  Blocks via `recursive-edit'
+until a button is clicked or C-g is pressed; removes the question line and
+buttons afterward.  Returns the VALUE of the clicked button, or nil on C-g."
+  (when (emagent-chat--open-response-p)
+    (let ((result nil)
+          (buf (current-buffer))
+          question-beg question-end buttons-beg buttons-end)
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          (emagent-chat--writable)
+          (emagent-chat--ensure-response-markers)
+          (emagent-chat--ensure-reasoning-scaffold)
+          (emagent-chat--ensure-reasoning-end-quote)
+          (if-let ((insert-at (emagent-chat--reasoning-stream-marker)))
+              (progn
+                (goto-char insert-at)
+                (unless (bolp) (insert "\n"))
+                (setq question-beg (copy-marker (point) nil))
+                (insert (emagent-chat--format-permission-line question))
+                (put-text-property (marker-position question-beg) (point)
+                                   'face 'emagent-permission-prompt)
+                (emagent-chat--repair-tool-line-faces (marker-position question-beg) (point))
+                (insert "\n")
+                (setq question-end (copy-marker (point) nil))
+                (goto-char (or (emagent-chat--reasoning-block-tail)
+                               (marker-position question-end)))
+                (unless (and (bolp)
+                             (save-excursion
+                               (forward-line -1)
+                               (and (bolp) (not (looking-at "^#\\+end_quote")))))
+                  (insert "\n"))
+                (setq buttons-beg (copy-marker (point) nil))
+                (dolist (choice choices)
+                  (insert-button (concat "[" (car choice) "]")
+                                 'action (let ((v (cdr choice)))
+                                           (lambda (_b)
+                                             (setq result v)
+                                             (exit-recursive-edit)))
+                                 'follow-link t)
+                  (insert "  "))
+                (insert "\n")
+                (setq buttons-end (copy-marker (point) nil)))
+            (setq question-beg nil buttons-beg nil))))
+      (if (not buttons-beg)
+          (setq result (emagent-tools--buttons-prompt question choices buf))
+        (when-let ((win (get-buffer-window buf)))
+          (with-selected-window win
+            (when (and buttons-end (marker-position buttons-end))
+              (goto-char (marker-position buttons-end))
+              (recenter -3))))
+        (unwind-protect
+            (condition-case nil
+                (recursive-edit)
+              (quit nil))
+          (with-current-buffer buf
+            (let ((inhibit-read-only t))
+              (emagent-chat--writable)
+              (when (and question-beg question-end
+                         (marker-buffer question-beg)
+                         (marker-buffer question-end))
+                (delete-region (marker-position question-beg)
+                               (marker-position question-end)))
+              (when (and buttons-beg buttons-end
+                         (marker-buffer buttons-beg)
+                         (marker-buffer buttons-end))
+                (delete-region (marker-position buttons-beg)
+                               (marker-position buttons-end)))
+              (when-let ((stream (emagent-chat--reasoning-stream-marker)))
+                (setq emagent-chat--thought-marker stream))))))
+      result)))
+
 (defun emagent-chat-append-assistant (text)
   "Append TEXT to the current emagent response section."
   (when (not (string-empty-p text))
@@ -1701,6 +1802,7 @@ Return non-nil when a line was updated."
         (when (emagent-chat--open-response-p)
           (let ((inhibit-read-only t))
             (emagent-chat--writable)
+            (emagent-chat--ensure-reasoning-end-quote)
             (emagent-chat-close-thought)
             (save-excursion
               (emagent-chat--goto-active-response-point)
@@ -1768,6 +1870,7 @@ THOUGHT-TEXT."
         (if-let ((reasoning-beg (emagent-chat--open-reasoning-begin)))
             (progn
               (setq hide-at reasoning-beg)
+              (emagent-chat--ensure-reasoning-end-quote)
               (unless emagent-chat--reasoning-streamed-p
                 (emagent-chat--inject-reasoning-thought thought-text))
               (emagent-chat-close-thought)
@@ -1793,6 +1896,9 @@ THOUGHT-TEXT."
                      (+ insert-start (length thought)) (point))))
                 (setq emagent-chat--assistant-marker (point-marker))))))
         (when rendered
+          (emagent-chat--insert-response-end))
+        (when (and (not rendered) (emagent-chat--open-response-p))
+          (emagent-chat-close-thought)
           (emagent-chat--insert-response-end))
         (emagent-chat--reset-response-state)
         (emagent-chat--sync-user-zone-marker)
@@ -2141,7 +2247,10 @@ the prompt text."
          (busy-face '(bold mode-line-emphasis))
          (head (cond
                 (waiting-permission
-                 (propertize "emagent:Idle" 'face 'success))
+                 (propertize "emagent:Allow?" 'face 'warning))
+                ((and (not busy) ready
+                      (emagent-chat--open-response-p))
+                 (propertize "emagent:stalled" 'face 'warning))
                 ((and busy tool (member kind '("write" "execute")))
                  (concat (propertize "Executing" 'face busy-face)
                          spinner))

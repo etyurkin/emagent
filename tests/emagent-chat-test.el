@@ -381,6 +381,66 @@
             (should (string-match-p "Done\\." text))
             (should-not (string-match-p "Executing" text)))))))))
 
+(ert-deftest emagent-chat-test-begin-response-opens-thinking-scaffold ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (emagent-chat--begin-response (point))
+       (let ((text (substring-no-properties (buffer-string))))
+         (should (and (string-match "#\\+begin_quote Thinking" text)
+                      (string-match "#\\+end_quote" text)))
+         (should emagent-chat--thought-open-p)
+         (should (markerp emagent-chat--thought-marker)))))))
+
+(ert-deftest emagent-chat-test-format-permission-line ()
+  (should (string= "? make test" (emagent-chat--format-permission-line "make test"))))
+
+(ert-deftest emagent-chat-test-reasoning-scaffold-repairs-missing-end-quote ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (save-excursion
+            (re-search-forward "^#\\+end_quote" nil t)
+            (delete-region (line-beginning-position) (min (1+ (line-end-position)) (point-max))))
+          (setq emagent-chat--thought-marker nil
+                emagent-chat--thought-open-p nil)
+          (emagent-chat-show-tool-call "id1" "Read: foo.el")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "#\\+begin_quote Thinking" text))
+            (should (string-match-p "→ Read: foo.el" text))
+            (should (and (string-match "→ Read: foo.el" text)
+                         (string-match "#\\+end_quote" text (match-end 0)))))))))))
+
+(ert-deftest emagent-chat-test-permission-buttons-below-end-quote ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-show-tool-call "id1" "compile")
+          (let (layout)
+            (emagent-test--with-mocks
+                (((symbol-function 'recursive-edit)
+                  (lambda ()
+                    (setq layout (substring-no-properties (buffer-string)))
+                    (signal 'quit nil))))
+              (emagent-chat-permission-prompt
+               "make test"
+               '(("Allow once" . "allow-once"))))
+            (should (string-match-p "\\? make test" layout))
+            (should (string-match-p "#\\+end_quote\n\n\\[Allow once\\]" layout))
+            (let ((text (substring-no-properties (buffer-string))))
+              (should (string-match-p "#\\+end_quote" text))
+              (should-not (string-match-p "\\? make test" text))
+              (should-not (string-match-p "\\[Allow once\\]" text))))))))))
+
 (provide 'emagent-chat-test)
 
 ;;; emagent-chat-test.el ends here

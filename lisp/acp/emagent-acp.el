@@ -27,6 +27,8 @@
 (declare-function emagent-chat--compress-prompt-text "emagent-chat")
 (declare-function emagent-chat-apply-compression "emagent-chat")
 (declare-function emagent-chat-show-tool-call "emagent-chat")
+(declare-function emagent-chat-permission-prompt "emagent-chat")
+(declare-function emagent-chat--open-response-p "emagent-chat")
 (declare-function emagent-chat--refresh-mode-line-soon "emagent-chat")
 (declare-function emagent-cursor-enrich-tool-call-update "emagent-cursor")
 (declare-function emagent-cursor-normalize-slash-prompt "emagent-cursor")
@@ -268,6 +270,7 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :permission-queue nil state)
     (puthash :permission-busy nil state)
     (puthash :permission-drain-timer nil state)
+    (puthash :deferred-complete-response nil state)
     (puthash :session-auto-approve nil state)
     (puthash :external-tool-gate-reasons nil state)
     (puthash :external-tool-gate-proactive-logged nil state)
@@ -411,8 +414,9 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
   (and emagent-acp--session (map-elt emagent-acp--session :busy)))
 
 (defun emagent-acp-waiting-permission-p ()
-  "Return non-nil while an interactive permission prompt is open."
-  (and emagent-acp--session (map-elt emagent-acp--session :permission-busy)))
+  "Return non-nil while permission requests are queued or being answered."
+  (and emagent-acp--session
+       (emagent-acp--permission-pending-p emagent-acp--session)))
 
 (defun emagent-acp-ready-p ()
   "Return non-nil when the current buffer's ACP session is connected and idle."
@@ -480,7 +484,15 @@ buffer signals \"Selecting deleted buffer\"."
       (emagent-chat-set-model model-id)))
   (emagent-acp--refresh-mode-line state))
 
+(defun emagent-acp--maybe-recover-stall (state)
+  "Unstick a session that finished on the wire but left the buffer open."
+  (when (and state (map-elt state :ready) (not (map-elt state :busy)))
+    (emagent-acp--maybe-complete-deferred-prompt state)
+    (when (map-elt state :permission-queue)
+      (emagent-acp--drain-permission-queue state))))
+
 (defun emagent-acp--refresh-mode-line (state)
+  (emagent-acp--maybe-recover-stall state)
   (when-let ((buffer (emagent-acp--chat-buffer state)))
     (with-current-buffer buffer
       (cond
@@ -921,6 +933,18 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
     (map-put! state :prompt-finalized t)
     (emagent-acp--refresh-mode-line state)))
 
+(defun emagent-acp--permission-pending-p (state)
+  "Return non-nil when STATE has unanswered permission requests."
+  (or (map-elt state :permission-busy)
+      (map-elt state :permission-queue)))
+
+(defun emagent-acp--maybe-complete-deferred-prompt (state)
+  "Run a deferred `emagent-acp--complete-prompt' when permissions are clear."
+  (when-let ((response (map-elt state :deferred-complete-response)))
+    (unless (emagent-acp--permission-pending-p state)
+      (map-put! state :deferred-complete-response nil)
+      (emagent-acp--complete-prompt state response))))
+
 (defun emagent-acp--complete-prompt (state response)
   "Finalize the in-flight prompt for STATE and close the chat response."
   (cond
@@ -930,6 +954,8 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
       (emagent-acp--refresh-mode-line state)))
    ((not (map-elt state :busy))
     nil)
+   ((emagent-acp--permission-pending-p state)
+    (map-put! state :deferred-complete-response response))
    (t
     (map-put! state :prompt-finishing t)
     (map-put! state :busy nil)
@@ -1211,14 +1237,20 @@ Never returns a deny option.  OPTIONS may be a list or vector."
        (or (map-elt state :cursor-tool-resolve-worker)
            (map-elt state :cursor-tool-resolve-queue))))
 
+(defun emagent-acp--permission-interactive-p (state)
+  "Return non-nil when ACP permission prompts need user input."
+  (and (not emagent-acp-auto-approve-permissions)
+       (not (map-elt state :session-auto-approve))))
+
 (defun emagent-acp--schedule-permission-drain (state)
-  "Run `emagent-acp--drain-permission-queue' after pending tool updates."
-  (unless (map-elt state :permission-drain-timer)
+  "Run `emagent-acp--drain-permission-queue-now' outside the ACP process filter."
+  (unless (or (map-elt state :permission-drain-timer)
+              (map-elt state :permission-busy))
     (map-put! state :permission-drain-timer
               (run-at-time 0 nil
                            (lambda ()
                              (map-put! state :permission-drain-timer nil)
-                             (emagent-acp--drain-permission-queue state))))))
+                             (emagent-acp--drain-permission-queue-now state))))))
 
 (defun emagent-acp--enqueue-cursor-tool-resolve (state id &optional delay)
   "Queue ID for a serialized Cursor store.db lookup."
@@ -1243,8 +1275,12 @@ Never returns a deny option.  OPTIONS may be a list or vector."
              (let ((retry-delay (emagent-acp--resolve-cursor-tool-from-store state id)))
                (if retry-delay
                    (emagent-acp--drain-cursor-tool-resolve-queue state retry-delay)
-                 (emagent-acp--drain-cursor-tool-resolve-queue state 0))))))
-      (emagent-acp--drain-permission-queue state))))
+                 (progn
+                   (emagent-acp--drain-cursor-tool-resolve-queue state 0)
+                   (emagent-acp--maybe-complete-deferred-prompt state)))))))
+      (progn
+        (emagent-acp--drain-permission-queue state)
+        (emagent-acp--maybe-complete-deferred-prompt state)))))
 
 (defun emagent-acp--resolve-cursor-tool-from-store (state id)
   "Look up tool-call ID in Cursor store.db; return retry delay or nil when done."
@@ -1268,7 +1304,8 @@ Never returns a deny option.  OPTIONS may be a list or vector."
         nil)
        ((>= attempts emagent-acp--cursor-tool-resolve-max-attempts)
         (puthash id 0 attempts-table)
-        (emagent-acp--emit-tool-call-display state id kind merged label status)
+        (when (emagent-acp--tool-call-displayable-p merged)
+          (emagent-acp--emit-tool-call-display state id kind merged label status))
         (remhash id pending-table)
         nil)
        (t
@@ -1504,6 +1541,39 @@ real parameters live in arguments; prefer arguments when both are present."
       (and (not (string-empty-p trimmed))
            (not (member trimmed emagent-acp--tool-call-weak-details))))))
 
+(defun emagent-acp--tool-call-generic-title-p (title)
+  "Return non-nil when TITLE is too generic to show without detail."
+  (and (fboundp 'emagent-cursor--generic-acp-title-p)
+       (funcall #'emagent-cursor--generic-acp-title-p title)))
+
+(defun emagent-acp--tool-call-redundant-detail-p (title detail)
+  "Return non-nil when DETAIL adds nothing beyond generic TITLE."
+  (when (and (stringp title) (stringp detail))
+    (let* ((t0 (downcase (string-trim title)))
+           (d0 (downcase (string-trim detail)))
+           (t1 (replace-regexp-in-string "^emagent-" "" t0))
+           (t2 (replace-regexp-in-string "^mcp_" "" t1)))
+      (or (string= t0 d0)
+          (string= t1 d0)
+          (string= t2 d0)
+          (and (string-match-p ":" t0)
+               (string= (car (split-string t0 ":")) d0))))))
+
+(defun emagent-acp--tool-call-displayable-p (update)
+  "Return non-nil when UPDATE should appear in the Thinking block."
+  (let* ((title (string-trim (or (map-elt update 'title) "")))
+         (detail (emagent-acp--tool-call-detail update)))
+    (cond
+     ((and detail
+           (emagent-acp--tool-call-meaningful-detail-p update)
+           (not (emagent-acp--tool-call-redundant-detail-p title detail)))
+      t)
+     ((and (not (string-empty-p title))
+           (not (emagent-acp--tool-call-generic-title-p title))
+           (or (null detail) (string-empty-p detail)))
+      t)
+     (t nil))))
+
 (defun emagent-acp--tool-call-label (update)
   "Return a display label for ACP tool-call UPDATE."
   (let* ((title (string-trim (or (map-elt update 'title) "tool")))
@@ -1553,7 +1623,8 @@ real parameters live in arguments; prefer arguments when both are present."
            (defer (and (emagent-acp--cursor-agent-p state)
                        id
                        (not has-detail)))
-           (show (and label (not (string-empty-p label)) (not defer))))
+           (show (and label (not (string-empty-p label)) (not defer)
+                        (emagent-acp--tool-call-displayable-p merged))))
       (when defer
         (puthash id merged pending-table)
         (emagent-acp--enqueue-cursor-tool-resolve state id))
@@ -1579,6 +1650,16 @@ real parameters live in arguments; prefer arguments when both are present."
           (emagent-acp--tool-call-raw-input-detail (map-elt tool-call 'arguments))
           (emagent-acp--tool-call-raw-input-detail (map-elt tool-call 'rawInput))))))
 
+(defun emagent-acp--permission-question-line (emagent-acp-request)
+  "Return the command or path to show on the permission ? line."
+  (let* ((tool-call (map-nested-elt emagent-acp-request '(params toolCall)))
+         (detail (and tool-call (emagent-acp--tool-call-detail-from-tool-call tool-call)))
+         (title (emagent-acp--permission-prompt-title emagent-acp-request)))
+    (cond
+     ((emagent-acp--human-tool-detail-p detail) detail)
+     (title (replace-regexp-in-string "\\`Allow \\(.*\\)[?]\\'" "\\1" title))
+     (t "Permission request"))))
+
 (defun emagent-acp--permission-prompt-title (emagent-acp-request)
   "Return the primary permission question line from EMagent-ACP-REQUEST."
   (when-let ((raw (or (map-nested-elt emagent-acp-request '(params title))
@@ -1601,13 +1682,15 @@ real parameters live in arguments; prefer arguments when both are present."
   (when-let ((tool-call (map-nested-elt emagent-acp-request '(params toolCall))))
     (emagent-acp--ingest-tool-call-request state tool-call))
   (let* ((options (map-nested-elt emagent-acp-request '(params options)))
-         (title (emagent-acp--permission-prompt-text emagent-acp-request))
+         (question (emagent-acp--permission-question-line emagent-acp-request))
          (choices (mapcar (lambda (opt)
                             (cons (or (map-elt opt 'name) (map-elt opt 'optionId))
                                   (map-elt opt 'optionId)))
                           (append options nil)))
+         (choice-list (append choices '(("Allow All (session)" . :allow-all))))
          (auto-approve (or emagent-acp-auto-approve-permissions
                            (map-elt state :session-auto-approve)))
+         (buf (emagent-acp--chat-buffer state))
          (choice
           (if auto-approve
               (emagent-acp--permission-option-id options)
@@ -1615,10 +1698,14 @@ real parameters live in arguments; prefer arguments when both are present."
               (emagent-acp--prepare-interactive-context state)
               (emagent-acp--clear-prompt-watchdog state)
               (unwind-protect
-                  (let ((raw (emagent-tools--buttons-prompt
-                              title
-                              (append choices '(("Allow All (session)" . :allow-all)))
-                              (emagent-acp--chat-buffer state))))
+                  (let ((raw
+                         (if (and buf (buffer-live-p buf)
+                                  (with-current-buffer buf
+                                    (emagent-chat--open-response-p)))
+                             (with-current-buffer buf
+                               (emagent-chat-permission-prompt question choice-list))
+                           (emagent-tools--buttons-prompt
+                            question choice-list buf))))
                     (if (eq raw :allow-all)
                         (progn
                           (map-put! state :session-auto-approve t)
@@ -1630,7 +1717,7 @@ real parameters live in arguments; prefer arguments when both are present."
                 (emagent-acp--refresh-mode-line state))))))
     (when auto-approve
       (emagent-log "permission auto-approve: %s → %s"
-                   title (or choice "cancelled (no allow option)")))
+                   question (or choice "cancelled (no allow option)")))
     (emagent-acp-send-response
      :client (map-elt state :client)
      :response (if choice
@@ -1642,23 +1729,31 @@ real parameters live in arguments; prefer arguments when both are present."
                   :request-id (map-elt emagent-acp-request 'id)
                   :cancelled t)))))
 
+(defun emagent-acp--drain-permission-queue-now (state)
+  "Process one queued permission request synchronously."
+  (unless (map-elt state :permission-busy)
+    (when-let ((request (car (map-elt state :permission-queue))))
+      (map-put! state :permission-queue (cdr (map-elt state :permission-queue)))
+      (map-put! state :permission-busy t)
+      (emagent-acp--refresh-mode-line state)
+      (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
+      (map-put! state :permission-busy nil)
+      (emagent-acp--refresh-mode-line state)
+      (emagent-acp--maybe-complete-deferred-prompt state)
+      (when (map-elt state :permission-queue)
+        (if (emagent-acp--permission-interactive-p state)
+            (emagent-acp--schedule-permission-drain state)
+          (emagent-acp--drain-permission-queue-now state))))))
+
 (defun emagent-acp--drain-permission-queue (state)
   "Process queued permission requests one at a time.
 
-Prevents nested `recursive-edit' calls when two permission requests arrive
-while an interactive prompt is already blocking for user input."
-  (unless (map-elt state :permission-busy)
-    (when-let ((request (car (map-elt state :permission-queue))))
-      (unless (and (emagent-acp--cursor-tool-resolve-active-p state)
-                   (not (or emagent-acp-auto-approve-permissions
-                            (map-elt state :session-auto-approve))))
-        (map-put! state :permission-queue (cdr (map-elt state :permission-queue)))
-        (map-put! state :permission-busy t)
-        (emagent-acp--refresh-mode-line state)
-        (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
-        (map-put! state :permission-busy nil)
-        (emagent-acp--refresh-mode-line state)
-        (emagent-acp--drain-permission-queue state)))))
+Interactive prompts are deferred to the next event cycle so
+`recursive-edit' never runs inside the ACP process filter."
+  (when (map-elt state :permission-queue)
+    (if (emagent-acp--permission-interactive-p state)
+        (emagent-acp--schedule-permission-drain state)
+      (emagent-acp--drain-permission-queue-now state))))
 
 (cl-defun emagent-acp--on-permission (&key state emagent-acp-request)
   (map-put! state :permission-queue
@@ -2053,6 +2148,9 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
       (when-let ((timer (map-elt state :permission-drain-timer)))
         (cancel-timer timer)
         (map-put! state :permission-drain-timer nil))
+      (map-put! state :permission-queue nil)
+      (map-put! state :permission-busy nil)
+      (map-put! state :deferred-complete-response nil)
       (emagent-acp--cancel-prompt-render state)
       (emagent-acp--clear-thought-buffer state)
       (emagent-acp--schedule-prompt-watchdog state)

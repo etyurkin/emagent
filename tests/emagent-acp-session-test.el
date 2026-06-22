@@ -64,7 +64,31 @@
                    ((optionId . "allow_once") (kind . "allow_once"))]))
     (should (string= "allow_once" (emagent-acp--permission-option-id options)))))
 
-(ert-deftest emagent-acp-session-test-permission-interactive-drains-sync ()
+(defun emagent-test--run-at-time-immediately (_time _repeat fn)
+  "Test helper: invoke FN synchronously instead of scheduling."
+  (funcall fn)
+  nil)
+
+(ert-deftest emagent-acp-session-test-permission-interactive-schedules-drain ()
+  (let* ((state (emagent-test--make-acp-state))
+         (request '((id . "req1")
+                    (params . ((title . "Allow compile?")
+                               (options . [((optionId . "allow_once")
+                                            (kind . "allow_once"))])))))
+         (scheduled nil))
+    (let ((emagent-acp-auto-approve-permissions nil))
+      (emagent-test--with-mocks
+          (((symbol-function 'run-at-time)
+            (lambda (_time _repeat fn)
+              (setq scheduled t)
+              nil))
+           ((symbol-function 'emagent-acp-send-response)
+            (lambda (&rest _args) nil)))
+        (emagent-acp--on-permission :state state :emagent-acp-request request)
+        (should scheduled)
+        (should (= 1 (length (map-elt state :permission-queue))))))))
+
+(ert-deftest emagent-acp-session-test-permission-interactive-drains-deferred ()
   (let* ((state (emagent-test--make-acp-state))
          (request '((id . "req1")
                     (params . ((title . "Allow compile?")
@@ -73,7 +97,8 @@
          (prompted nil))
     (let ((emagent-acp-auto-approve-permissions nil))
       (emagent-test--with-mocks
-          (((symbol-function 'emagent-tools--buttons-prompt)
+          (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
+           ((symbol-function 'emagent-tools--buttons-prompt)
             (lambda (&rest _args) (setq prompted t) "allow_once"))
            ((symbol-function 'emagent-acp-send-response)
             (lambda (&rest _args) nil)))
@@ -81,7 +106,7 @@
         (should prompted)
         (should (null (map-elt state :permission-queue)))))))
 
-(ert-deftest emagent-acp-session-test-permission-interactive-defers-until-resolve ()
+(ert-deftest emagent-acp-session-test-permission-not-deferred-for-tool-resolve ()
   (let* ((state (emagent-test--make-acp-state))
          (request '((id . "req1")
                     (params . ((title . "Allow compile?")
@@ -92,18 +117,14 @@
       (map-put! state :cursor-tool-resolve-queue '("tool_x"))
       (map-put! state :cursor-tool-resolve-worker t)
       (emagent-test--with-mocks
-          (((symbol-function 'emagent-acp--agent-launch-string)
+          (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
+           ((symbol-function 'emagent-acp--agent-launch-string)
             (lambda (_s) "cursor-agent acp"))
            ((symbol-function 'emagent-tools--buttons-prompt)
             (lambda (&rest _args) (setq prompted t) "allow_once"))
            ((symbol-function 'emagent-acp-send-response)
             (lambda (&rest _args) nil)))
         (emagent-acp--on-permission :state state :emagent-acp-request request)
-        (should-not prompted)
-        (should (= 1 (length (map-elt state :permission-queue))))
-        (map-put! state :cursor-tool-resolve-worker nil)
-        (map-put! state :cursor-tool-resolve-queue nil)
-        (emagent-acp--drain-permission-queue state)
         (should prompted)
         (should (null (map-elt state :permission-queue)))))))
 
@@ -156,7 +177,8 @@
     (let ((emagent-acp-auto-approve-permissions nil))
       (map-put! state :permission-queue (list request))
       (emagent-test--with-mocks
-          (((symbol-function 'emagent-acp--agent-launch-string)
+          (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
+           ((symbol-function 'emagent-acp--agent-launch-string)
             (lambda (_s) "cursor-agent acp"))
            ((symbol-function 'emagent-tools--buttons-prompt)
             (lambda (&rest _args) (setq prompted t) "allow_once"))
@@ -297,6 +319,51 @@
           (emagent-acp--resolve-cursor-tool-from-store state "tool_z")))
       (should (string-match-p "done.el" shown))
       (should (= 0 (hash-table-count (map-elt state :tool-call-pending)))))))
+
+(ert-deftest emagent-acp-session-test-cursor-generic-title-stays-hidden ()
+  (let ((state (emagent-test--make-acp-state))
+        (shown nil))
+    (puthash :session-id "sess" state)
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--agent-launch-string)
+          (lambda (_state) "cursor-agent acp"))
+         ((symbol-function 'emagent-cursor-tool-call-from-store)
+          (lambda (_sid _id) nil))
+         ((symbol-function 'emagent-chat-show-tool-call)
+          (lambda (_id label) (setq shown label))))
+      (emagent-acp--on-tool-call
+       state '((toolCallId . "tool_w") (title . "Read File") (rawInput . ())))
+      (should (null shown))
+      (dotimes (_ emagent-acp--cursor-tool-resolve-max-attempts)
+        (emagent-acp--resolve-cursor-tool-from-store state "tool_w"))
+      (should (null shown)))))
+
+(ert-deftest emagent-acp-session-test-tool-call-redundant-detail ()
+  (should (emagent-acp--tool-call-redundant-detail-p "git_log" "git_log"))
+  (should (emagent-acp--tool-call-redundant-detail-p "emagent-git_log" "git_log"))
+  (should-not (emagent-acp--tool-call-redundant-detail-p "compile" "make test")))
+
+(ert-deftest emagent-acp-session-test-complete-prompt-defers-for-permission ()
+  (let ((state (emagent-test--make-acp-state)))
+    (map-put! state :busy t)
+    (map-put! state :permission-queue '((id . "req")))
+    (emagent-acp--complete-prompt state '((usage . nil)))
+    (should (map-elt state :deferred-complete-response))
+    (should (map-elt state :busy))))
+
+(ert-deftest emagent-acp-session-test-permission-question-line ()
+  (let* ((cmd "make test")
+         (args (make-hash-table :test 'equal)))
+    (puthash "command" cmd args)
+    (should (string= cmd
+                     (emagent-acp--permission-question-line
+                      `((params . ((title . "Allow compile?")
+                                    (toolCall . ((toolCallId . "tool_compile")
+                                                 (arguments . ,args))))))))))
+  (should (string= "compile"
+                   (emagent-acp--permission-question-line
+                    '((params . ((title . "Allow compile?")
+                                 (toolCall . ((title . "compile"))))))))))
 
 (ert-deftest emagent-acp-session-test-tool-call-truncate ()
   (should (= 121 (length (emagent-acp--tool-call-truncate (make-string 200 ?x)))))
