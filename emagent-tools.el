@@ -794,6 +794,7 @@ Unlike `run_shell_command', errors appear in a persistent
 `*emagent-compile*' buffer navigable with `next-error' / \\[next-error].
 The buffer is shown to the user while the build runs."
   (require 'compile)
+  (require 'ansi-color)
   (let* ((default-directory (expand-file-name
                              (or directory
                                  emagent-tools--project-directory
@@ -801,6 +802,8 @@ The buffer is shown to the user while the build runs."
          (buf (compilation-start command 'compilation-mode
                                   (lambda (_) "*emagent-compile*")))
          (proc (get-buffer-process buf)))
+    (with-current-buffer buf
+      (add-hook 'compilation-filter-hook #'ansi-color-compilation-filter nil t))
     (when proc
       (while (process-live-p proc)
         (accept-process-output proc 0.05 nil t)))
