@@ -78,21 +78,26 @@ iCloud Drive prompts.  Set to nil only if you prefer the agent's own file tools.
   :group 'emagent)
 
 (defcustom emagent-acp-auto-approve-permissions nil
-  "Automatically approve ACP session permission requests.
+  "Automatically approve ACP session permission prompts.
 
-Cursor and other ACP agents block on this response before running a tool.
-When nil (default), emagent prompts in the chat buffer and does not reply
-until you choose Allow or Deny.  MCP tools invoked through an emagent ACP
-session do not show a separate MCP confirmation prompt.
+When nil (default), emagent always prompts in the chat buffer.
 
-Set to t for frictionless sessions when you also want to skip Emacs-side ACP
-prompts.
+When `safe', read and write tools are auto-approved without prompting.
+Execute (shell) commands are inspected for destructive operations — rm,
+dd, formatting, and similar — and only prompted then.  Harmless
+commands like `mvn compile` or `ls` pass through without prompting.
 
-These gates do not replace the external agent's own tool permissions; they
-only unblock the ACP session handshake."
-  :type 'boolean
+When t, all permission prompts are auto-approved without checking the
+tool kind (same as the old boolean behavior).  Use with caution.
+
+Whether auto-approve or prompted, these gates do not replace the
+external agent's own tool permission layers; they only unblock the
+ACP session handshake."
+  :type '(choice
+          (const :tag "Prompt for all permissions" nil)
+          (const :tag "Auto-approve safe tools, prompt only for destructive shell commands" safe)
+          (const :tag "Auto-approve all permissions" t))
   :group 'emagent)
-
 (defcustom emagent-acp-confirm-fs-writes nil
   "When non-nil, require diff + Allow before each ACP fs/write_text_file.
 
@@ -1237,10 +1242,108 @@ Never returns a deny option.  OPTIONS may be a list or vector."
        (or (map-elt state :cursor-tool-resolve-worker)
            (map-elt state :cursor-tool-resolve-queue))))
 
+(defconst emagent-acp--dangerous-command-regexps
+  (mapconcat #'identity
+             '("\\brm[[:space:]]+-[rf]+"
+               "\\brm[[:space:]]+--recursive"
+               "\\brm[[:space:]]+--force"
+               "\\bdd[[:space:]]+"
+               "\\bmkfs\\."
+               "\\bmke2fs\\b"
+               "\\bformat[[:space:]]+"
+               "\\bshutdown\\b"
+               "\\breboot\\b"
+               "\\binit[[:space:]]+0\\b"
+               "\\bsudo[[:space:]]+rm"
+               "curl[[:space:]]+.*|.*sh\\b"
+               "\\btrash\\b"
+               "kill[[:space:]]+-9"
+               ">*/dev/[sh]d[a-z]"
+               "chmod[[:space:]]+-R[[:space:]]*777")
+             "\\|")
+  "Regexp matching shell commands that are destructive enough to prompt about.
+Auto-approve in `safe' mode skips these and prompts for confirmation.")
+
+(defun emagent-acp--tool-call-command-text (tool-call)
+  "Extract the command string from a tool-call ACP object."
+  (or (let ((raw (or (map-elt tool-call 'rawInput)
+                     (map-elt tool-call 'arguments))))
+        (when (stringp raw)
+          (condition-case nil
+              (let ((parsed (json-parse-string raw
+                                               :object-type 'alist
+                                               :array-type 'list
+                                               :null-object nil
+                                               :false-object nil)))
+                (or (map-elt parsed 'command)
+                    (map-elt parsed 'text)
+                    (map-elt parsed 'cmd)))
+            (error nil))))
+      (map-elt tool-call 'subtitle)
+      (map-elt tool-call 'title)))
+
+(defun emagent-acp--tool-call-content-block (tool-call)
+  "Return an org subsection string for the permission prompt, or nil.
+For shell commands, returns a code block with the command.
+For edits, returns the file path and content.
+For reads, returns nil (the question line is enough)."
+  (when (and (listp tool-call) (map-elt tool-call 'kind))
+    (let* ((kind (downcase (or (map-elt tool-call 'kind) "")))
+           (raw (or (map-elt tool-call 'rawInput)
+                    (map-elt tool-call 'arguments)))
+           (command (emagent-acp--tool-call-command-text tool-call))
+           (detail (emagent-acp--tool-call-detail-from-tool-call tool-call))
+           (path (and (member kind '("read" "write"))
+                      (or (emagent-acp--tool-call-data-get
+                           (emagent-acp--tool-call-normalize-data raw)
+                           'path)
+                          (emagent-acp--tool-call-data-get
+                           (emagent-acp--tool-call-normalize-data raw)
+                           'file_path)
+                          detail))))
+      (cond
+       ((member kind '("execute" ""))
+        (when command
+          (format "** Allow execute\n#+BEGIN_SRC sh\n%s\n#+END_SRC" command)))
+       ((equal kind "write")
+        (if path
+            (let ((content (emagent-acp--tool-call-data-get
+                           (emagent-acp--tool-call-normalize-data raw)
+                           'content))
+                  (lang (if (string-match "\\.\\([a-z]+\\)\\'" path)
+                            (match-string 1 path)
+                          "text"))
+                  (heading (if detail (format "Allow edit: %s" detail)
+                             "Allow edit")))
+              (if (and content (not (string-empty-p content)))
+                  (format "** %s\n#+BEGIN_SRC %s\n%s\n#+END_SRC"
+                          heading lang (substring content 0 (min (length content) 1000)))
+                (format "** Allow edit\n= %s =" path)))
+          (when command
+            (format "** Allow edit\n#+BEGIN_SRC sh\n%s\n#+END_SRC" command))))
+       (t nil)))))
+
+(defun emagent-acp--tool-call-dangerous-p (tool-call)
+  "Return non-nil when TOOL-CALL is a shell command with destructive intent.
+Read and write tools are always safe.
+
+For execute tools, analyses the command text against known dangerous
+patterns: recursive deletes, disk writes, formatting, and similar.
+Harmless commands like `mvn compile', `git status', or `ls' pass
+through without prompting."
+  (let ((kind (and (listp tool-call) (map-elt tool-call 'kind))))
+    (when (and (stringp kind) (equal (downcase kind) "execute"))
+      (let ((command (emagent-acp--tool-call-command-text tool-call)))
+        (and (stringp command)
+             (string-match-p emagent-acp--dangerous-command-regexps command))))))
+
 (defun emagent-acp--permission-interactive-p (state)
-  "Return non-nil when ACP permission prompts need user input."
-  (and (not emagent-acp-auto-approve-permissions)
+  "Return non-nil when ACP permission prompts may need user input.
+For `safe' auto-approve mode this returns t because the per-tool
+decision is made in `emagent-acp--handle-one-permission'."
+  (and (not (eq emagent-acp-auto-approve-permissions t))
        (not (map-elt state :session-auto-approve))))
+
 
 (defun emagent-acp--schedule-permission-drain (state)
   "Run `emagent-acp--drain-permission-queue-now' outside the ACP process filter."
@@ -1679,17 +1782,22 @@ real parameters live in arguments; prefer arguments when both are present."
 
 (cl-defun emagent-acp--handle-one-permission (&key state emagent-acp-request)
   "Process a single queued permission request synchronously."
-  (when-let ((tool-call (map-nested-elt emagent-acp-request '(params toolCall))))
-    (emagent-acp--ingest-tool-call-request state tool-call))
-  (let* ((options (map-nested-elt emagent-acp-request '(params options)))
-         (question (emagent-acp--permission-question-line emagent-acp-request))
-         (choices (mapcar (lambda (opt)
-                            (cons (or (map-elt opt 'name) (map-elt opt 'optionId))
-                                  (map-elt opt 'optionId)))
-                          (append options nil)))
-         (choice-list (append choices '(("Allow All (session)" . :allow-all))))
-         (auto-approve (or emagent-acp-auto-approve-permissions
-                           (map-elt state :session-auto-approve)))
+  (let ((tool-call (map-nested-elt emagent-acp-request '(params toolCall))))
+    (when tool-call
+      (emagent-acp--ingest-tool-call-request state tool-call))
+    (let* ((options (map-nested-elt emagent-acp-request '(params options)))
+           (question (emagent-acp--permission-question-line emagent-acp-request))
+           (choices (mapcar (lambda (opt)
+                              (cons (or (map-elt opt 'name) (map-elt opt 'optionId))
+                                    (map-elt opt 'optionId)))
+                            (append options nil)))
+           (choice-list (append choices '(("Allow All (session)" . :allow-all))))
+           (auto-approve
+            (or (eq emagent-acp-auto-approve-permissions t)
+                (map-elt state :session-auto-approve)
+                (and (eq emagent-acp-auto-approve-permissions 'safe)
+                     tool-call
+                     (not (emagent-acp--tool-call-dangerous-p tool-call)))))
          (buf (emagent-acp--chat-buffer state))
          (choice
           (if auto-approve
@@ -1703,7 +1811,7 @@ real parameters live in arguments; prefer arguments when both are present."
                                   (with-current-buffer buf
                                     (emagent-chat--open-response-p)))
                              (with-current-buffer buf
-                               (emagent-chat-permission-prompt question choice-list))
+                               (emagent-chat-permission-prompt question choice-list tool-call))
                            (emagent-tools--buttons-prompt
                             question choice-list buf))))
                     (if (eq raw :allow-all)

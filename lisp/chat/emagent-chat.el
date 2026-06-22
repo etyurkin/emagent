@@ -1083,9 +1083,11 @@ check is skipped so the user can re-evaluate any previous prompt."
       (emagent-chat--insert-reasoning-scaffold))
      (t
       (emagent-chat--ensure-reasoning-end-quote)
-      (when-let ((stream (emagent-chat--reasoning-stream-marker)))
+      (let ((stream (emagent-chat--reasoning-stream-marker)))
         (setq emagent-chat--thought-marker stream
-              emagent-chat--thought-open-p t))))))
+              emagent-chat--thought-open-p t)
+        (unless stream
+          (emagent-log "emagent: cannot find reasoning stream marker after ensure")))))))
 
 (defun emagent-chat--reasoning-stream-marker ()
   "Return insert marker before the closing #+end_quote in the open Reasoning block.
@@ -1240,19 +1242,6 @@ folding the inner region only so incomplete parses never break the buffer."
                (save-excursion
                  (goto-char at)
                  (emagent-chat--hide-reasoning-at-point))))))))))
-
-(defun emagent-chat--clear-progress-line ()
-  "Remove the in-flight thinking placeholder above the response body."
-  (when (and emagent-chat--response-body-start
-             (marker-position emagent-chat--response-body-start))
-    (save-excursion
-      (goto-char emagent-chat--response-body-start)
-      (beginning-of-line)
-      (when (looking-at (concat (regexp-quote (string-trim emagent-chat--progress-line))
-                                "\\s-*"))
-        (delete-region (point) (line-end-position))
-        (unless (bolp)
-          (insert "\n"))))))
 
 (defun emagent-chat--lang-from-filename (file)
   "Return an org babel language tag for FILE, or nil when unknown."
@@ -1561,6 +1550,7 @@ folding the inner region only so incomplete parses never break the buffer."
                 (goto-char emagent-chat--thought-marker)
                 (emagent-chat--insert-reasoning-text text)
                 (setq emagent-chat--thought-marker (point-marker)
+                      emagent-chat--assistant-marker (point-marker)
                       emagent-chat--reasoning-streamed-p t)))
             (font-lock-flush)))))))
 
@@ -1720,16 +1710,66 @@ Return non-nil when a line was updated."
   "Show or update a tool-call line for ACP toolCallId ID with LABEL."
   (emagent-chat--append-tool-line label id))
 
-(defun emagent-chat-permission-prompt (question choices)
+(defun emagent-chat-permission-prompt (question choices &optional tool-call)
   "Show QUESTION inside the Thinking block; CHOICES as buttons below #+end_quote.
+When TOOL-CALL is non-nil and has a command or content, a formatted org
+subsection is inserted between the question line and the buttons.
 
 CHOICES is a list of (LABEL . VALUE) pairs.  Blocks via `recursive-edit'
-until a button is clicked or C-g is pressed; removes the question line and
-buttons afterward.  Returns the VALUE of the clicked button, or nil on C-g."
+until a button is clicked or C-g is pressed; removes the question line,
+content block, and buttons afterward.  Returns the VALUE of the clicked
+button, or nil on C-g.
+
+Keyboard shortcuts (active only during the prompt, via `overriding-local-map'):
+  y / RET  — Allow the first allow-type choice
+  n        — Deny the first deny-type choice
+  a        — Allow All (session)
+  q        — Cancel (same as C-g)"
   (when (emagent-chat--open-response-p)
     (let ((result nil)
           (buf (current-buffer))
-          question-beg question-end buttons-beg buttons-end)
+          question-beg question-end
+          content-beg content-end
+          buttons-beg buttons-end
+          key-map)
+      ;; Build keymap for keyboard shortcuts in the body so the
+      ;; byte-compiler sees `result' as a lexical variable caught
+      ;; by the key-binding closures.
+      (setq key-map
+            (let ((map (make-sparse-keymap))
+                  (allow-key nil)
+                  (always-key nil)
+                  (deny-key nil))
+              ;; Allow all (session) — always present
+              (define-key map (kbd "a")
+                (lambda () (interactive) (setq result :allow-all) (exit-recursive-edit)))
+              ;; Quit / cancel
+              (define-key map (kbd "q")
+                (lambda () (interactive) (keyboard-quit)))
+              ;; Scan choices for allow and deny options
+              (dolist (choice choices)
+                (let* ((val (cdr choice))
+                       (id (and (stringp val) (downcase val))))
+                  (cond
+                   ((eq val :allow-all)) ;; already handled above
+                   ((and id (string-match-p "allow_always\\|always" id))
+                    (unless always-key
+                      (setq always-key val)
+                      (define-key map (kbd "w")
+                        (lambda () (interactive) (setq result always-key) (exit-recursive-edit)))))
+                   ((and id (string-match-p "allow\\|yes\\|run" id))
+                    (unless allow-key
+                      (setq allow-key val)
+                      (define-key map (kbd "y")
+                        (lambda () (interactive) (setq result allow-key) (exit-recursive-edit)))
+                      (define-key map (kbd "RET")
+                        (lambda () (interactive) (setq result allow-key) (exit-recursive-edit)))))
+                   ((and id (string-match-p "deny\\|no\\|reject" id))
+                    (unless deny-key
+                      (setq deny-key val)
+                      (define-key map (kbd "n")
+                        (lambda () (interactive) (setq result deny-key) (exit-recursive-edit))))))))
+              map))
       (with-current-buffer buf
         (let ((inhibit-read-only t))
           (emagent-chat--writable)
@@ -1747,7 +1787,23 @@ buttons afterward.  Returns the VALUE of the clicked button, or nil on C-g."
                 (emagent-chat--repair-tool-line-faces (marker-position question-beg) (point))
                 (insert "\n")
                 (setq question-end (copy-marker (point) nil))
-                (goto-char (or (emagent-chat--reasoning-block-tail)
+                ;; Insert content block (command, edit, etc.) when available.
+                (when-let ((block (and tool-call
+                                       (fboundp 'emagent-acp--tool-call-content-block)
+                                       (emagent-acp--tool-call-content-block tool-call))))
+                  (goto-char (or (emagent-chat--reasoning-block-tail)
+                                 (marker-position question-end)))
+                  (unless (and (bolp)
+                               (save-excursion
+                                 (forward-line -1)
+                                 (and (bolp) (not (looking-at "^#\\+end_quote")))))
+                    (insert "\n"))
+                  (setq content-beg (copy-marker (point) nil))
+                  (insert block "\n")
+                  (setq content-end (copy-marker (point) nil)))
+                ;; Move to insertion point for buttons.
+                (goto-char (or (and content-end (marker-position content-end))
+                               (emagent-chat--reasoning-block-tail)
                                (marker-position question-end)))
                 (unless (and (bolp)
                              (save-excursion
@@ -1755,17 +1811,40 @@ buttons afterward.  Returns the VALUE of the clicked button, or nil on C-g."
                                (and (bolp) (not (looking-at "^#\\+end_quote")))))
                   (insert "\n"))
                 (setq buttons-beg (copy-marker (point) nil))
-                (dolist (choice choices)
-                  (insert-button (concat "[" (car choice) "]")
-                                 'action (let ((v (cdr choice)))
-                                           (lambda (_b)
-                                             (setq result v)
-                                             (exit-recursive-edit)))
-                                 'follow-link t)
-                  (insert "  "))
+                (let ((allow-shown nil)
+                      (always-shown nil)
+                      (deny-shown nil))
+                  (dolist (choice choices)
+                    (let* ((val (cdr choice))
+                           (id (and (stringp val) (downcase val)))
+                           (key-hint (cond
+                                      ((eq val :allow-all) "a")
+                                      ((and (not always-shown) id
+                                            (string-match-p "allow_always\\|always" id))
+                                       (setq always-shown t)
+                                       "w")
+                                      ((and (not allow-shown) id
+                                            (string-match-p "allow\\|yes\\|run" id))
+                                       (setq allow-shown t)
+                                       "y")
+                                      ((and (not deny-shown) id
+                                            (string-match-p "deny\\|no\\|reject" id))
+                                       (setq deny-shown t)
+                                       "n")
+                                      (t nil))))
+                    (insert-button (concat "[" (car choice) "]")
+                                   'action (let ((v (cdr choice)))
+                                             (lambda (_b)
+                                               (setq result v)
+                                               (exit-recursive-edit)))
+                                   'follow-link t)
+                    (when key-hint
+                      (insert (propertize (format " [%s]" key-hint) 'face 'shadow)))
+                    (insert "  "))))
+                (insert (propertize " [C-g]" 'face 'shadow) " cancel")
                 (insert "\n")
                 (setq buttons-end (copy-marker (point) nil)))
-            (setq question-beg nil buttons-beg nil))))
+            (setq question-beg nil content-beg nil buttons-beg nil))))
       (if (not buttons-beg)
           (setq result (emagent-tools--buttons-prompt question choices buf))
         (when-let ((win (get-buffer-window buf)))
@@ -1775,7 +1854,8 @@ buttons afterward.  Returns the VALUE of the clicked button, or nil on C-g."
               (recenter -3))))
         (unwind-protect
             (condition-case nil
-                (recursive-edit)
+                (let ((overriding-local-map key-map))
+                  (recursive-edit))
               (quit nil))
           (with-current-buffer buf
             (let ((inhibit-read-only t))
@@ -1790,6 +1870,11 @@ buttons afterward.  Returns the VALUE of the clicked button, or nil on C-g."
                          (marker-buffer buttons-end))
                 (delete-region (marker-position buttons-beg)
                                (marker-position buttons-end)))
+              (when (and content-beg content-end
+                         (marker-buffer content-beg)
+                         (marker-buffer content-end))
+                (delete-region (marker-position content-beg)
+                               (marker-position content-end)))
               (when-let ((stream (emagent-chat--reasoning-stream-marker)))
                 (setq emagent-chat--thought-marker stream))))))
       result)))
@@ -1866,7 +1951,6 @@ THOUGHT-TEXT."
             (rendered nil)
             (hide-at nil))
         (emagent-chat--writable)
-        (emagent-chat--clear-progress-line)
         (if-let ((reasoning-beg (emagent-chat--open-reasoning-begin)))
             (progn
               (setq hide-at reasoning-beg)
@@ -2215,7 +2299,11 @@ the prompt text."
     (cancel-timer emagent-chat--mode-line-refresh-timer)
     (setq emagent-chat--mode-line-refresh-timer nil))
   (emagent-chat--mode-line-recompute)
-  (force-mode-line-update t))
+  (force-mode-line-update t)
+  ;; Force immediate redisplay when the session is busy so the
+  ;; mode-line animation starts without waiting for user input.
+  (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
+    (redisplay t)))
 
 (defun emagent-chat--refresh-mode-line-soon ()
   "Queue a single idle mode-line recompute for the current buffer."
@@ -2249,7 +2337,9 @@ the prompt text."
                 (waiting-permission
                  (propertize "emagent:Allow?" 'face 'warning))
                 ((and (not busy) ready
-                      (emagent-chat--open-response-p))
+                      (emagent-chat--open-response-p)
+                      (not (and (fboundp 'emagent-acp-prompt-finishing-p)
+                                (emagent-acp-prompt-finishing-p))))
                  (propertize "emagent:stalled" 'face 'warning))
                 ((and busy tool (member kind '("write" "execute")))
                  (concat (propertize "Executing" 'face busy-face)
@@ -2299,7 +2389,7 @@ the prompt text."
   (when emagent-chat--spinner-refresh-timer
     (cancel-timer emagent-chat--spinner-refresh-timer))
   (setq emagent-chat--spinner-refresh-timer
-        (run-with-idle-timer 0 nil #'emagent-chat--spinner-refresh-idle)))
+        (run-at-time 0 nil #'emagent-chat--spinner-refresh-idle)))
 
 (defun emagent-chat--spinner-tick ()
   "Advance spinner one frame and queue an idle mode-line refresh."

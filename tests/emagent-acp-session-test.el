@@ -492,3 +492,91 @@
 (provide 'emagent-acp-session-test)
 
 ;;; emagent-acp-session-test.el ends here
+;; Test additions verified with check-parens
+
+(ert-deftest emagent-acp-session-test-tool-call-displayable-p ()
+  (let ((emagent-acp--tool-call-weak-details '("tool" "Tool" "running" "pending")))
+    (should (emagent-acp--tool-call-displayable-p
+             '((title . "compile") (rawInput . "{\"command\":\"make test\"}"))))
+    (should-not (emagent-acp--tool-call-displayable-p
+                 '((title . "git_log") (rawInput . "{\"args\":\"git_log\"}"))))
+    (should (emagent-acp--tool-call-displayable-p
+             '((title . "compile") (rawInput . "{}"))))
+    (should-not (emagent-acp--tool-call-displayable-p
+                 '((title . "") (rawInput . "{}"))))
+    (should-not (emagent-acp--tool-call-displayable-p
+                 '((title . "Read File") (rawInput . "{}"))))))
+
+(ert-deftest emagent-acp-session-test-deferred-complete-fires-after-permission-drain ()
+  "Deferred complete response fires once permission queue empties."
+  (let* ((state (emagent-test--make-acp-state))
+         (completed nil)
+         (request '((id . "req1")
+                    (params . ((title . "Allow compile?")
+                               (options . [((optionId . "allow_once")
+                                            (kind . "allow_once"))]))))))
+    (map-put! state :busy t)
+    (map-put! state :deferred-complete-response '((usage . ((totalTokens . 5)))))
+    (map-put! state :permission-queue (list request))
+    (let ((emagent-acp-auto-approve-permissions nil))
+      (emagent-test--with-mocks
+          (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
+           ((symbol-function 'emagent-tools--buttons-prompt)
+            (lambda (&rest _args) "allow_once"))
+           ((symbol-function 'emagent-acp-send-response) (lambda (&rest _args) nil))
+           ((symbol-function 'emagent-acp--render-prompt-response)
+            (lambda (_state) (setq completed t))))
+        (emagent-acp--drain-permission-queue state)
+        (should completed)
+        (should-not (map-elt state :busy))
+        (should (null (map-elt state :deferred-complete-response)))))))
+
+(ert-deftest emagent-acp-session-test-permission-question-line-ext ()
+  ;; title without tool detail -> strips "Allow " prefix and trailing "?"
+  (should (string= "compile"
+                   (emagent-acp--permission-question-line
+                    '((params . ((title . "Allow compile?")))))))
+  ;; no title -> fallback text
+  (should (string= "Permission request"
+                   (emagent-acp--permission-question-line
+                    '((params . ((title . ""))))))))
+
+(ert-deftest emagent-acp-session-test-drain-permission-queue-clears-busy-on-error ()
+  "drain-permission-queue-now' always clears :permission-busy even on error."
+  (let* ((state (emagent-test--make-acp-state))
+         (request '((id . "req1")
+                    (params . ((title . "Allow compile?")
+                               (options . [((optionId . "allow_once")
+                                            (kind . "allow_once"))]))))))
+    (map-put! state :permission-queue (list request))
+    (let ((emagent-acp-auto-approve-permissions nil))
+      (emagent-test--with-mocks
+          (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
+           ((symbol-function 'emagent-acp-send-response) (lambda (&rest _args) nil))
+           ((symbol-function 'emagent-acp--handle-one-permission)
+            (lambda (&rest _args) (error "simulated permission crash"))))
+        (emagent-acp--drain-permission-queue-now state)
+        (should-not (map-elt state :permission-busy))
+        (should (null (map-elt state :permission-queue)))))))
+
+(ert-deftest emagent-acp-session-test-maybe-recover-stall-drains-queue ()
+  "maybe-recover-stall' schedules permission drain when queue is nonempty."
+  (let* ((state (emagent-test--make-acp-state))
+         (request '((id . "req1")
+                    (params . ((title . "Allow compile?")
+                               (options . [((optionId . "allow_once")
+                                            (kind . "allow_once"))]))))))
+    (map-put! state :ready t)
+    (map-put! state :busy nil)
+    (map-put! state :permission-queue (list request))
+    (let ((emagent-acp-auto-approve-permissions nil)
+          (scheduled nil))
+      (emagent-test--with-mocks
+          (((symbol-function 'run-at-time)
+            (lambda (_time _repeat fn) (setq scheduled t) (funcall fn) nil))
+           ((symbol-function 'emagent-acp-send-response) (lambda (&rest _args) nil))
+           ((symbol-function 'emagent-tools--buttons-prompt)
+            (lambda (&rest _args) "allow_once")))
+        (emagent-acp--maybe-recover-stall state)
+        (should scheduled)
+        (should (null (map-elt state :permission-queue)))))))

@@ -416,6 +416,22 @@
             (should (and (string-match "→ Read: foo.el" text)
                          (string-match "#\\+end_quote" text (match-end 0)))))))))))
 
+(ert-deftest emagent-chat-test-ensure-scaffold-after-close-reopens ()
+  "`ensure-reasoning-scaffold' reopens thought after close when end_quote exists."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-close-thought)
+          (should-not emagent-chat--thought-open-p)
+          ;; Without explicit begin-thought, ensure-scaffold should re-open it
+          (emagent-chat--ensure-reasoning-scaffold)
+          (should emagent-chat--thought-open-p)
+          (should (markerp emagent-chat--thought-marker))))))))
+
 (ert-deftest emagent-chat-test-permission-buttons-below-end-quote ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
