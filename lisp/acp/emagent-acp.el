@@ -10,6 +10,22 @@
   (require 'cl-lib))
 
 (require 'cl-lib)
+
+;; Register grouped lisp/ subdirectories on load-path so that
+;; cross-directory requires (emagent-log from lisp/core/ etc.)
+;; work during byte-compilation by Elpaca or other build tools.
+;; Uses `byte-compile-current-file' when set (Elpaca compile).
+(eval-and-compile
+  (when-let ((file (or load-file-name
+                       (and (boundp 'byte-compile-current-file)
+                            byte-compile-current-file)))
+             (lisp (expand-file-name ".." (file-name-directory file))))
+    (when (file-directory-p lisp)
+      (dolist (dir (directory-files lisp nil "^[^.]"))
+        (let ((path (expand-file-name dir lisp)))
+          (when (file-directory-p path)
+            (add-to-list 'load-path path)))))))
+
 (require 'emagent-acp-protocol)
 (require 'emagent-log)
 (require 'emagent-chat)
@@ -1835,7 +1851,7 @@ real parameters live in arguments; prefer arguments when both are present."
                  ;; C-g or empty options: send cancelled so the agent doesn't hang.
                  (emagent-acp-make-session-request-permission-response
                   :request-id (map-elt emagent-acp-request 'id)
-                  :cancelled t)))))
+                  :cancelled t))))))
 
 (defun emagent-acp--drain-permission-queue-now (state)
   "Process one queued permission request synchronously."
@@ -1844,9 +1860,13 @@ real parameters live in arguments; prefer arguments when both are present."
       (map-put! state :permission-queue (cdr (map-elt state :permission-queue)))
       (map-put! state :permission-busy t)
       (emagent-acp--refresh-mode-line state)
-      (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
-      (map-put! state :permission-busy nil)
-      (emagent-acp--refresh-mode-line state)
+      (unwind-protect
+          (condition-case err
+              (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
+            (error
+             (emagent-log "permission handler error: %s" (error-message-string err))))
+        (map-put! state :permission-busy nil)
+        (emagent-acp--refresh-mode-line state))
       (emagent-acp--maybe-complete-deferred-prompt state)
       (when (map-elt state :permission-queue)
         (if (emagent-acp--permission-interactive-p state)
