@@ -59,6 +59,16 @@ instead; emagent then writes whatever port it gets into the agent config."
   :type 'file
   :group 'emagent-mcp)
 
+(defcustom emagent-mcp-list-changed t
+  "Advertise that the tool list may change during a session.
+
+When non-nil, the MCP initialize response sets `listChanged' to true in
+the tools capability, signaling that clients should be prepared to
+re-fetch `tools/list'.  Set to nil for the previous behavior (tools
+treated as fixed for the connection lifetime)."
+  :type 'boolean
+  :group 'emagent-mcp)
+
 (defconst emagent-mcp-server-name "emagent"
   "Name advertised for the emagent MCP server.")
 
@@ -499,7 +509,7 @@ BUFFER is the chat buffer; when NAME is write_file it is passed to
   (let ((version (and (hash-table-p params)
                       (gethash "protocolVersion" params))))
     `((protocolVersion . ,(or version emagent-mcp-protocol-version))
-      (capabilities . ((tools . ((listChanged . :false)))))
+      (capabilities . ((tools . ((listChanged . ,(if emagent-mcp-list-changed t :false))))))
       (serverInfo . ((name . ,emagent-mcp-server-name)
                      (version . "0.1.0"))))))
 
