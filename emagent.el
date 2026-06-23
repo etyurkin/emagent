@@ -57,6 +57,7 @@
 (require 'emagent-context)
 (require 'emagent-chat)
 (require 'emagent-acp)
+(require 'emagent-acp-model)
 (require 'emagent-cursor)
 (require 'emagent-claude)
 (require 'emagent-trust)
@@ -68,6 +69,7 @@
 (declare-function emagent-chat-finish-assistant "emagent-chat")
 (declare-function emagent-chat-fail-assistant "emagent-chat")
 (declare-function emagent-chat-set-slash-commands "emagent-chat")
+(declare-function emagent-acp--model-entries-from-response "emagent-acp-model")
 
 ;; Optional integrations — loaded only when the dependency is present.
 (require 'emagent-consult nil t)
