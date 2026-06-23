@@ -13,6 +13,7 @@
 (require 'org-element)
 (require 'emagent-struct)
 (require 'emagent-elisp)
+(require 'emagent-tools-file)
 
 ;; Declared special so binding it to suppress auto-insert is a dynamic binding.
 (defvar auto-insert)
@@ -352,139 +353,6 @@ magit-diff — run `magit-diff-buffer-file' (falls back to `display-buffer'
                  (const :tag "Display buffer" t)
                  (const :tag "Magit diff" magit-diff))
   :group 'emagent-tools)
-
-(defconst emagent-tools--icloud-dir
-  (expand-file-name "~/Library/Mobile Documents/"))
-
-(defconst emagent-tools--containers-dir
-  (expand-file-name "~/Library/Containers/"))
-
-(defconst emagent-tools--group-containers-dir
-  (expand-file-name "~/Library/Group Containers/"))
-
-(defun emagent-tools--protected-fs-path-p (path)
-  "Return non-nil when PATH must not be accessed via Emacs on macOS."
-  (let ((resolved (file-truename (emagent-tools--root-directory path))))
-    (or (string-prefix-p emagent-tools--icloud-dir resolved)
-        (string-prefix-p emagent-tools--containers-dir resolved)
-        (string-prefix-p emagent-tools--group-containers-dir resolved))))
-
-(defun emagent-tools--file-buffer (path)
-  "Return a buffer visiting PATH, visiting it if the file exists."
-  (let ((resolved (emagent-tools--root-directory path)))
-    (or (find-buffer-visiting resolved)
-        (when (file-exists-p resolved)
-          (find-file-noselect resolved)))))
-
-(defun emagent-tools--extract-buffer-text (buffer &optional line limit)
-  "Return text from BUFFER starting at LINE for LIMIT lines."
-  (with-current-buffer buffer
-    (save-restriction
-      (widen)
-      (save-excursion
-        (goto-char (point-min))
-        (when (and line (> line 1))
-          (forward-line (1- line)))
-        (let ((start (point)))
-          (if limit
-              (forward-line limit)
-            (goto-char (point-max)))
-          (buffer-substring-no-properties start (point)))))))
-
-(defun emagent-tools--read-file-content (path &optional line limit)
-  "Read PATH through Emacs, including unsaved buffer contents."
-  (let* ((resolved (emagent-tools--root-directory path))
-         (buffer (find-buffer-visiting resolved)))
-    (if buffer
-        (emagent-tools--extract-buffer-text buffer line limit)
-      (with-temp-buffer
-        (insert-file-contents resolved)
-        (emagent-tools--extract-buffer-text (current-buffer) line limit)))))
-
-(defun emagent-tools--read-elisp-file-content (path)
-  "Like `emagent-tools--read-file-content' but return \"\" when PATH is missing."
-  (condition-case-unless-debug nil
-      (emagent-tools--read-file-content path)
-    (file-missing "")))
-
-(defun emagent-tool-read-file (path &optional line limit)
-  "Return contents of PATH as a string."
-  (when (emagent-tools--protected-fs-path-p path)
-    (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
-                (emagent-tools--root-directory path)))
-  (emagent-tools--read-file-content path line limit))
-
-(defun emagent-tools--read-structural-file-content (path)
-  "Like `emagent-tools--read-file-content' but return \"\" when PATH is missing."
-  (condition-case-unless-debug nil
-      (emagent-tools--read-file-content path)
-    (file-missing "")))
-
-(defun emagent-tools--structural-write (file content node)
-  "Write validated structural CONTENT to FILE; run plugin hooks for NODE."
-  (when-let ((plugin (emagent-struct-plugin-for-path file)))
-    (when-let ((before (plist-get plugin :before-save))
-               (err (funcall before node file)))
-      (user-error "%s" err)))
-  (let* ((emagent-struct--structural-write-p t)
-         (resolved (emagent-tools--write-file-content file content)))
-    (if-let ((plugin (emagent-struct-plugin-for-path file))
-             (after (plist-get plugin :after-save))
-             (err (funcall after node file)))
-        (format "Wrote %s but post-save failed: %s" resolved err)
-      (if (and (emagent-struct-plugin-for-path file)
-               (plist-get (emagent-struct-plugin-for-path file) :after-save))
-          (format "Wrote and evaluated form in %s" resolved)
-        (format "Wrote %s" resolved)))))
-
-(defun emagent-tools--write-file-content (path content)
-  "Write CONTENT to PATH through an Emacs buffer.
-Each call is recorded as a single undoable change in the target buffer."
-  (let* ((resolved (emagent-tools--root-directory path))
-         (dir (file-name-directory resolved))
-         (buffer (or (find-buffer-visiting resolved)
-                     (let ((auto-insert nil))
-                       (find-file-noselect resolved)))))
-    (when-let ((err (emagent-struct-validate-write resolved content)))
-      (user-error "Validation failed for %s: %s" resolved err))
-    (if-let ((blocked (emagent-struct-write-blocked-message resolved)))
-        (user-error "%s" blocked))
-    (when (and dir (not (file-exists-p dir)))
-      (make-directory dir t))
-    (with-temp-buffer
-      (insert content)
-      (let ((content-buffer (current-buffer))
-            (inhibit-read-only t))
-        (with-current-buffer buffer
-          (save-restriction
-            (widen)
-            (undo-boundary)
-            (replace-buffer-contents content-buffer 1.0)
-            (undo-boundary))
-          (basic-save-buffer))))
-    (pcase emagent-tools-show-written-buffer
-      ('magit-diff
-       (with-current-buffer buffer
-         (if (and (fboundp 'magit-diff-buffer-file) (magit-toplevel))
-             (magit-diff-buffer-file)
-           (display-buffer buffer))))
-      ((pred identity)
-       (display-buffer buffer)))
-    resolved))
-
-(defun emagent-tool-write-file (path content)
-  "Write CONTENT to PATH through Emacs after user confirmation."
-  (let ((resolved (emagent-tools--root-directory path)))
-    (when (emagent-tools--protected-fs-path-p path)
-      (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
-                  resolved))
-    (emagent-tools--write-file-content path content)
-    (format "Wrote %s" resolved)))
-
-(defun emagent-tools--with-stdout (fn)
-  "Capture stdout from FN and return it as a string."
-  (with-output-to-string
-    (princ (funcall fn))))
 
 (defun emagent-tool-describe-symbol (symbol)
   "Return documentation for SYMBOL as a string."
