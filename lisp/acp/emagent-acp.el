@@ -35,8 +35,8 @@
 
 (declare-function emagent-prompts--structural-policy "emagent-prompts")
 
-(declare-function emagent-chat-clear-slash-commands "emagent-chat")
-(declare-function emagent-chat-seed-cursor-slash-commands "emagent-chat")
+(declare-function emagent-chat-clear-slash-commands "emagent-chat-slash")
+(declare-function emagent-chat-seed-cursor-slash-commands "emagent-chat-slash")
 (declare-function emagent-chat--bare-slash-command-p "emagent-chat-compress")
 (declare-function emagent-chat--compress-command-p "emagent-chat-compress")
 (declare-function emagent-chat--conversation-history-text "emagent-chat-compress")
