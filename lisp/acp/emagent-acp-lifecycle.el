@@ -7,6 +7,11 @@
 (require 'emagent-acp-custom)
 (require 'emagent-acp-state)
 (require 'emagent-acp-protocol)
+(require 'emagent-acp-model)
+(require 'emagent-acp-prompt)
+(require 'emagent-acp-gate)
+(require 'emagent-acp-usage)
+(require 'emagent-acp-notify)
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 
