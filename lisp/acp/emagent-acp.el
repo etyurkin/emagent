@@ -45,7 +45,8 @@
 (declare-function emagent-chat-show-tool-call "emagent-chat")
 (declare-function emagent-chat-permission-prompt "emagent-chat")
 (declare-function emagent-chat--open-response-p "emagent-chat")
-(declare-function emagent-chat--refresh-mode-line-soon "emagent-chat")
+(declare-function emagent-chat--refresh-mode-line-soon "emagent-chat-mode-line")
+(declare-function emagent-chat--spinner-start "emagent-chat-mode-line")
 (declare-function emagent-cursor-enrich-tool-call-update "emagent-cursor")
 (declare-function emagent-cursor-normalize-slash-prompt "emagent-cursor")
 
