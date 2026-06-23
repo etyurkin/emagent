@@ -275,7 +275,5 @@ agent's current model.  Claude agents omit \"auto\" and use their default."
         (emagent-acp--persist-model-id state current))
       (emagent-acp--finish-configure-model state session-id on-ready resumed)))))
 
-;;;###autoload
-
 (provide 'emagent-acp-model)
 ;;; emagent-acp-model.el ends here

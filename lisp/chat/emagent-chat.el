@@ -47,25 +47,24 @@
 (declare-function cl-some "cl-lib")
 
 
-(defvar emagent-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c C-c") #'emagent-chat-send-or-babel)
-    (define-key map (kbd "C-c a")   #'emagent-chat-attach-buffer)
-    (define-key map (kbd "C-c b")   #'emagent-btw)
-    (define-key map (kbd "C-c d")   #'emagent-chat-attach-files)
-    (define-key map (kbd "C-c e")   #'emagent-chat-attach-error-context)
-    (define-key map (kbd "C-c i")   #'emagent-chat-attach-image)
-    (define-key map (kbd "C-c m")   #'emagent-set-model)
-    (define-key map (kbd "C-c l")   #'emagent-log-view)
-    (define-key map (kbd "C-y")     #'emagent-chat-yank)
-    (define-key map (kbd "TAB") #'emagent-chat-tab)
-    (define-key map (kbd "<backtab>") #'org-shifttab)
-    (define-key map (kbd "C-g C-g") #'emagent-chat-interrupt)
-    (define-key map (kbd "C-c p")   #'emagent-chat-new-prompt)
-    (define-key map (kbd "C-c ?")   #'emagent-dispatch)
-    (define-key map (kbd "C-a")     #'emagent-chat-beginning-of-line)
-    map)
-  "Keymap for `emagent-mode'.")
+;; emagent-mode-map was created by `define-derived-mode' in
+;; emagent-chat-mode.el (inheriting from org-mode-map).  Add
+;; emagent-specific bindings here.
+(define-key emagent-mode-map (kbd "C-c C-c") #'emagent-chat-send-or-babel)
+(define-key emagent-mode-map (kbd "C-c a")   #'emagent-chat-attach-buffer)
+(define-key emagent-mode-map (kbd "C-c b")   #'emagent-btw)
+(define-key emagent-mode-map (kbd "C-c d")   #'emagent-chat-attach-files)
+(define-key emagent-mode-map (kbd "C-c e")   #'emagent-chat-attach-error-context)
+(define-key emagent-mode-map (kbd "C-c i")   #'emagent-chat-attach-image)
+(define-key emagent-mode-map (kbd "C-c m")   #'emagent-set-model)
+(define-key emagent-mode-map (kbd "C-c l")   #'emagent-log-view)
+(define-key emagent-mode-map (kbd "C-y")     #'emagent-chat-yank)
+(define-key emagent-mode-map (kbd "TAB")     #'emagent-chat-tab)
+(define-key emagent-mode-map (kbd "<backtab>") #'org-shifttab)
+(define-key emagent-mode-map (kbd "C-g C-g") #'emagent-chat-interrupt)
+(define-key emagent-mode-map (kbd "C-c p")   #'emagent-chat-new-prompt)
+(define-key emagent-mode-map (kbd "C-c ?")   #'emagent-dispatch)
+(define-key emagent-mode-map (kbd "C-a")     #'emagent-chat-beginning-of-line)
 
 (defvar-local emagent-chat--assistant-marker nil
   "Insert position for the in-flight emagent response.")
@@ -431,15 +430,14 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
                 (recenter -1)))
           (set-window-start win (plist-get view :start) t))))))
 
-(defmacro emagent-chat--with-stable-view (&rest body)
-  "Run BODY while preserving window scroll unless already at buffer end."
-  (declare (indent 0))
-  `(let* ((emagent-chat--view-saved-point (point))
-          (emagent-chat--view-saved-windows (emagent-chat--save-window-views)))
-     (unwind-protect
-         (progn ,@body)
-       (goto-char emagent-chat--view-saved-point)
-       (emagent-chat--restore-window-views emagent-chat--view-saved-windows))))
+(defun emagent-chat--with-stable-view (fn)
+  "Run FN while preserving window scroll unless already at buffer end."
+  (let* ((emagent-chat--view-saved-point (point))
+         (emagent-chat--view-saved-windows (emagent-chat--save-window-views)))
+    (unwind-protect
+        (funcall fn)
+      (goto-char emagent-chat--view-saved-point)
+      (emagent-chat--restore-window-views emagent-chat--view-saved-windows))))
 
 (provide 'emagent-chat)
 ;;; emagent-chat.el ends here
