@@ -117,6 +117,8 @@ grants full plan access (including Auto model) to this ACP session."
                                                        (emagent-acp--chat-buffer state))
              :meta `((systemPrompt . ((append . ,(emagent-acp--system-prompt))))))
    :on-success (lambda (response)
+                 (unless (fboundp 'emagent-acp--configure-model)
+                   (require 'emagent-acp-model))
                  (emagent-acp--configure-model
                   :state state
                   :session-id (map-elt response 'sessionId)
@@ -141,6 +143,8 @@ grants full plan access (including Auto model) to this ACP session."
              :meta `((systemPrompt . ((append . ,(emagent-acp--system-prompt))))))
    :on-success (lambda (response)
                  (map-put! state :replaying-history nil)
+                 (unless (fboundp 'emagent-acp--configure-model)
+                   (require 'emagent-acp-model))
                  (emagent-acp--configure-model
                   :state state
                   :session-id session-id
