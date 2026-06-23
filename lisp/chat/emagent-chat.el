@@ -19,6 +19,7 @@
 (require 'emagent-tools)
 (require 'emagent-chat-markup)
 (require 'emagent-chat-header)
+(require 'emagent-chat-compress)
 
 (declare-function emagent-set-model "emagent-acp")
 (declare-function emagent-trust-workspace "emagent" (&optional arg))
@@ -733,54 +734,6 @@ check is skipped so the user can re-evaluate any previous prompt."
       (maphash (lambda (_ cmd) (push cmd result)) table)
       (sort result (lambda (a b) (string< (map-elt a 'name) (map-elt b 'name)))))))
 
-(defun emagent-chat--bare-slash-command-p (text)
-  "Return non-nil when TEXT is a single-line slash command."
-  (let ((trimmed (string-trim text)))
-    (and (not (string-empty-p trimmed))
-         (string-prefix-p "/" trimmed)
-         (not (string-match-p "\n" trimmed))
-         (let* ((body (substring trimmed 1))
-                (space (cl-position-if (lambda (c) (memq c '(?\s ?\t))) body))
-                (cmd (if space (substring body 0 space) body)))
-           (and (> (length cmd) 0)
-                (string-match-p "\\`[-a-z0-9:]+\\'" cmd))))))
-
-(defun emagent-chat--compress-command-p (text)
-  "Return non-nil when TEXT is a conversation compression slash command."
-  (let ((trimmed (string-trim text)))
-    (when (string-prefix-p "/" trimmed)
-      (let* ((body (substring trimmed 1))
-             (space (cl-position-if (lambda (c) (memq c '(?\s ?\t))) body))
-             (cmd (if space (substring body 0 space) body)))
-        (member cmd '("compress" "compact" "summarize"))))))
-
-(defconst emagent-chat--compress-history-limit 200000
-  "Maximum conversation chars included in a /compress request.")
-
-(defun emagent-chat--compress-boundary ()
-  "Return point at the user heading before an open response, or nil."
-  (save-excursion
-    (when-let ((resp (emagent-chat--find-open-response-begin)))
-      (goto-char resp)
-      (when (re-search-backward (emagent-chat--user-heading-re) nil t)
-        (line-beginning-position)))))
-
-(defun emagent-chat--conversation-history-text ()
-  "Return prior conversation text for /compress, or \"\"."
-  (save-excursion
-    (let* ((zone (emagent-chat--metadata-end))
-           (end (or (emagent-chat--compress-boundary) (point))))
-      (when (and end (> end zone))
-        (string-trim (buffer-substring-no-properties zone end))))))
-
-(defun emagent-chat--compress-prompt-text (history)
-  "Return a summarization prompt for compression using HISTORY."
-  (let ((body (if (> (length history) emagent-chat--compress-history-limit)
-                  (concat (substring history 0 emagent-chat--compress-history-limit)
-                          "\n\n[...truncated for compression request...]")
-                history)))
-    (format "Summarize the conversation below for context compression. Preserve key decisions, file paths, errors, and open tasks. Output only the summary.\n\n<conversation>\n%s\n</conversation>"
-            body)))
 
 (defun emagent-chat--window-at-bottom-p (window)
   "Return non-nil when WINDOW shows the end of the current buffer."
@@ -819,22 +772,6 @@ check is skipped so the user can re-evaluate any previous prompt."
          (progn ,@body)
        (goto-char emagent-chat--view-saved-point)
        (emagent-chat--restore-window-views emagent-chat--view-saved-windows))))
-
-(defun emagent-chat-apply-compression (summary-text)
-  "Replace conversation history with compressed SUMMARY-TEXT."
-  (let ((inhibit-read-only t)
-        (summary (string-trim (or summary-text ""))))
-    (emagent-chat--with-stable-view
-     (emagent-chat--writable)
-     (let ((zone-start (emagent-chat--metadata-end)))
-       (goto-char zone-start)
-       (delete-region zone-start (point-max))
-       (unless (string-empty-p summary)
-         (insert (format "* emagent> [compressed]\n%s\n\n" summary)))
-       (insert (emagent-chat--user-heading-prefix))
-       (emagent-chat--reset-response-state)
-       (emagent-chat--sync-user-zone-marker)
-       (font-lock-flush)))))
 
 (defun emagent-chat-clear-slash-commands ()
   "Clear slash commands until the agent publishes a fresh list."
