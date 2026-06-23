@@ -18,6 +18,7 @@
 (require 'emagent-context)
 (require 'emagent-tools)
 (require 'emagent-chat-markup)
+(require 'emagent-chat-header)
 
 (declare-function emagent-set-model "emagent-acp")
 (declare-function emagent-trust-workspace "emagent" (&optional arg))
@@ -398,65 +399,6 @@ the newest begin delimiter through `point-max'."
           (setq n (1+ n)))
         (format "*emagent %s-%d*" label n)))))
 
-(defun emagent-chat--read-top-property (name)
-  "Return the value of #+NAME at the top of the buffer."
-  (save-excursion
-    (goto-char (point-min))
-    (when (re-search-forward (format "^#\\+%s:[ \t]*\\(.*\\)" name) nil t)
-      (string-trim (match-string 1)))))
-
-(defun emagent-chat--metadata-end ()
-  "Return point after emagent comment and metadata header lines."
-  (save-excursion
-    (goto-char (point-min))
-    (while (and (not (eobp))
-                (or (looking-at "#\\+")
-                    (looking-at "# ")
-                    (looking-at "#$")))
-      (forward-line 1))
-    (point)))
-
-(defun emagent-chat--write-top-property (name value)
-  "Insert or update #+NAME in the emagent metadata header."
-  (let* ((inhibit-read-only t)
-         (inhibit-modification-hooks t)
-         (line (format "#+%s: %s" name value))
-         (pattern (format "^#\\+%s:[ \t]*.*\n?" name)))
-    (save-excursion
-      (widen)
-      (goto-char (point-min))
-      (while (re-search-forward pattern nil t)
-        (delete-region (match-beginning 0) (match-end 0)))
-      (goto-char (emagent-chat--metadata-end))
-      (unless (bolp) (insert "\n"))
-      (insert line "\n"))))
-
-(defun emagent-chat--delete-top-property (name)
-  "Delete #+NAME from the top of the buffer."
-  (let ((inhibit-read-only t))
-    (save-excursion
-      (goto-char (point-min))
-      (when (re-search-forward (format "^#\\+%s:.*\n?" name) nil t)
-        (replace-match "")))))
-
-(defun emagent-chat--read-project-property ()
-  "Return the #+EMAGENT_PROJECT value at the top of the buffer."
-  (emagent-chat--read-top-property "EMAGENT_PROJECT"))
-
-(defun emagent-chat--read-model-property ()
-  "Return the #+EMAGENT_MODEL value at the top of the buffer."
-  (emagent-chat--read-top-property "EMAGENT_MODEL"))
-
-(defun emagent-chat--normalize-model-id (model)
-  "Return user-facing model id, mapping Cursor default[] to auto."
-  (when model
-    (let ((stripped (replace-regexp-in-string "\\[.*\\]" "" model)))
-      (if (string= stripped "default") "auto" stripped))))
-
-(defun emagent-chat--read-session-property ()
-  "Return the #+EMAGENT_SESSION value at the top of the buffer."
-  (emagent-chat--read-top-property "EMAGENT_SESSION"))
-
 (defun emagent-chat-session-id ()
   "Return the persisted ACP session id for the current buffer."
   (or emagent-chat-session-id (emagent-chat--read-session-property)))
@@ -496,10 +438,6 @@ the newest begin delimiter through `point-max'."
   (setq emagent-chat-session-id nil)
   (emagent-chat--delete-top-property "EMAGENT_SESSION"))
 
-(defun emagent-chat--read-agent-property ()
-  "Return the #+EMAGENT_AGENT value at the top of the buffer."
-  (emagent-chat--read-top-property "EMAGENT_AGENT"))
-
 (defun emagent-chat-set-agent (agent)
   "Store the ACP provider AGENT symbol in the current buffer."
   (when agent
@@ -512,15 +450,6 @@ the newest begin delimiter through `point-max'."
       (when-let* ((value (emagent-chat--read-agent-property))
                   ((not (string-empty-p value))))
         (intern value))))
-
-(defconst emagent-chat--allowed-tools-property "EMAGENT_ALLOWED_TOOLS")
-
-(defun emagent-chat--read-allowed-tools-property ()
-  "Return the #+EMAGENT_ALLOWED_TOOLS value as a list of tool symbols."
-  (when-let* ((value (emagent-chat--read-top-property
-                      emagent-chat--allowed-tools-property))
-              ((not (string-empty-p value))))
-    (mapcar #'intern (split-string value "[ ,]+" t))))
 
 (defun emagent-chat-allowed-tools ()
   "Return the tools allowed without confirmation for this emagent buffer."
@@ -540,17 +469,6 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
       (emagent-chat--write-top-property
        emagent-chat--allowed-tools-property
        (mapconcat #'symbol-name emagent-chat-allowed-tools " ")))))
-
-(defun emagent-chat--session-directory ()
-  "Return the ACP working directory for the current emagent buffer."
-  (expand-file-name
-   (or (emagent-chat-project-directory)
-       (and buffer-file-name (file-name-directory buffer-file-name))
-       (if (boundp 'emagent-default-directory) emagent-default-directory)
-       (and (fboundp 'project-current)
-            (when-let ((proj (project-current nil default-directory)))
-              (project-root proj)))
-       user-emacs-directory)))
 
 (defun emagent-chat--writable ()
   "Remove read-only state left by older emagent chat UIs."
