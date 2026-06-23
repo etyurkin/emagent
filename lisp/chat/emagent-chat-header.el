@@ -88,10 +88,13 @@
 
 ;;;###autoload
 (defun emagent-chat--normalize-model-id (model)
-  "Return user-facing model id, mapping Cursor default[] to auto."
+  "Return user-facing model id, mapping Cursor default[] to auto.
+Strips key=value annotations (e.g. [thinking=true]) and empty brackets ([]).
+Preserves identifier-only annotations (e.g. [1m]) that are part of the model ID."
   (when model
-    (let ((stripped (replace-regexp-in-string "\\[.*\\]" "" model)))
-      (if (string= stripped "default") "auto" model))))
+    (let ((stripped (replace-regexp-in-string
+                     "\\[\\([^]]*=[^]]*\\)?\\]" "" model)))
+      (if (string= stripped "default") "auto" stripped))))
 
 ;;;###autoload
 (defun emagent-chat--read-session-property ()

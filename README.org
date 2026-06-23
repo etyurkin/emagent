@@ -63,14 +63,16 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =M-x emagent-trust-claude-reconnect=  | New Claude session (trust after =emagent-trust-workspace=) |
 | =M-x emagent-mode=                    | Reconnect a saved buffer (agent + session)       |
 | =M-x emagent-set-model=               | Change ACP model mid-session                     |
+| =M-x emagent-set-project-directory=   | Change project directory (moves session, reconnects) |
 | =C-c C-c=                             | Send =* user>= block; execute src block when inside one |
-| =C-c p=                               | Insert a new =* user>= prompt heading             |
+| =C-c u=                               | Insert a new =* user>= prompt heading             |
+| =C-c p=                               | Change project directory (moves session, reconnects) |
 | =C-c a=                               | Attach current buffer summary to next prompt     |
 | =C-c b=                               | Queue a follow-up ("btw") for after agent finishes |
 | =C-c d=                               | Pick project files to attach to next prompt      |
 | =C-c e=                               | Attach compilation/flymake errors to next prompt |
 | =C-c i=                               | Attach image file (or clipboard image)           |
-| =C-c m=                               | Set model                                        |
+| =C-c m=                               | Set ACP model                                    |
 | =C-c l=                               | Show emagent log (=*Emagent Log*=)                |
 | =C-c ?=                               | Command palette (transient menu)                 |
 | =M-x emagent-chat-insert-last-response= | Insert last response into another buffer        |
@@ -90,7 +92,14 @@ a region — the entire heading block is captured automatically.
 
 To re-evaluate a previous prompt, edit its =* username>= heading and press
 =C-c C-c= again — the old response is removed and the agent is called with the
-updated text.  Use =C-c C-n= to insert a fresh heading if the stub was deleted.
+updated text.  Use =C-c u= to insert a fresh heading if the stub was deleted.
+
+To switch the active project directory mid-session, use =C-c p= (=M-x
+emagent-set-project-directory=).  This updates =#+EMAGENT_PROJECT=, moves the
+session files to match the new location (so =session/load= keeps working), and
+reconnects the agent — preserving the full conversation context.  Do *not* edit
+=#+EMAGENT_PROJECT= manually; that leaves the session files in the old location
+and causes the next reconnect to fail.
 
 =M-x emagent= infers the project directory from the current buffer's
 =default-directory= (or =~/=).  Prefix argument (=C-u M-x emagent=) picks the

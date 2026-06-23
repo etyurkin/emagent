@@ -69,6 +69,31 @@ PROCESS-DIRECTORY is passed to `make-process' as the working directory
                    :command-params (emagent-claude-command-params)
                    :environment-variables emagent-claude-environment))
 
+(defun emagent-claude--project-hash (dir)
+  "Return the ~/.claude/projects directory name for absolute path DIR.
+Claude Code hashes a project path by replacing every '/' with '-'."
+  (replace-regexp-in-string "/" "-" (directory-file-name (expand-file-name dir))))
+
+(defun emagent-claude-relocate-session (session-id old-dir new-dir)
+  "Move Claude session files for SESSION-ID from OLD-DIR's hash to NEW-DIR's.
+Claude Code stores sessions under ~/.claude/projects/<hashed-cwd>/<session-id>.
+This moves those files so session/load succeeds after the project directory
+changes.  Does nothing when the session is not found under OLD-DIR's hash."
+  (let* ((projects-base (expand-file-name "~/.claude/projects"))
+         (old-proj (expand-file-name (emagent-claude--project-hash old-dir)
+                                     projects-base))
+         (new-proj (expand-file-name (emagent-claude--project-hash new-dir)
+                                     projects-base)))
+    (when (and (file-directory-p projects-base)
+               (file-directory-p old-proj))
+      (make-directory new-proj t)
+      (dolist (suffix '("" ".jsonl"))
+        (let ((src (expand-file-name (concat session-id suffix) old-proj))
+              (dst (expand-file-name (concat session-id suffix) new-proj)))
+          (when (file-exists-p src)
+            (rename-file src dst)
+            (message "emagent: moved %s → %s" src dst)))))))
+
 (provide 'emagent-claude)
 
 ;;; emagent-claude.el ends here

@@ -347,6 +347,29 @@ PROCESS-DIRECTORY is passed to `make-process' as the working directory
                    :command-params (emagent-cursor-command-params-for-context context-buffer)
                    :environment-variables (emagent-cursor--environment context-buffer)))
 
+(defun emagent-cursor-relocate-session (session-id _old-dir new-dir)
+  "Update the cwd in Cursor's meta.json for SESSION-ID to NEW-DIR.
+Cursor sessions live at ~/.cursor/acp-sessions/<session-id>/ (flat, not
+project-hashed), so only meta.json needs updating when the project changes."
+  (let* ((session-dir (expand-file-name session-id
+                                        (expand-file-name "acp-sessions"
+                                                          emagent-cursor-dir)))
+         (meta-file (expand-file-name "meta.json" session-dir)))
+    (when (file-readable-p meta-file)
+      (condition-case err
+          (let* ((json (with-temp-buffer
+                         (insert-file-contents meta-file)
+                         (json-parse-buffer :object-type 'alist)))
+                 (updated (cons (cons 'cwd new-dir)
+                                (assoc-delete-all 'cwd (append json nil)))))
+            (with-temp-file meta-file
+              (insert (json-encode updated))
+              (insert "\n"))
+            (message "emagent: updated Cursor session cwd → %s" new-dir))
+        (error
+         (message "emagent: could not update Cursor meta.json: %s"
+                  (error-message-string err)))))))
+
 (provide 'emagent-cursor)
 
 ;;; emagent-cursor.el ends here

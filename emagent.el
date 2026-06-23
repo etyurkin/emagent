@@ -352,6 +352,8 @@ otherwise the project.el root, otherwise ~/."
 (declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
 (declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
 (declare-function emagent-acp--connected-p "emagent-acp")
+(declare-function emagent-claude-relocate-session "emagent-claude" (session-id old-dir new-dir))
+(declare-function emagent-cursor-relocate-session "emagent-cursor" (session-id old-dir new-dir))
 
 ;;;###autoload
 (defun emagent-trust-workspace (&optional both-agents)
@@ -449,11 +451,6 @@ argument PROMPT-DIRECTORY, read it interactively instead."
   (interactive "P")
   (emagent--start-session (emagent--project-directory prompt-directory) 'claude))
 
-(defun emagent--claude-project-hash (dir)
-  "Return the ~/.claude/projects directory name for absolute path DIR.
-Claude Code hashes a project path by replacing every '/' with '-'."
-  (replace-regexp-in-string "/" "-" (directory-file-name (expand-file-name dir))))
-
 ;;;###autoload
 (defun emagent-set-project-directory (new-dir)
   "Change this buffer's project directory, preserving the Claude session.
@@ -478,23 +475,12 @@ leaves the session files in the old location and causes session/load to fail."
          (old-dir-norm (and old-dir (directory-file-name (expand-file-name old-dir)))))
     (when (equal old-dir-norm new-dir)
       (user-error "Directory is already %s" new-dir))
-    (let* ((session-id (emagent-chat-session-id))
-           (projects-base (expand-file-name "~/.claude/projects")))
-      ;; Move session files so the new cwd maps to the session.
-      (when (and session-id (not (string-empty-p session-id))
-                 old-dir-norm (file-directory-p projects-base))
-        (let* ((old-proj (expand-file-name (emagent--claude-project-hash old-dir-norm)
-                                           projects-base))
-               (new-proj (expand-file-name (emagent--claude-project-hash new-dir)
-                                           projects-base)))
-          (when (file-directory-p old-proj)
-            (make-directory new-proj t)
-            (dolist (suffix '("" ".jsonl"))
-              (let ((src (expand-file-name (concat session-id suffix) old-proj))
-                    (dst (expand-file-name (concat session-id suffix) new-proj)))
-                (when (file-exists-p src)
-                  (rename-file src dst)
-                  (emagent-log "session move: %s → %s" src dst)))))))
+    (let* ((session-id (emagent-chat-session-id)))
+      ;; Update provider-specific session storage for the new directory.
+      (when (and session-id (not (string-empty-p session-id)) old-dir-norm)
+        (pcase emagent-chat-provider
+          ('claude (emagent-claude-relocate-session session-id old-dir-norm new-dir))
+          ('cursor (emagent-cursor-relocate-session session-id old-dir-norm new-dir))))
       ;; Update the buffer header and reconnect.
       (emagent-chat-set-project-directory new-dir)
       (when (bound-and-true-p emagent-acp--session)
