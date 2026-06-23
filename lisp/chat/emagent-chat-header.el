@@ -58,13 +58,14 @@
          (line (format "#+%s: %s" name value))
          (pattern (format "^#\\+%s:[ \t]*.*\n?" name)))
     (save-excursion
-      (widen)
-      (goto-char (point-min))
-      (while (re-search-forward pattern nil t)
-        (delete-region (match-beginning 0) (match-end 0)))
-      (goto-char (emagent-chat--metadata-end))
-      (unless (bolp) (insert "\n"))
-      (insert line "\n"))))
+      (save-restriction
+        (widen)
+        (goto-char (point-min))
+        (while (re-search-forward pattern nil t)
+          (delete-region (match-beginning 0) (match-end 0)))
+        (goto-char (emagent-chat--metadata-end))
+        (unless (bolp) (insert "\n"))
+        (insert line "\n")))))
 
 ;;;###autoload
 (defun emagent-chat--delete-top-property (name)
@@ -90,7 +91,7 @@
   "Return user-facing model id, mapping Cursor default[] to auto."
   (when model
     (let ((stripped (replace-regexp-in-string "\\[.*\\]" "" model)))
-      (if (string= stripped "default") "auto" stripped))))
+      (if (string= stripped "default") "auto" model))))
 
 ;;;###autoload
 (defun emagent-chat--read-session-property ()

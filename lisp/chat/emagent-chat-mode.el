@@ -31,8 +31,8 @@
   "Ensure the buffer requests Org block folding on startup."
   (unless (save-excursion
             (goto-char (point-min))
-            (re-search-forward "^#\\+STARTUP:.*\\bhideblocks\\b"
-                               (emagent-chat--metadata-end) t))
+            ;; Accept both modern #+STARTUP: and legacy STARTUP: (without #+).
+            (re-search-forward "^\\(?:#\\+\\)?STARTUP:.*\\bhideblocks\\b" nil t))
     (emagent-chat--write-top-property "STARTUP" "hideblocks")))
 
 (defun emagent-chat--setup-faces ()
@@ -73,6 +73,7 @@ Run \\[emagent-mode] to reconnect a saved session."
         (or emagent-chat-project-directory (emagent-chat--read-project-property))
         emagent-chat-session-id (or emagent-chat-session-id
                                     (emagent-chat--read-session-property))
+        emagent-chat-model (or emagent-chat-model (emagent-chat--read-model-property))
         emagent-chat-provider (emagent-chat-agent)
         emagent-chat-allowed-tools (or emagent-chat-allowed-tools
                                        (emagent-chat--read-allowed-tools-property)))
@@ -148,7 +149,7 @@ executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'.
               "Emagent commands."
               ["Send & navigate"
                ("SPC" "Send / execute src block" emagent-chat-send-or-babel)
-               ("p" "New prompt heading" emagent-chat-new-prompt)
+               ("u" "New prompt heading" emagent-chat-new-prompt)
                ("g" "Interrupt agent (C-g C-g)" emagent-chat-interrupt)]
               ["Attach"
                ("a" "Attach buffer context" emagent-chat-attach-buffer)
@@ -161,6 +162,7 @@ executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'.
                ("s" "Insert src block into buffer" emagent-chat-insert-src-block)]
               ["Session"
                ("m" "Set model" emagent-set-model)
+               ("p" "Change project directory" emagent-set-project-directory)
                ("t" "Trust workspace on disk" emagent-trust-workspace)
                ("R" "Claude: new session (trust)" emagent-trust-claude-reconnect)
                ("l" "View log" emagent-log-view)])

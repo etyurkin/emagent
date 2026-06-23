@@ -34,6 +34,7 @@
 
 
 (declare-function emagent-set-model "emagent-acp")
+(declare-function emagent-set-project-directory "emagent" (new-dir))
 (declare-function emagent-trust-workspace "emagent" (&optional arg))
 (declare-function emagent-trust-claude-reconnect "emagent" ())
 (declare-function emagent-acp-ensure-connected "emagent")
@@ -57,12 +58,13 @@
 (define-key emagent-mode-map (kbd "C-c e")   #'emagent-chat-attach-error-context)
 (define-key emagent-mode-map (kbd "C-c i")   #'emagent-chat-attach-image)
 (define-key emagent-mode-map (kbd "C-c m")   #'emagent-set-model)
+(define-key emagent-mode-map (kbd "C-c p")   #'emagent-set-project-directory)
 (define-key emagent-mode-map (kbd "C-c l")   #'emagent-log-view)
 (define-key emagent-mode-map (kbd "C-y")     #'emagent-chat-yank)
 (define-key emagent-mode-map (kbd "TAB")     #'emagent-chat-tab)
 (define-key emagent-mode-map (kbd "<backtab>") #'org-shifttab)
 (define-key emagent-mode-map (kbd "C-g C-g") #'emagent-chat-interrupt)
-(define-key emagent-mode-map (kbd "C-c p")   #'emagent-chat-new-prompt)
+(define-key emagent-mode-map (kbd "C-c u")   #'emagent-chat-new-prompt)
 (define-key emagent-mode-map (kbd "C-c ?")   #'emagent-dispatch)
 (define-key emagent-mode-map (kbd "C-a")     #'emagent-chat-beginning-of-line)
 
@@ -170,7 +172,7 @@ hideblocks / `org-cycle-hide-block-startup'."
 #
 # Type after '* username> ' and press C-c C-c to send.
 # C-c C-c send (on a src block: execute with org-babel instead)
-# C-c p   insert a new '* username>' prompt heading
+# C-c u   insert a new '* username>' prompt heading
 # C-c a   attach buffer context to the next send
 # C-c b   queue a follow-up message (btw) for after agent finishes
 # C-c d   pick project files to attach
@@ -179,6 +181,7 @@ hideblocks / `org-cycle-hide-block-startup'."
 # C-c i   pick an image file and insert [[file:...]] link at point
 # C-c l   show emagent log (*Emagent Log*)
 # C-c m   set ACP model
+# C-c p   change project directory (moves session, reconnects)
 # C-c ?   command palette (transient menu)
 # C-g C-g interrupt agent response
 # C-x k   kill buffer and disconnect agent
@@ -349,9 +352,10 @@ the newest begin delimiter through `point-max'."
 (defun emagent-chat-set-model (model)
   "Store ACP MODEL id in the current buffer."
   (setq model (emagent-chat--normalize-model-id model))
-  (unless (equal emagent-chat-model model)
+  (unless (equal (emagent-chat--normalize-model-id emagent-chat-model) model)
     (setq emagent-chat-model model)
     (emagent-chat--write-top-property "EMAGENT_MODEL" model))
+  (setq emagent-chat-model (or emagent-chat-model model))
   (emagent-chat--refresh-mode-line))
 
 (defun emagent-chat-model ()
@@ -432,12 +436,14 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
 
 (defun emagent-chat--with-stable-view (fn)
   "Run FN while preserving window scroll unless already at buffer end."
-  (let* ((emagent-chat--view-saved-point (point))
-         (emagent-chat--view-saved-windows (emagent-chat--save-window-views)))
+  (let ((saved-point (point-marker))
+        (saved-windows (emagent-chat--save-window-views)))
     (unwind-protect
         (funcall fn)
-      (goto-char emagent-chat--view-saved-point)
-      (emagent-chat--restore-window-views emagent-chat--view-saved-windows))))
+      (when (marker-position saved-point)
+        (goto-char saved-point))
+      (set-marker saved-point nil)
+      (emagent-chat--restore-window-views saved-windows))))
 
 (provide 'emagent-chat)
 ;;; emagent-chat.el ends here
