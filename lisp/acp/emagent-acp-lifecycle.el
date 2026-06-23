@@ -186,3 +186,17 @@ CALLBACKS is an alist of rendering callbacks keyed by:
 
 (provide 'emagent-acp-lifecycle)
 ;;; emagent-acp-lifecycle.el ends here
+(declare-function emagent-acp--progress "emagent-acp-prompt")
+(declare-function emagent-acp--send-request "emagent-acp-prompt")
+(declare-function emagent-acp--infer-external-tool-gate-from-agent "emagent-acp-gate")
+(declare-function emagent-acp--infer-external-tool-gate-from-initialize-response "emagent-acp-gate")
+(declare-function emagent-acp--maybe-log-external-tool-gate-proactive "emagent-acp-gate")
+(declare-function emagent-acp--fail-connect "emagent-acp-prompt")
+(declare-function emagent-acp--persist-session-id "emagent-acp-usage")
+(declare-function emagent-acp--session-cwd "emagent-acp-usage")
+(declare-function emagent-acp--chat-buffer "emagent-acp-usage")
+(declare-function emagent-acp--reveal-buffer "emagent-acp-prompt")
+(declare-function emagent-acp--system-prompt "emagent-acp")
+(declare-function emagent-acp--configure-model "emagent-acp-model")
+(declare-function emagent-acp--saved-session-id "emagent-acp-usage")
+(declare-function emagent-acp--subscribe "emagent-acp-notify")

@@ -118,3 +118,18 @@
 
 (provide 'emagent-acp-notify)
 ;;; emagent-acp-notify.el ends here
+(declare-function emagent-acp--trace "emagent-acp-prompt")
+(declare-function emagent-acp--detect-external-refusal-in-text "emagent-acp-gate")
+(declare-function emagent-acp--schedule-prompt-render "emagent-acp-prompt")
+(declare-function emagent-acp--stream-to-buffer-p "emagent-acp-prompt")
+(declare-function emagent-acp--chat-buffer "emagent-acp-usage")
+(declare-function emagent-acp--thought-chunk "emagent-acp-prompt")
+(declare-function emagent-acp--on-tool-call "emagent-acp-tool-call")
+(declare-function emagent-acp--save-config-options "emagent-acp-model")
+(declare-function emagent-acp--current-model-id "emagent-acp-model")
+(declare-function emagent-acp--persist-model-id "emagent-acp-usage")
+(declare-function emagent-acp--update-usage-from-notification "emagent-acp-usage")
+(declare-function emagent-acp--fatal-agent-error-p "emagent-acp-prompt")
+(declare-function emagent-acp--abort-prompt "emagent-acp-prompt")
+(declare-function emagent-acp--notify-user "emagent-acp-prompt")
+(declare-function emagent-acp--on-request "emagent-acp-request")

@@ -33,6 +33,10 @@
 (require 'emagent-chat)
 
 (declare-function emagent-acp--send-response "emagent-acp-protocol")
+(declare-function emagent-acp--tool-call-elisp-prin1-p "emagent-acp-tool-call")
+(declare-function emagent-acp--tool-call-update-from-request "emagent-acp-tool-call")
+(declare-function emagent-acp--tool-call-detail "emagent-acp-tool-call")
+(declare-function emagent-acp--tool-call-raw-input-detail "emagent-acp-tool-call")
 (declare-function emagent-acp--refresh-mode-line "emagent-acp-usage")
 (declare-function emagent-acp--maybe-complete-deferred-prompt "emagent-acp")
 (declare-function emagent-acp--permission-interactive-p "emagent-acp-permit")
@@ -193,3 +197,13 @@ Interactive prompts are deferred to the next event cycle so
 
 (provide 'emagent-acp-request)
 ;;; emagent-acp-request.el ends here
+(declare-function emagent-acp--tool-call-truncate "emagent-acp-tool-call")
+(declare-function emagent-acp--ingest-tool-call-request "emagent-acp-permit")
+(declare-function emagent-acp--tool-call-dangerous-p "emagent-acp-permit")
+(declare-function emagent-acp--chat-buffer "emagent-acp-usage")
+(declare-function emagent-acp--prepare-interactive-context "emagent-acp-prompt")
+(declare-function emagent-acp--clear-prompt-watchdog "emagent-acp-prompt")
+(declare-function emagent-acp--schedule-prompt-watchdog "emagent-acp-prompt")
+(declare-function emagent-acp--on-fs-read "emagent-acp-file")
+(declare-function emagent-acp--on-fs-write "emagent-acp-file")
+(declare-function emagent-acp--tool-call-weak-details "emagent-acp-tool-call")
