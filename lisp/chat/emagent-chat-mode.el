@@ -165,7 +165,7 @@ executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'.
                ("R" "Claude: new session (trust)" emagent-trust-claude-reconnect)
                ("l" "View log" emagent-log-view)])
            t))
-        (call-interactively #'emagent--transient-menu))
+        (call-interactively 'emagent--transient-menu))
     (message "emagent: SPC=send, p=prompt, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
 
 (add-hook 'emagent-mode-hook #'emagent-chat--setup-faces 100 t)
