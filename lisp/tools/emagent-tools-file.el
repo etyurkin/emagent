@@ -20,7 +20,6 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'emagent-log)
-(require 'emagent-struct)
 
 (defvar auto-insert)
 
@@ -95,23 +94,6 @@
       (emagent-tools--read-file-content path)
     (file-missing "")))
 
-(defun emagent-tools--structural-write (file content node)
-  "Write validated structural CONTENT to FILE; run plugin hooks for NODE."
-  (when-let ((plugin (emagent-struct-plugin-for-path file)))
-    (when-let ((before (plist-get plugin :before-save))
-               (err (funcall before node file)))
-      (user-error "%s" err)))
-  (let* ((emagent-struct--structural-write-p t)
-         (resolved (emagent-tools--write-file-content file content)))
-    (if-let ((plugin (emagent-struct-plugin-for-path file))
-             (after (plist-get plugin :after-save))
-             (err (funcall after node file)))
-        (format "Wrote %s but post-save failed: %s" resolved err)
-      (if (and (emagent-struct-plugin-for-path file)
-               (plist-get (emagent-struct-plugin-for-path file) :after-save))
-          (format "Wrote and evaluated form in %s" resolved)
-        (format "Wrote %s" resolved)))))
-
 (defun emagent-tools--write-file-content (path content)
   "Write CONTENT to PATH through an Emacs buffer.
 Each call is recorded as a single undoable change in the target buffer."
@@ -120,10 +102,6 @@ Each call is recorded as a single undoable change in the target buffer."
          (buffer (or (find-buffer-visiting resolved)
                      (let ((auto-insert nil))
                        (find-file-noselect resolved)))))
-    (when-let ((err (emagent-struct-validate-write resolved content)))
-      (user-error "Validation failed for %s: %s" resolved err))
-    (if-let ((blocked (emagent-struct-write-blocked-message resolved)))
-        (user-error "%s" blocked))
     (when (and dir (not (file-exists-p dir)))
       (make-directory dir t))
     (with-temp-buffer

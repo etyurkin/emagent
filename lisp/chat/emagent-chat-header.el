@@ -107,6 +107,7 @@ Preserves identifier-only annotations (e.g. [1m]) that are part of the model ID.
   (emagent-chat--read-top-property "EMAGENT_AGENT"))
 
 (defconst emagent-chat--allowed-tools-property "EMAGENT_ALLOWED_TOOLS")
+(defconst emagent-chat--allowed-permissions-property "EMAGENT_ALLOWED_PERMISSIONS")
 
 ;;;###autoload
 (defun emagent-chat--read-allowed-tools-property ()
@@ -115,6 +116,14 @@ Preserves identifier-only annotations (e.g. [1m]) that are part of the model ID.
                       emagent-chat--allowed-tools-property))
               ((not (string-empty-p value))))
     (mapcar #'intern (split-string value "[ ,]+" t))))
+
+;;;###autoload
+(defun emagent-chat--read-allowed-permissions-property ()
+  "Return #+EMAGENT_ALLOWED_PERMISSIONS as a list of permission fingerprints."
+  (when-let* ((value (emagent-chat--read-top-property
+                      emagent-chat--allowed-permissions-property))
+              ((not (string-empty-p value))))
+    (split-string value "[ ,]+" t)))
 
 ;;;###autoload
 (defun emagent-chat--session-directory ()

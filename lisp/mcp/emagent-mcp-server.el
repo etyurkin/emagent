@@ -32,9 +32,10 @@
   (emagent-mcp--json-encode `((jsonrpc . "2.0") (id . ,id) (result . ,result))))
 
 (defun emagent-mcp--rpc-error (id code message)
-  "Return a JSON-RPC error response string for ID with CODE and MESSAGE."
+  "Return a JSON-RPC error response string for ID with CODE and MESSAGE.
+A nil ID is serialized as JSON null (not an empty object)."
   (emagent-mcp--json-encode
-   `((jsonrpc . "2.0") (id . ,id)
+   `((jsonrpc . "2.0") (id . ,(or id :null))
      (error . ((code . ,code) (message . ,message))))))
 
 (defun emagent-mcp--tool-content (text is-error)
@@ -141,26 +142,38 @@ is sent on PROC when the call completes."
   (let ((id (gethash "id" message))
         (method (gethash "method" message))
         (params (gethash "params" message)))
-    (pcase method
-      ("initialize"
-       (emagent-mcp--respond-json
-        proc (emagent-mcp--rpc-result id (emagent-mcp--initialize-result params))))
-      ("notifications/initialized"
-       (emagent-mcp--respond proc 202 nil ""))
-      ("ping"
-       (emagent-mcp--respond-json
-        proc (emagent-mcp--rpc-result id (make-hash-table :test 'equal))))
-      ("tools/list"
-       (emagent-mcp--respond-json
-        proc (emagent-mcp--rpc-result id (emagent-mcp--tools-list-payload))))
-      ("tools/call"
-       (emagent-mcp--defer-tools-call proc id params token))
-      ((guard (null id))
-       ;; Any other notification: acknowledge without a body.
-       (emagent-mcp--respond proc 202 nil ""))
-      (_
-       (emagent-mcp--respond-json
-        proc (emagent-mcp--rpc-error id -32601 (format "Method not found: %s" method)))))))
+    ;; Fail closed: a throwing synchronous handler must still produce a
+    ;; response, otherwise the client blocks until its own timeout.  (The
+    ;; deferred tools/call path has its own error handling in the idle timer.)
+    (condition-case err
+        (pcase method
+          ("initialize"
+           (emagent-mcp--respond-json
+            proc (emagent-mcp--rpc-result id (emagent-mcp--initialize-result params))))
+          ("notifications/initialized"
+           (emagent-mcp--respond proc 202 nil ""))
+          ("ping"
+           (emagent-mcp--respond-json
+            proc (emagent-mcp--rpc-result id (make-hash-table :test 'equal))))
+          ("tools/list"
+           (emagent-mcp--respond-json
+            proc (emagent-mcp--rpc-result id (emagent-mcp--tools-list-payload))))
+          ("tools/call"
+           (emagent-mcp--defer-tools-call proc id params token))
+          ((guard (null id))
+           ;; Any other notification: acknowledge without a body.
+           (emagent-mcp--respond proc 202 nil ""))
+          (_
+           (emagent-mcp--respond-json
+            proc (emagent-mcp--rpc-error id -32601 (format "Method not found: %s" method)))))
+      (error
+       (emagent-log "mcp dispatch error (method %s): %s"
+                    method (error-message-string err))
+       (if id
+           (emagent-mcp--respond-json
+            proc (emagent-mcp--rpc-error
+                  id -32603 (format "Internal error: %s" (error-message-string err))))
+         (emagent-mcp--respond proc 202 nil ""))))))
 
 (defun emagent-mcp--handle-request (proc request-line _headers body)
   "Handle one parsed HTTP request on PROC."

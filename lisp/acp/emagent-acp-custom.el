@@ -53,21 +53,23 @@ iCloud Drive prompts.  Set to nil only if you prefer the agent's own file tools.
   :group 'emagent)
 
 (defcustom emagent-acp-auto-approve-permissions nil
-  "Automatically approve ACP session permission prompts.
+  "Automatically approve ACP session permission prompts at the emagent gate.
 
-When nil (default), emagent always prompts in the chat buffer.
+When nil (default), emagent prompts in the chat buffer unless the user has
+already allowed the request fingerprint for this session or in the buffer
+header (#+EMAGENT_ALLOWED_PERMISSIONS).
 
 When `safe', read and write tools are auto-approved without prompting.
 Execute (shell) commands are inspected for destructive operations — rm,
 dd, formatting, and similar — and only prompted then.  Harmless
 commands like `mvn compile` or `ls` pass through without prompting.
 
-When t, all permission prompts are auto-approved without checking the
-tool kind (same as the old boolean behavior).  Use with caution.
+When t, all permission prompts that pass emagent validation are
+auto-approved without user interaction.
 
-Whether auto-approve or prompted, these gates do not replace the
-external agent's own tool permission layers; they only unblock the
-ACP session handshake."
+Emagent always replies to the agent with a one-shot allow optionId
+(never allow_always), so every tool call still arrives at the emagent
+gate for validation even after the user chooses \"Allow always\"."
   :type '(choice
           (const :tag "Prompt for all permissions" nil)
           (const :tag "Auto-approve safe tools, prompt only for destructive shell commands" safe)
@@ -77,10 +79,9 @@ ACP session handshake."
 (defcustom emagent-acp-confirm-fs-writes nil
   "When non-nil, require diff + Allow before each ACP fs/write_text_file.
 
-When nil (default), Emacs writes immediately after path checks, matching
-`emagent-mcp-confirm-write-file' nil so file edits are not blocked by a second
-in-editor prompt.  ACP `session/request_permission' is unchanged; see
-`emagent-acp-auto-approve-permissions'."
+When nil (default), Emacs writes immediately after path checks, so file edits
+are not blocked by a second in-editor prompt.  ACP `session/request_permission'
+is unchanged; see `emagent-acp-auto-approve-permissions'."
   :type 'boolean
   :group 'emagent)
 

@@ -22,7 +22,7 @@
   (should (string-match-p "Structural editing" emagent-acp-elisp-guide))
   (should (string-match-p "structural_replace" emagent-acp-elisp-guide))
   (should (string-match-p "check_structural_file" emagent-acp-elisp-guide))
-  (should (string-match-p "tree-sitter" emagent-acp-elisp-guide))
+  (should (string-match-p "lisp-sitter" emagent-acp-elisp-guide))
   (should (string-match-p "Multi-node refactors" emagent-acp-elisp-guide))
   (should (string-match-p "json-parse-string" emagent-acp-elisp-guide)))
 

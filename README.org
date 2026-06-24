@@ -107,8 +107,9 @@ directory interactively.
 
 If both =cursor-agent= and =claude-agent-acp= are installed, emagent prompts
 which to use (defaulting to =emagent-default-provider=).  The chosen provider,
-session, project, model, and allowed tools are saved in the buffer header as
-=#+EMAGENT_*= properties.
+session, project, model, allowed tools, and allowed permission fingerprints are
+saved in the buffer header as =#+EMAGENT_*= properties (including
+=#+EMAGENT_ALLOWED_TOOLS= and =#+EMAGENT_ALLOWED_PERMISSIONS=).
 
 After you choose an agent, emagent checks whether that workspace is already
 trusted for Claude Code (=~/.claude.json=) or Cursor (=~/.cursor/projects/...=).
@@ -184,10 +185,20 @@ some other way — for example run =claude= once in the project root and complet
 the prompt, or put =permissions.defaultMode= (e.g. =acceptEdits= or =auto=) in
 your *user* =~/.claude/settings.json=, which does not depend on directory trust.
 
-ACP tool permission in emagent uses =session/request_permission= (prompts in
-the chat buffer by default; set =emagent-acp-auto-approve-permissions= to t for
-frictionless approval).  That does not replace Claude Code’s own permission and
-trust layers inside the agent process.
+ACP tool permission in emagent uses =session/request_permission= from the agent.
+Emagent owns the prompt UI (inline buttons in the chat buffer by default) and
+validates each request before replying.  The agent always receives a one-shot
+allow response (=allow_once=) — never =allow_always= — so every tool call still
+passes through the emagent gate even after you choose /Allow always/.
+
+Permission choices: =y= / =RET= (once), =s= (session), =w= (always, saved to
+=#+EMAGENT_ALLOWED_PERMISSIONS=), =a= (allow all for session), =n= (deny).
+
+Set =emagent-acp-auto-approve-permissions= to ='safe= to auto-approve reads,
+writes, and harmless shell commands while still prompting for destructive
+operations (=rm -rf=, =dd=, dangerous =eval=, etc.).  Set to =t= to skip
+prompts for anything that passes validation.  This does not replace Claude Code’s
+own permission and trust layers inside the agent process.
 
 Workspace trust helpers are split across =emagent-trust.el= (shared JSON and the
 =y/n/q= prompt), =emagent-trust-claude.el= (=~/.claude.json= / =hasTrustDialogAccepted=),
@@ -204,7 +215,12 @@ extra =cursor-agent= flags).  Toggle with =emagent-trust-enabled=.
 | =emagent-claude-acp-command=        | =("claude-agent-acp")=   | Claude spawn command                  |
 | =emagent-acp-file-access=           | =t=            | Route file I/O through Emacs                      |
 | =emagent-acp-prefer-emacs=          | =t=            | Prefer Emacs tools over agent defaults            |
-| =emagent-allowed-tools=             | =nil=          | Tools that skip confirmation                      |
+| =emagent-acp-auto-approve-permissions= | =nil=          | ACP gate: =nil= prompt; ='safe= auto-approve non-destructive; =t= auto-approve all |
+| =emagent-acp-confirm-fs-writes=     | =nil=          | Second in-editor diff prompt for ACP fs/write (ACP gate unchanged) |
+| =emagent-allowed-tools=             | =nil=          | MCP tools that skip confirmation                      |
+| =emagent-policy-extra-shell-rules=  | =nil=          | Extra declarative shell policy rules (see below)      |
+| =emagent-policy-extra-elisp-rules=  | =nil=          | Extra declarative elisp policy rules                  |
+| =emagent-policy-extra-python-rules= | =nil=          | Extra declarative python policy rules                 |
 | =emagent-tools-show-written-buffer= | ='magit-diff=  | Show file after write: =nil=, =t=, or ='magit-diff=   |
 | =emagent-shell-block-no-verify=     | =t=            | Refuse =git --no-verify=                            |
 | =emagent-shell-guard-push=          | =t=            | Block push when branch PR is already merged       |
@@ -214,17 +230,44 @@ extra =cursor-agent= flags).  Toggle with =emagent-trust-enabled=.
 | =emagent-oauth-auto-browse-url=     | =nil=          | Auto-open OAuth authorize URLs in a browser       |
 | =emagent-acp-watchdog-timeout=      | =300=          | Seconds of silence before aborting a stalled prompt |
 
-Destructive tool calls (=write_file=, =delete_file=, shell commands, etc.)
-prompt before running using inline buttons in the chat buffer.  =write_file=
-shows a unified diff before asking.  Answer /Allow all/ to remember a tool for
-the current buffer session.
+Destructive MCP tool calls (=write_file=, =delete_file=, etc.) prompt before
+running using inline buttons in the chat buffer.  =write_file= shows a unified
+diff before asking.  Answer /Allow all/ to remember a tool for the current
+buffer session (=#+EMAGENT_ALLOWED_TOOLS=).
+
+ACP execute (shell) and eval requests go through the same permission gate
+described above.  Shell commands are also checked at execution time in
+=emagent-shell-run-command= (defense in depth for direct MCP =run_shell_command=
+calls).
+
+** Permission policy
+
+Validation lives in =lisp/trust/emagent-policy.el= — a single engine with
+declarative rule tables:
+
+| Module | Checks |
+|--------+--------|
+| =emagent-policy-rules-shell.el= | Destructive shell (=rm -rf=, =dd=, =sudo rm=, pipe-to-shell, …) |
+| =emagent-policy-rules-elisp.el= | Blocked/dangerous symbols in =eval= |
+| =emagent-policy-rules-python.el= | Risky patterns in =python -c= and structural =.py= writes |
+
+Each rule is a plist: =:id=, =:severity= (=deny= / =confirm=), =:reason=, =:match=.
+Highest severity wins when several rules match.  Extend with
+=emagent-policy-extra-*-rules= without editing the built-in tables.
+
+Blocked elisp (=kill-emacs=, =pause-emacs=) and dangerous shell commands are
+denied or confirmed at the ACP gate; MCP skips a second confirm when the call
+comes from an ACP session (=emagent-tools--acp-session-p=).
 
 ** Eval safety
 
 The =eval= MCP tool runs Emacs Lisp directly in the live Emacs process.
-Dangerous symbols (=delete-file=, =shell-command=, =write-region=, =load-file=,
-etc.) trigger a confirmation prompt showing the full code before execution.
-=kill-emacs= and =pause-emacs= are permanently blocked.
+=emagent-policy-check-elisp= scans the form for blocked symbols (=kill-emacs=,
+=pause-emacs= — permanently denied) and dangerous symbols (=delete-file=,
+=shell-command=, =write-region=, =load-file=, etc. — confirmed at the ACP gate
+and again at MCP execution unless the session is ACP-gated).  Customize
+=emagent-policy-elisp-blocked-symbols= and =emagent-policy-elisp-dangerous-symbols=
+(aliased as =emagent-tools-eval-*-symbols=).
 
 The agent is guided to call =check_elisp= before =eval= and =check_structural_file=
 before =write_file= on structural files (=.el=, =.py=, =.lisp=, =.cl=) when

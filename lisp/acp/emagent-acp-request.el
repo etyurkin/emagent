@@ -31,6 +31,7 @@
 (require 'emagent-acp-protocol)
 (require 'emagent-tools)
 (require 'emagent-chat)
+(require 'emagent-acp-permit)
 
 (declare-function emagent-acp--send-response "emagent-acp-protocol")
 (declare-function emagent-acp--tool-call-elisp-prin1-p "emagent-acp-tool-call")
@@ -40,7 +41,14 @@
 (declare-function emagent-acp--refresh-mode-line "emagent-acp-usage")
 (declare-function emagent-acp--maybe-complete-deferred-prompt "emagent-acp")
 (declare-function emagent-acp--permission-interactive-p "emagent-acp-permit")
-(declare-function emagent-acp--permission-option-id "emagent-acp-permit")
+(declare-function emagent-acp--permission-acp-allow-id "emagent-acp-permit")
+(declare-function emagent-acp--permission-acp-deny-id "emagent-acp-permit")
+(declare-function emagent-acp--permission-fingerprint "emagent-acp-permit")
+(declare-function emagent-acp--permission-validate "emagent-acp-permit")
+(declare-function emagent-acp--permission-gate-auto-approve-p "emagent-acp-permit")
+(declare-function emagent-acp--permission-auto-allowed-p "emagent-acp-permit")
+(declare-function emagent-acp--permission-apply-choice "emagent-acp-permit")
+(declare-function emagent-acp--permission-approved-choice-p "emagent-acp-permit")
 (declare-function emagent-acp--schedule-permission-drain "emagent-acp-permit")
 
 (defun emagent-acp--human-tool-detail-p (detail)
@@ -88,60 +96,74 @@
 
 (cl-defun emagent-acp--handle-one-permission (&key state emagent-acp-request)
   "Process a single queued permission request synchronously."
-  (let ((tool-call (map-nested-elt emagent-acp-request '(params toolCall))))
+  (let* ((tool-call (map-nested-elt emagent-acp-request '(params toolCall)))
+         (options (map-nested-elt emagent-acp-request '(params options)))
+         (request-id (map-elt emagent-acp-request 'id))
+         (question (emagent-acp--permission-question-line emagent-acp-request))
+         (fingerprint (and tool-call (emagent-acp--permission-fingerprint tool-call)))
+         (validation (and tool-call (emagent-acp--permission-validate tool-call)))
+         (buf (emagent-acp--chat-buffer state))
+         (allow-id (emagent-acp--permission-acp-allow-id options))
+         (deny-id (emagent-acp--permission-acp-deny-id options))
+         (choice nil))
     (when tool-call
       (emagent-acp--ingest-tool-call-request state tool-call))
-    (let* ((options (map-nested-elt emagent-acp-request '(params options)))
-           (question (emagent-acp--permission-question-line emagent-acp-request))
-           (choices (mapcar (lambda (opt)
-                              (cons (or (map-elt opt 'name) (map-elt opt 'optionId))
-                                    (map-elt opt 'optionId)))
-                            (append options nil)))
-           (choice-list (append choices '(("Allow All (session)" . :allow-all))))
-           (auto-approve
-            (or (eq emagent-acp-auto-approve-permissions t)
-                (map-elt state :session-auto-approve)
-                (and (eq emagent-acp-auto-approve-permissions 'safe)
-                     tool-call
-                     (not (emagent-acp--tool-call-dangerous-p tool-call)))))
-         (buf (emagent-acp--chat-buffer state))
-         (choice
-          (if auto-approve
-              (emagent-acp--permission-option-id options)
-            (progn
-              (emagent-acp--prepare-interactive-context state)
-              (emagent-acp--clear-prompt-watchdog state)
-              (unwind-protect
-                  (let ((raw
-                         (if (and buf (buffer-live-p buf)
-                                  (with-current-buffer buf
-                                    (emagent-chat--open-response-p)))
-                             (with-current-buffer buf
-                               (emagent-chat-permission-prompt question choice-list tool-call))
-                           (emagent-tools--buttons-prompt
-                            question choice-list buf))))
-                    (if (eq raw :allow-all)
-                        (progn
-                          (map-put! state :session-auto-approve t)
-                          (emagent-log "permission: Allow All (session) — auto-approving all future requests")
-                          (emagent-acp--permission-option-id options))
-                      raw))
-                (when (map-elt state :busy)
-                  (emagent-acp--schedule-prompt-watchdog state))
-                (emagent-acp--refresh-mode-line state))))))
-    (when auto-approve
-      (emagent-log "permission auto-approve: %s → %s"
-                   question (or choice "cancelled (no allow option)")))
-    (emagent-acp-send-response
-     :client (map-elt state :client)
-     :response (if choice
-                   (emagent-acp-make-session-request-permission-response
-                    :request-id (map-elt emagent-acp-request 'id)
-                    :option-id choice)
-                 ;; C-g or empty options: send cancelled so the agent doesn't hang.
-                 (emagent-acp-make-session-request-permission-response
-                  :request-id (map-elt emagent-acp-request 'id)
-                  :cancelled t))))))
+    (setq choice
+          (cond
+           ((and validation (eq (car validation) :deny))
+            (emagent-log "permission denied by emagent gate: %s — %s"
+                         question (cdr validation))
+            :deny)
+           ((emagent-acp--permission-gate-auto-approve-p
+             state tool-call validation fingerprint buf)
+            (emagent-log "permission auto-approve: %s (fingerprint %s)"
+                         question (or fingerprint "none"))
+            :allow-once)
+           (t
+            (emagent-acp--prepare-interactive-context state)
+            (emagent-acp--clear-prompt-watchdog state)
+            (unwind-protect
+                (if (and buf (buffer-live-p buf)
+                         (with-current-buffer buf
+                           (emagent-chat--open-response-p)))
+                    (with-current-buffer buf
+                      (emagent-chat-permission-prompt
+                       question emagent-acp--permission-emagent-choices tool-call))
+                  (emagent-tools--buttons-prompt
+                   question emagent-acp--permission-emagent-choices buf))
+              (when (map-elt state :busy)
+                (emagent-acp--schedule-prompt-watchdog state))
+              (emagent-acp--refresh-mode-line state)))))
+    (when (emagent-acp--permission-approved-choice-p choice)
+      (emagent-acp--permission-apply-choice state fingerprint buf choice))
+    (let* ((response (cond
+                     ((and validation (eq (car validation) :deny))
+                      (if deny-id
+                          (emagent-acp-make-session-request-permission-response
+                           :request-id request-id :option-id deny-id)
+                        (emagent-acp-make-session-request-permission-response
+                         :request-id request-id :cancelled t)))
+                     ((emagent-acp--permission-approved-choice-p choice)
+                      (if allow-id
+                          (emagent-acp-make-session-request-permission-response
+                           :request-id request-id :option-id allow-id)
+                        (emagent-acp-make-session-request-permission-response
+                         :request-id request-id :cancelled t)))
+                     ((eq choice :deny)
+                      (if deny-id
+                          (emagent-acp-make-session-request-permission-response
+                           :request-id request-id :option-id deny-id)
+                        (emagent-acp-make-session-request-permission-response
+                         :request-id request-id :cancelled t)))
+                     (t
+                      (emagent-acp-make-session-request-permission-response
+                       :request-id request-id :cancelled t))))
+           (outcome (map-nested-elt response '(:result outcome))))
+      (emagent-log "permission response: question=%s outcome=%s choice=%s allow-id=%s deny-id=%s"
+                   question (or outcome "?") choice allow-id deny-id)
+      (emagent-acp-send-response
+       :client (map-elt state :client)
+       :response response))))
 
 (defun emagent-acp--drain-permission-queue-now (state)
   "Process one queued permission request synchronously."
@@ -198,8 +220,7 @@ Interactive prompts are deferred to the next event cycle so
 (provide 'emagent-acp-request)
 ;;; emagent-acp-request.el ends here
 (declare-function emagent-acp--tool-call-truncate "emagent-acp-tool-call")
-(declare-function emagent-acp--ingest-tool-call-request "emagent-acp-permit")
-(declare-function emagent-acp--tool-call-dangerous-p "emagent-acp-permit")
+(declare-function emagent-acp--ingest-tool-call-request "emagent-acp-tool-call")
 (declare-function emagent-acp--chat-buffer "emagent-acp-usage")
 (declare-function emagent-acp--prepare-interactive-context "emagent-acp-prompt")
 (declare-function emagent-acp--clear-prompt-watchdog "emagent-acp-prompt")

@@ -59,10 +59,65 @@
   (should (emagent-acp--permission-option-allow-p '((optionId . "yes"))))
   (should-not (emagent-acp--permission-option-allow-p '((kind . "deny")))))
 
-(ert-deftest emagent-acp-session-test-permission-option-id ()
-  (let ((options `[((optionId . "deny") (kind . "deny"))
+(ert-deftest emagent-acp-session-test-permission-acp-allow-id-never-always ()
+  (let ((options `[((optionId . "allow_always") (kind . "allow_always"))
                    ((optionId . "allow_once") (kind . "allow_once"))]))
-    (should (string= "allow_once" (emagent-acp--permission-option-id options)))))
+    (should (string= "allow_once" (emagent-acp--permission-acp-allow-id options)))))
+
+(ert-deftest emagent-acp-session-test-permission-fingerprint ()
+  (let ((args (make-hash-table :test 'equal)))
+    (puthash "command" "make test" args)
+    (should (string= "execute:make"
+                     (emagent-acp--permission-fingerprint
+                      `((kind . "execute") (arguments . ,args)))))))
+
+(ert-deftest emagent-acp-session-test-permission-validate-blocks-eval ()
+  (let ((args (make-hash-table :test 'equal)))
+    (puthash "form" "(kill-emacs)" args)
+    (let ((result (emagent-acp--permission-validate
+                   `((kind . "execute") (arguments . ,args)))))
+      (should (eq (car result) :deny)))))
+
+(ert-deftest emagent-acp-session-test-permission-validate-dangerous-eval ()
+  (let ((args (make-hash-table :test 'equal)))
+    (puthash "form" "(delete-file \"foo\")" args)
+    (let ((result (emagent-acp--permission-validate
+                   `((kind . "execute") (arguments . ,args)))))
+      (should (eq (car result) :confirm)))))
+
+(ert-deftest emagent-acp-session-test-permission-auto-allowed-session ()
+  (let ((state (emagent-test--make-acp-state)))
+    (map-put! state :permission-auto-allow '("execute:make"))
+    (should (emagent-acp--permission-auto-allowed-p state "execute:make" nil))
+    (should-not (emagent-acp--permission-auto-allowed-p state "execute:git" nil))))
+
+(ert-deftest emagent-acp-session-test-permission-handle-one-replies-once-after-always ()
+  (let* ((state (emagent-test--make-acp-state))
+         (args (make-hash-table :test 'equal))
+         (request `((id . "req1")
+                     (params . ((title . "Allow compile?")
+                                (options . [((optionId . "allow_always")
+                                             (kind . "allow_always"))
+                                            ((optionId . "allow_once")
+                                             (kind . "allow_once"))])
+                                (toolCall . ((kind . "execute")
+                                             (title . "compile")
+                                             (arguments . ,args)))))))
+         (sent-id nil))
+    (puthash "command" "make test" args)
+    (let ((emagent-acp-auto-approve-permissions nil))
+      (emagent-test--with-mocks
+          (((symbol-function 'emagent-chat--open-response-p)
+            (lambda () nil))
+           ((symbol-function 'emagent-tools--buttons-prompt)
+            (lambda (&rest _args) :allow-always))
+           ((symbol-function 'emagent-acp-send-response)
+            (cl-function
+             (lambda (&key response &allow-other-keys)
+               (setq sent-id (map-nested-elt response '(:result outcome optionId)))))))
+        (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
+        (should (string= "allow_once" sent-id))
+        (should (member "execute:make" (map-elt state :permission-auto-allow)))))))
 
 (defun emagent-test--run-at-time-immediately (_time _repeat fn)
   "Test helper: invoke FN synchronously instead of scheduling."
@@ -99,7 +154,7 @@
       (emagent-test--with-mocks
           (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) (setq prompted t) "allow_once"))
+            (lambda (&rest _args) (setq prompted t) :allow-once))
            ((symbol-function 'emagent-acp-send-response)
             (lambda (&rest _args) nil)))
         (emagent-acp--on-permission :state state :emagent-acp-request request)
@@ -121,7 +176,7 @@
            ((symbol-function 'emagent-acp--agent-launch-string)
             (lambda (_s) "cursor-agent acp"))
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) (setq prompted t) "allow_once"))
+            (lambda (&rest _args) (setq prompted t) :allow-once))
            ((symbol-function 'emagent-acp-send-response)
             (lambda (&rest _args) nil)))
         (emagent-acp--on-permission :state state :emagent-acp-request request)
@@ -138,7 +193,7 @@
     (let ((emagent-acp-auto-approve-permissions nil))
       (emagent-test--with-mocks
           (((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) (setq prompted t) "allow_once"))
+            (lambda (&rest _args) (setq prompted t) :allow-once))
            ((symbol-function 'emagent-acp-send-response)
             (lambda (&rest _args) nil)))
         (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
@@ -159,7 +214,7 @@
           (((symbol-function 'emagent-acp--agent-launch-string)
             (lambda (_s) "cursor-agent acp"))
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) (setq prompted t) "allow_once"))
+            (lambda (&rest _args) (setq prompted t) :allow-once))
            ((symbol-function 'emagent-acp-send-response)
             (lambda (&rest _args) (setq responded t))))
         (emagent-acp--drain-permission-queue state)
@@ -181,7 +236,7 @@
            ((symbol-function 'emagent-acp--agent-launch-string)
             (lambda (_s) "cursor-agent acp"))
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) (setq prompted t) "allow_once"))
+            (lambda (&rest _args) (setq prompted t) :allow-once))
            ((symbol-function 'emagent-acp-send-response) (lambda (&rest _args) nil)))
         (emagent-acp--drain-cursor-tool-resolve-queue state)
         (should prompted)
@@ -489,11 +544,6 @@
   (should (emagent-acp--fatal-agent-error-p "failed with status 500"))
   (should-not (emagent-acp--fatal-agent-error-p "still working")))
 
-(provide 'emagent-acp-session-test)
-
-;;; emagent-acp-session-test.el ends here
-;; Test additions verified with check-parens
-
 (ert-deftest emagent-acp-session-test-tool-call-displayable-p ()
   (let ((emagent-acp--tool-call-weak-details '("tool" "Tool" "running" "pending")))
     (should (emagent-acp--tool-call-displayable-p
@@ -522,7 +572,7 @@
       (emagent-test--with-mocks
           (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) "allow_once"))
+            (lambda (&rest _args) :allow-once))
            ((symbol-function 'emagent-acp-send-response) (lambda (&rest _args) nil))
            ((symbol-function 'emagent-acp--render-prompt-response)
             (lambda (_state) (setq completed t))))
@@ -576,7 +626,11 @@
             (lambda (_time _repeat fn) (setq scheduled t) (funcall fn) nil))
            ((symbol-function 'emagent-acp-send-response) (lambda (&rest _args) nil))
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) "allow_once")))
+            (lambda (&rest _args) :allow-once)))
         (emagent-acp--maybe-recover-stall state)
         (should scheduled)
         (should (null (map-elt state :permission-queue)))))))
+
+(provide 'emagent-acp-session-test)
+
+;;; emagent-acp-session-test.el ends here

@@ -120,6 +120,7 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
                   "Branch '%s' has an already-merged PR. Checkout main, pull, and create a new branch instead."
                   branch))
              (require 'emagent-log)
+(require 'emagent-policy)
              (emagent-log "emagent: gh CLI not found; skipping merged-PR check for push"))))))))
 
 (defun emagent-shell--unquote (text)
@@ -277,6 +278,7 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
   "Run COMMAND with Emacs-native routing, guards, and redirects."
   (let* ((cmd (string-trim command))
          (words (emagent-shell--words cmd)))
+    (emagent-policy-enforce (emagent-policy-check-shell cmd) cmd)
     (when (and emagent-shell-block-no-verify
                (emagent-shell--git-no-verify-p cmd))
       (user-error

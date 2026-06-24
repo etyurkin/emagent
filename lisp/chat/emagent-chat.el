@@ -125,6 +125,12 @@
 Persisted in the buffer header as =#+EMAGENT_ALLOWED_TOOLS= and added to when
 the user answers \"allow all\" to a tool confirmation.")
 
+(defvar-local emagent-chat-allowed-permissions nil
+  "ACP permission fingerprints auto-approved for the current emagent buffer.
+
+Persisted in the buffer header as =#+EMAGENT_ALLOWED_PERMISSIONS= when the user
+chooses \"Allow always\" on an ACP permission prompt.")
+
 (defface emagent-tool-detail
   '((t (:inherit fixed-pitch :slant normal)))
   "Face for paths and commands on tool-call lines."
@@ -405,6 +411,20 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
       (emagent-chat--write-top-property
        emagent-chat--allowed-tools-property
        (mapconcat #'symbol-name emagent-chat-allowed-tools " ")))))
+
+(defun emagent-chat-allowed-permissions ()
+  "Return ACP permission fingerprints auto-approved for this buffer."
+  (or emagent-chat-allowed-permissions
+      (emagent-chat--read-allowed-permissions-property)))
+
+(defun emagent-chat-add-allowed-permission (fingerprint)
+  "Persist FINGERPRINT as always allowed for ACP permission requests."
+  (let ((current (emagent-chat-allowed-permissions)))
+    (unless (member fingerprint current)
+      (setq emagent-chat-allowed-permissions (append current (list fingerprint)))
+      (emagent-chat--write-top-property
+       emagent-chat--allowed-permissions-property
+       (mapconcat #'identity emagent-chat-allowed-permissions " ")))))
 
 (defun emagent-chat--window-at-bottom-p (window)
   "Return non-nil when WINDOW shows the end of the current buffer."

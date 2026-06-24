@@ -125,14 +125,14 @@ instead; emagent then writes whatever port it gets into the agent config."
            ("line" . ((type . "integer")
                       (description . "1-based line to start from (optional).")))
            ("limit" . ((type . "integer")
-                       (description . "Maximum number of lines to read (optional).")))) 
+                       (description . "Maximum number of lines to read (optional)."))))
          '("path")
          (lambda (args)
            (emagent-tool-read-file (emagent-mcp--arg args "path")
                                    (emagent-mcp--arg args "line")
                                    (emagent-mcp--arg args "limit"))))
    (list "write_file"
-         "Write CONTENT to a file through an Emacs buffer (one undoable change). Rejected for .el, .py, .lisp, and .cl files when the matching tree-sitter grammar is installed — use structural_* tools instead."
+         "Write CONTENT to a file through an Emacs buffer (one undoable change)."
          '(("path" . ((type . "string")
                       (description . "Absolute path, or relative to the session root.")))
            ("content" . ((type . "string")
@@ -152,14 +152,14 @@ instead; emagent then writes whatever port it gets into the agent config."
            (emagent-tool-undo-file (emagent-mcp--arg args "path")
                                    (emagent-mcp--arg args "steps"))))
    (list "delete_file"
-         "Delete a file. Prompts the user."
+         "Delete a file within the session root."
          '(("path" . ((type . "string")
                       (description . "Absolute path, or relative to the session root."))))
          '("path")
          (lambda (args)
            (emagent-tool-delete-file (emagent-mcp--arg args "path"))))
    (list "delete_directory"
-         "Delete a directory. Prompts the user."
+         "Delete a directory within the session root."
          '(("path" . ((type . "string")
                       (description . "Absolute path, or relative to the session root.")))
            ("recursive" . ((type . "boolean")
@@ -307,14 +307,15 @@ instead; emagent then writes whatever port it gets into the agent config."
          (lambda (args)
            (emagent-tool-imenu-index (emagent-mcp--arg args "file"))))
    (list "check_structural_file"
-         "Validate a whole file with its structural language plugin (.el, .py, .lisp, .cl). Returns \"OK\" or a syntax error. Call before write_file when tree-sitter is unavailable."
+         "[lisp-sitter] Validate a whole file (.el, .lisp, .cl, .scm). Returns \"OK\" or a syntax error. Only available when lisp-sitter is installed."
          '(("path" . ((type . "string")
                       (description . "Path to the file, relative to session root."))))
          '("path")
          (lambda (args)
-           (emagent-tool-check-structural-file (emagent-mcp--arg args "path"))))
+           (emagent-tool-check-structural-file (emagent-mcp--arg args "path")))
+         :available #'emagent-struct-available-p)
    (list "check_structural_node"
-         "Validate a complete top-level node (defun, function, class, ...) without saving. Returns \"OK\" or an error."
+         "[lisp-sitter] Validate a complete top-level node without saving. Returns \"OK\" or an error."
          '(("path" . ((type . "string")
                       (description . "Path to the file, relative to session root.")))
            ("node" . ((type . "string")
@@ -322,9 +323,10 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("path" "node")
          (lambda (args)
            (emagent-tool-check-structural-node (emagent-mcp--arg args "path")
-                                               (emagent-mcp--arg args "node"))))
+                                               (emagent-mcp--arg args "node")))
+         :available #'emagent-struct-available-p)
    (list "structural_tree"
-         "Return a shallow outline of top-level nodes in a structural file (one line per defun/function/class)."
+         "[lisp-sitter] List top-level forms in a file via lisp-sitter (defun, define, class, ...)."
          '(("path" . ((type . "string")
                       (description . "Path to the file, relative to session root.")))
            ("depth" . ((type . "integer")
@@ -332,43 +334,47 @@ instead; emagent then writes whatever port it gets into the agent config."
          '()
          (lambda (args)
            (emagent-tool-structural-tree (emagent-mcp--arg args "path")
-                                         (emagent-mcp--arg args "depth"))))
+                                         (emagent-mcp--arg args "depth")))
+         :available #'emagent-struct-available-p)
    (list "structural_bounds"
-         "Return byte positions START:END for a top-level node in a structural file."
+         "[lisp-sitter] Return byte positions START:END for a named top-level form."
          '(("path" . ((type . "string")
                       (description . "Path to the file, relative to session root.")))
            ("symbol" . ((type . "string")
-                        (description . "Node name to locate (defun name, function name, class name)."))))
+                        (description . "Node name to locate (defun, function, class name)."))))
          '("path" "symbol")
          (lambda (args)
            (emagent-tool-structural-bounds (emagent-mcp--arg args "path")
-                                           (emagent-mcp--arg args "symbol"))))
+                                           (emagent-mcp--arg args "symbol")))
+         :available #'emagent-struct-available-p)
    (list "structural_replace"
-         "Replace one top-level node in a structural file with complete new text. Validates before save."
+         "[lisp-sitter] Replace one top-level form with complete new text. Validates via lisp-sitter before saving."
          '(("path" . ((type . "string")
                       (description . "Path to the file, relative to session root.")))
            ("symbol" . ((type . "string")
                         (description . "Node name to replace.")))
            ("new_body" . ((type . "string")
-                          (description . "Complete replacement node text."))))
+                          (description . "Complete replacement form text."))))
          '("path" "symbol" "new_body")
          (lambda (args)
            (emagent-tool-structural-replace (emagent-mcp--arg args "path")
                                             (emagent-mcp--arg args "symbol")
-                                            (emagent-mcp--arg args "new_body"))))
+                                            (emagent-mcp--arg args "new_body")))
+         :available #'emagent-struct-available-p)
    (list "structural_insert"
-         "Insert a complete top-level node after AFTER_SYMBOL. Use __start__ (new file), __end__ (append), or an existing symbol name."
+         "[lisp-sitter] Insert a complete top-level form using __start__ (new file), __end__ (append), or a symbol name."
          '(("path" . ((type . "string")
                       (description . "Path to the file, relative to session root.")))
            ("after_symbol" . ((type . "string")
-                              (description . "__start__, __end__, or name of an existing top-level node.")))
+                              (description . "__start__, __end__, or name of an existing top-level form.")))
            ("node" . ((type . "string")
-                      (description . "Complete top-level node text to insert."))))
+                      (description . "Complete top-level form text to insert."))))
          '("path" "after_symbol" "node")
          (lambda (args)
            (emagent-tool-structural-insert (emagent-mcp--arg args "path")
                                            (emagent-mcp--arg args "after_symbol")
-                                           (emagent-mcp--arg args "node"))))
+                                           (emagent-mcp--arg args "node")))
+         :available #'emagent-struct-available-p)
    (list "check_elisp"
          "Check an Emacs Lisp form for syntax errors (paren balance, read errors) WITHOUT executing it. Returns \"OK\" or an error description with line:column. Always call this before eval for forms longer than 3 lines."
          '(("form" . ((type . "string")
@@ -382,7 +388,15 @@ instead; emagent then writes whatever port it gets into the agent config."
          '()
          (lambda (_args)
            (emagent-tool-elisp-guide))))
-  "Registry of emagent MCP tools: (NAME DESCRIPTION PROPERTIES REQUIRED HANDLER).")
+  "Registry of emagent MCP tools: (NAME DESCRIPTION PROPERTIES REQUIRED HANDLER . PLIST).
+PLIST may have :available (a function returning non-nil when the tool may be listed).")
+
+(defun emagent-mcp--tool-available-p (entry)
+  "Return non-nil when ENTRY is available (no :available predicate, or it passes)."
+  (let ((plist (nthcdr 5 entry)))
+    (if (plist-member plist :available)
+        (funcall (plist-get plist :available))
+      t)))
 
 (defun emagent-mcp--tool-entry (name)
   "Return the registry entry for tool NAME, or nil."
@@ -404,15 +418,16 @@ PROPERTIES keys are tool argument names, kept as strings via a hash-table so
     (required . ,(apply #'vector required))))
 
 (defun emagent-mcp--tools-list-payload ()
-  "Return the tools/list result as an alist."
+  "Return the tools/list result as an alist.
+Only includes tools whose :available predicate passes."
   `((tools . ,(apply #'vector
                      (mapcar
                       (lambda (entry)
-                        (cl-destructuring-bind (name description properties required _handler) entry
+                        (cl-destructuring-bind (name description properties required _handler &rest _) entry
                           `((name . ,name)
                             (description . ,description)
                             (inputSchema . ,(emagent-mcp--tool-schema properties required)))))
-                      emagent-mcp--tools)))))
+                      (seq-filter #'emagent-mcp--tool-available-p emagent-mcp--tools))))))
 
 ;;;; Tool dispatch (runs in the live Emacs, bound to the session context)
 
@@ -430,99 +445,13 @@ PROPERTIES keys are tool argument names, kept as strings via a hash-table so
         (with-current-buffer buffer
           (emagent-chat-add-allowed-tool tool))))))
 
-(defconst emagent-mcp--confirming-tools
-  '("run_shell_command" "compile" "delete_file" "delete_directory")
-  "MCP tool names that prompt the user before running.
-`write_file' is gated separately by `emagent-mcp-confirm-write-file'.")
-
-(defcustom emagent-mcp-confirm-write-file nil
-  "When non-nil, require diff + Allow before MCP write_file.
-
-Nil (default) skips a second Emacs prompt so project edits can proceed after
-ACP permission.  See `emagent-acp-confirm-fs-writes' for fs/write_text_file.
-The agent process may still enforce its own policy."
-  :type 'boolean
-  :group 'emagent)
-
-(declare-function emagent-shell--read-only-network-p "emagent-shell")
-
-(defun emagent-mcp--tool-needs-confirmation-p (name args)
-  "Return non-nil when MCP tool NAME with ARGS should prompt the user."
-  (and (or (and (string= name "write_file") emagent-mcp-confirm-write-file)
-           (member name emagent-mcp--confirming-tools))
-       (not (and (string= name "run_shell_command")
-                 (emagent-shell--read-only-network-p
-                  (or (emagent-mcp--arg args "command") ""))))))
-
-(defun emagent-mcp--tool-confirm-symbol (name)
-  "Return the `emagent-tool-*' symbol used for allow-listing MCP tool NAME."
-  (intern (concat "emagent-tool-" (replace-regexp-in-string "_" "-" name))))
-
-(defun emagent-mcp--truncate-detail (text limit)
-  "Return TEXT truncated to LIMIT characters with an ellipsis."
-  (if (and (stringp text) (> (length text) limit))
-      (concat (substring text 0 limit) "…")
-    (or text "")))
-
-(defun emagent-mcp--tool-prompt-detail (name args &optional root)
-  "Return a multi-line summary of ARGS for tool NAME."
-  (pcase name
-    ("run_shell_command"
-     (let* ((command (or (emagent-mcp--arg args "command") ""))
-            (directory (emagent-mcp--arg args "directory"))
-            (cwd (cond
-                  ((and directory (not (string-empty-p directory)))
-                   (expand-file-name directory (or root default-directory)))
-                  (root root)
-                  (t "(session root)"))))
-       (format "  shell: %s\n  in: %s"
-               (emagent-mcp--truncate-detail command 400)
-               cwd)))
-    ("eval"
-     (format "  elisp: %s"
-             (emagent-mcp--truncate-detail (or (emagent-mcp--arg args "form") "") 300)))
-    ("write_file"
-     (let* ((path (or (emagent-mcp--arg args "path") ""))
-            (content (or (emagent-mcp--arg args "content" "") "")))
-       (format "  write: %s\n  size: %d chars"
-               (emagent-mcp--truncate-detail path 200)
-               (length content))))
-    ("delete_file"
-     (format "  delete file: %s"
-             (emagent-mcp--truncate-detail (or (emagent-mcp--arg args "path") "") 200)))
-    ("delete_directory"
-     (format "  delete directory: %s%s"
-             (emagent-mcp--truncate-detail (or (emagent-mcp--arg args "path") "") 200)
-             (if (emagent-mcp--bool args "recursive") " (recursive)" "")))
-    ("compile"
-     (format "  command: %s"
-             (emagent-mcp--truncate-detail (or (emagent-mcp--arg args "command") "") 400)))
-    (_ (format "  %s" (emagent-mcp--truncate-detail (format "%s" args) 200)))))
-
-(defun emagent-mcp--tool-confirm-prompt (name args &optional root)
-  "Return the permission prompt for MCP tool NAME and ARGS."
-  (format "Allow %s?\n%s" name (emagent-mcp--tool-prompt-detail name args root)))
-
-(defun emagent-mcp--confirm-tool (name args root &optional buffer)
-  "Return non-nil when the user allows MCP tool NAME with ARGS.
-BUFFER is the chat buffer; when NAME is write_file it is passed to
-`emagent-tools--confirm-write' so the diff appears inline there."
-  (let ((tool-symbol (emagent-mcp--tool-confirm-symbol name)))
-    (if (string= name "write_file")
-        (emagent-tools--confirm-write
-         tool-symbol
-         (emagent-tools--root-directory (emagent-mcp--arg args "path"))
-         (emagent-mcp--arg args "content" "")
-         buffer)
-      (emagent-tools--confirm
-       tool-symbol
-       (emagent-mcp--tool-confirm-prompt name args root)))))
-
 (defun emagent-mcp--run-tool (name args session)
   "Run tool NAME with ARGS in SESSION's context; return a result string."
   (let ((entry (emagent-mcp--tool-entry name)))
     (unless entry
       (error "Unknown tool: %s" name))
+    (unless (emagent-mcp--tool-available-p entry)
+      (error "Tool %s is not available (install lisp-sitter)" name))
     (let* ((root (plist-get session :root))
            (buffer (plist-get session :buffer))
            (handler (nth 4 entry))
@@ -533,170 +462,12 @@ BUFFER is the chat buffer; when NAME is write_file it is passed to
            (emagent-tools-allow-all-function
             (emagent-mcp--make-allow-all-fn buffer))
            (emagent-tools--chat-buffer buffer)
+           (emagent-tools--acp-session-p (emagent-mcp--acp-session-p session))
            (emagent-acp-prefer-emacs (if session
                                          (plist-get session :prefer-emacs)
                                        (and (boundp 'emagent-acp-prefer-emacs)
                                             emagent-acp-prefer-emacs))))
-      (when (and (emagent-mcp--tool-needs-confirmation-p name args)
-                 (not (emagent-mcp--acp-session-p session))
-                 (not (emagent-mcp--confirm-tool name args root buffer)))
-        (user-error "Tool call cancelled"))
       (emagent-mcp--string-result (funcall handler args)))))
 
-
-(defun emagent-mcp--acp-session-p (session)
-  "Return non-nil when SESSION is owned by an emagent ACP chat buffer."
-  (and session (plist-get session :acp)))
-
-(defun emagent-mcp-deregister-session (token)
-  "Deregister session TOKEN and stop the server if it was the last one."
-  (when token
-    (remhash token emagent-mcp--sessions))
-  (emagent-mcp-maybe-shutdown))
-
-(defun emagent-mcp-session-url (token)
-  "Return the MCP endpoint URL for session TOKEN (starts the server)."
-  (format "http://127.0.0.1:%d/mcp/%s" (emagent-mcp-ensure-server) token))
-
-;;;; Cursor configuration
-
-(defun emagent-mcp--lists-to-vectors (object)
-  "Recursively convert JSON arrays (lists) to vectors for `json-serialize'.
-
-`json-parse-buffer' with `:array-type \\='list\\=' yields lists, but
-`json-serialize' treats lists as alists and requires symbol keys."
-  (cond
-   ((hash-table-p object)
-    (maphash (lambda (key value)
-               (puthash key (emagent-mcp--lists-to-vectors value) object))
-             object)
-    object)
-   ((and (listp object) (not (stringp object)))
-    (apply #'vector (mapcar #'emagent-mcp--lists-to-vectors object)))
-   (t object)))
-
-(defun emagent-mcp--read-json-file (file)
-  "Return the parsed JSON object (hash-table) in FILE, or an empty one."
-  (if (file-exists-p file)
-      (condition-case nil
-          (with-temp-buffer
-            (insert-file-contents file)
-            (json-parse-buffer :object-type 'hash-table
-                               :array-type 'list
-                               :null-object :null
-                               :false-object :false))
-        (error (make-hash-table :test 'equal)))
-    (make-hash-table :test 'equal)))
-
-(defun emagent-mcp-ensure-cursor-config ()
-  "Merge an `emagent' http MCP entry into the global cursor-agent config.
-
-The url uses ${env:EMAGENT_SESSION_TOKEN} so a single static file routes each
-cursor-agent invocation to its own session.  Existing servers are preserved.
-Only writes the file when the entry is absent or points to a different port."
-  (let* ((port (emagent-mcp-ensure-server))
-         (file emagent-mcp-cursor-config-file)
-         (expected-url (format "http://127.0.0.1:%d/mcp/${env:EMAGENT_SESSION_TOKEN}" port))
-         (data (emagent-mcp--read-json-file file))
-         (servers (let ((value (gethash "mcpServers" data)))
-                    (if (hash-table-p value) value (make-hash-table :test 'equal))))
-         (current-entry (gethash emagent-mcp-server-name servers)))
-    (unless (and (hash-table-p current-entry)
-                 (equal (gethash "url" current-entry) expected-url))
-      (let ((entry (make-hash-table :test 'equal)))
-        (puthash "url" expected-url entry)
-        (puthash emagent-mcp-server-name entry servers)
-        (puthash "mcpServers" servers data)
-        (make-directory (file-name-directory file) t)
-        (with-temp-file file
-          (insert (emagent-mcp--json-encode (emagent-mcp--lists-to-vectors data))))))
-    file))
-
-;;;; External MCP gateway forwarding
-
-(defcustom emagent-acp-extra-mcp-config-file "~/.claude.json"
-  "JSON file whose top-level `mcpServers' block is forwarded to ACP agents.
-
-Emagent reads the `mcpServers' object from this file and advertises those
-servers, alongside the in-Emacs emagent server, to agents that support http MCP
-over ACP (e.g. Claude).  This reuses an existing Claude gateway without
-re-declaring it for emagent.
-
-Only agents wired through ACP `mcpServers' are affected; Cursor discovers MCP
-servers from its own ~/.cursor/mcp.json and ignores this option.
-Set to nil to forward only the emagent server."
-  :type '(choice (const :tag "None" nil) (file :tag "JSON config"))
-  :group 'emagent)
-
-(defun emagent-mcp--kv-array (object)
-  "Convert OBJECT (alist of KEY . VALUE) to an ACP [{name,value}] vector."
-  (vconcat
-   (mapcar (lambda (pair)
-             `((name . ,(let ((k (car pair)))
-                          (if (symbolp k) (symbol-name k) k)))
-               (value . ,(cdr pair))))
-           object)))
-
-(defun emagent-mcp--convert-gateway-entry (name cfg)
-  "Convert config-file MCP entry NAME/CFG to an ACP mcpServer alist, or nil."
-  (let ((type (or (map-elt cfg 'type)
-                  (and (map-elt cfg 'url) "http"))))
-    (pcase type
-      ((or "http" "sse")
-       (when (map-elt cfg 'url)
-         `((type . ,type)
-           (name . ,name)
-           (url . ,(map-elt cfg 'url))
-           (headers . ,(emagent-mcp--kv-array (map-elt cfg 'headers))))))
-      (_
-       (when (map-elt cfg 'command)
-         `((type . "stdio")
-           (name . ,name)
-           (command . ,(map-elt cfg 'command))
-           (args . ,(vconcat (map-elt cfg 'args)))
-           (env . ,(emagent-mcp--kv-array (map-elt cfg 'env)))))))))
-
-(defun emagent-mcp-config-file-servers ()
-  "Return ACP mcpServer specs from `emagent-acp-extra-mcp-config-file', or nil."
-  (when-let* ((file emagent-acp-extra-mcp-config-file)
-              (path (expand-file-name file))
-              ((file-readable-p path)))
-    (condition-case err
-        (let* ((data (with-temp-buffer
-                       (insert-file-contents path)
-                       (json-parse-buffer :object-type 'alist
-                                          :array-type 'list
-                                          :null-object nil
-                                          :false-object :false)))
-               (servers (map-elt data 'mcpServers)))
-          (delq nil
-                (mapcar (lambda (pair)
-                          (let ((name (symbol-name (car pair))))
-                            (unless (equal name emagent-mcp-server-name)
-                              (emagent-mcp--convert-gateway-entry name (cdr pair)))))
-                        servers)))
-      (error
-       (require 'emagent-log)
-       (emagent-log "could not read MCP servers from %s: %s"
-                    path (error-message-string err))
-       nil))))
-
-(defun emagent-mcp-session-servers (mcp-http chat-buffer)
-  "Return the mcpServers vector to advertise, or nil.
-
-MCP-HTTP is non-nil when the agent advertised http MCP capability.
-CHAT-BUFFER is the emagent chat buffer (for the per-buffer token)."
-  (when mcp-http
-    (with-current-buffer chat-buffer
-      (let* ((url (emagent-mcp-session-url (emagent-mcp-buffer-token)))
-             (emagent-server `((type . "http")
-                               (name . ,emagent-mcp-server-name)
-                               (url . ,url)
-                               (headers . [])))
-             (extra (emagent-mcp-config-file-servers)))
-        (vconcat (list emagent-server) extra)))))
-
-
-;;; emagent-mcp.el ends here
 (provide 'emagent-mcp)
 ;;; emagent-mcp.el ends here

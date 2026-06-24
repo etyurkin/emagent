@@ -46,43 +46,22 @@
 
 ;;;; Tool metadata
 
-(ert-deftest emagent-mcp-test-truncate-detail ()
-  (should (string= "short" (emagent-mcp--truncate-detail "short" 10)))
-  (should (string-match-p "…\\'" (emagent-mcp--truncate-detail (make-string 20 ?x) 10))))
-
-(ert-deftest emagent-mcp-test-tool-confirm-symbol ()
-  (should (eq 'emagent-tool-read-file (emagent-mcp--tool-confirm-symbol "read_file")))
-  (should (eq 'emagent-tool-run-shell-command
-              (emagent-mcp--tool-confirm-symbol "run_shell_command"))))
-
-(ert-deftest emagent-mcp-test-tool-prompt-detail ()
-  (let ((args (make-hash-table :test 'equal)))
-    (puthash "command" "make test" args)
-    (puthash "directory" "src" args)
-    (let ((detail (emagent-mcp--tool-prompt-detail "run_shell_command" args "/proj")))
-      (should (string-match-p "make test" detail))
-      (should (string-match-p "src" detail))))
-  (let ((args (make-hash-table :test 'equal)))
-    (puthash "command" "emacs --batch -l tests/emagent-test-runner.el" args)
-    (should (string-match-p "emacs --batch"
-                            (emagent-mcp--tool-prompt-detail "compile" args "/proj")))))
-
-(ert-deftest emagent-mcp-test-acp-session-skips-confirm ()
+(ert-deftest emagent-mcp-test-run-tool-executes-handler ()
   (let* ((token "abc")
          (session (list :root "/proj" :buffer (get-buffer-create "*mcp-test*") :acp t))
-         (args (make-hash-table :test 'equal))
-         (confirmed nil))
+         (args (make-hash-table :test 'equal)))
     (puthash "command" "make test" args)
     (puthash token session emagent-mcp--sessions)
     (unwind-protect
         (emagent-test--with-mocks
-            (((symbol-function 'emagent-mcp--confirm-tool)
-              (lambda (&rest _args) (setq confirmed t) t))
-             ((symbol-function 'emagent-tool-compile)
+            (((symbol-function 'emagent-tool-compile)
               (lambda (&rest _args) "ok")))
-          (should (string= "ok" (emagent-mcp--run-tool "compile" args session)))
-          (should-not confirmed))
+          (should (string= "ok" (emagent-mcp--run-tool "compile" args session))))
       (remhash token emagent-mcp--sessions))))
+
+(ert-deftest emagent-mcp-test-acp-session-skips-eval-dangerous-confirm ()
+  (let ((emagent-tools--acp-session-p t))
+    (should (emagent-tools--eval-form-dangerous-allowed-p "(load-file \"x\")" '(load-file)))))
 
 ;;;; RPC helpers
 

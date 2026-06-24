@@ -108,65 +108,42 @@
          (emagent-tools--write-file-content path "(defun x ()\n  (+ 1"))
       (delete-directory dir t))))
 
-(ert-deftest emagent-tools-test-write-elisp-structural-required ()
-  (let* ((dir (make-temp-file "emagent-tools-struct-" t))
-         (path (expand-file-name "existing.el" dir))
-         (emagent-tools--root-boundary dir)
-         (emagent-tools--project-directory dir)
-         (emagent-struct-require-edits t))
-    (unwind-protect
-        (progn
-          (write-region "(defun old () 1)" nil path)
-          (cl-letf (((symbol-function 'emagent-elisp-treesit-available-p) (lambda () t)))
-            (should-error
-             (emagent-tools--write-file-content path "(defun old () 2)"))
-            (let ((emagent-struct--structural-write-p t))
-              (should (string= path
-                               (emagent-tools--write-file-content path "(defun old () 2)"))))))
-      (delete-directory dir t))))
-
-(ert-deftest emagent-tools-test-write-elisp-new-file-blocked ()
-  (let* ((dir (make-temp-file "emagent-tools-new-" t))
-         (path (expand-file-name "new.el" dir))
-         (emagent-tools--root-boundary dir)
-         (emagent-tools--project-directory dir)
-         (emagent-struct-require-edits t)
-         (emagent-elisp-byte-compile-on-check nil))
-    (unwind-protect
-        (cl-letf (((symbol-function 'emagent-elisp-treesit-available-p) (lambda () t)))
-          (should-error
-           (emagent-tools--write-file-content path "(provide 'new)\n")))
-      (delete-directory dir t))))
-
 (ert-deftest emagent-tools-test-structural-elisp-eval ()
+  :tags '(lisp-sitter)
+  (skip-unless (emagent-struct-available-p))
   (let* ((dir (make-temp-file "emagent-tools-eval-" t))
          (file "loaded.el")
+         (resolved (expand-file-name file dir))
          (emagent-tools--root-boundary dir)
          (emagent-tools--project-directory dir)
          (emagent-elisp-byte-compile-on-check nil)
-         (emagent-elisp-eval-after-structural-edit t))
+         (emagent-struct-eval-after-structural-edit t))
     (unwind-protect
-        (let ((result (emagent-tool-structural-insert
-                       file "__start__" "(defun emagent-tools-eval-test () 'evaluated)")))
-          (should (string-match-p "Wrote and evaluated" result))
-          (should (fboundp 'emagent-tools-eval-test))
-          (should (eq (emagent-tools-eval-test) 'evaluated)))
+        (progn
+          (write-region "" nil resolved)
+          (let ((result (emagent-tool-structural-insert
+                         file "__start__" "(defun emagent-tools-eval-test () 'evaluated)")))
+            (should (string-match-p "Wrote" result))
+            (should (fboundp 'emagent-tools-eval-test))
+            (should (eq (emagent-tools-eval-test) 'evaluated))))
+      (fmakunbound 'emagent-tools-eval-test)
       (delete-directory dir t))))
 
 (ert-deftest emagent-tools-test-structural-elisp-eval-blocked ()
+  :tags '(lisp-sitter)
+  (skip-unless (emagent-struct-available-p))
   (let* ((dir (make-temp-file "emagent-tools-eval-block-" t))
          (file "evil.el")
-         (path (expand-file-name file dir))
+         (resolved (expand-file-name file dir))
          (emagent-tools--root-boundary dir)
          (emagent-tools--project-directory dir)
-         (emagent-elisp-byte-compile-on-check nil)
-         (emagent-elisp-eval-after-structural-edit t))
+         (emagent-elisp-byte-compile-on-check nil))
     (unwind-protect
         (progn
+          (write-region "" nil resolved)
           (should-error
            (emagent-tool-structural-insert
-            file "__start__" "(kill-emacs)"))
-          (should-not (file-exists-p path)))
+            file "__start__" "(kill-emacs)")))
       (delete-directory dir t))))
 
 (ert-deftest emagent-tools-test-eval-form-guard-blocked ()

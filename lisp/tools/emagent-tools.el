@@ -16,8 +16,12 @@
 (require 'emagent-tools-file)
 (require 'emagent-tools-intro)
 (require 'emagent-tools-shell)
+(require 'emagent-policy-match)
+(require 'emagent-policy-rules-elisp)
+(require 'emagent-policy)
 
-;; Declared special so binding it to suppress auto-insert is a dynamic binding.
+(defvaralias 'emagent-tools-eval-blocked-symbols 'emagent-policy-elisp-blocked-symbols)
+(defvaralias 'emagent-tools-eval-dangerous-symbols 'emagent-policy-elisp-dangerous-symbols)
 (defvar auto-insert)
 
 (declare-function magit-diff-buffer-file "magit-diff")
@@ -34,31 +38,6 @@
 
 (defcustom emagent-allowed-tools '(emagent-tool-fetch-url)
   "Symbols naming tools that may run without confirmation."
-  :type '(repeat symbol)
-  :group 'emagent-tools)
-
-(defcustom emagent-tools-eval-blocked-symbols
-  '(kill-emacs pause-emacs)
-  "Symbols hard-blocked in `emagent-tool-eval'; cannot run under any circumstances.
-These are too dangerous to allow even with confirmation:
-- kill-emacs / pause-emacs — would terminate or freeze the Emacs process"
-  :type '(repeat symbol)
-  :group 'emagent-tools)
-
-(defcustom emagent-tools-eval-dangerous-symbols
-  '(delete-file delete-directory
-    rename-file rename-directory
-    copy-file copy-directory
-    write-region write-file
-    insert-file-contents
-    load load-file load-library
-    shell-command shell-command-to-string
-    call-process start-process start-file-process process-file
-    kill-buffer kill-buffer-and-save)
-  "Symbols in `emagent-tool-eval' that require explicit user confirmation.
-The user sees the full code and must approve before execution.
-`load-file' / `load-library' require confirmation when used in eval — not a
-shortcut for .el edits; use structural tools for project .el files."
   :type '(repeat symbol)
   :group 'emagent-tools)
 
@@ -121,6 +100,11 @@ choice only lasts for the current call.")
   "The emagent chat buffer for the active session.
 When non-nil, permission prompts are shown as inline buttons there instead
 of in the minibuffer.  Bound per MCP dispatch by `emagent-mcp--run-tool'.")
+
+(defvar emagent-tools--acp-session-p nil
+  "When non-nil, skip Emacs-side tool confirmation for this call.
+ACP chat sessions use `session/request_permission' instead; a second MCP
+prompt would not block the agent and is ignored.")
 
 (defconst emagent-tools--permission-choices
   '((?y "yes" "Allow this call only")
@@ -202,11 +186,9 @@ Falls back to `completing-read' when CHAT-BUFFER is nil or dead."
 (defun emagent-tools--confirm (tool-name prompt)
   "Return non-nil when TOOL-NAME may run, prompting with PROMPT if needed.
 
-When `emagent-tools--chat-buffer' is live, shows inline buttons there.
-Otherwise falls back to `read-multiple-choice' in the minibuffer.
-\"Allow all\" remembers TOOL-NAME for the session via
-`emagent-tools-allow-all-function'."
-  (or (emagent-tools--allowed-p tool-name)
+When `emagent-tools--acp-session-p' is set, return t — ACP handles permission."
+  (or emagent-tools--acp-session-p
+      (emagent-tools--allowed-p tool-name)
       (if (and emagent-tools--chat-buffer
                (buffer-live-p emagent-tools--chat-buffer))
           (pcase (emagent-tools--buttons-prompt
@@ -258,8 +240,10 @@ Otherwise falls back to `read-multiple-choice' in the minibuffer.
 Inserts a #+begin_src diff block (when changes exist) followed by Allow /
 Allow all / Deny buttons; the whole block is removed after the decision.
 Falls back to a minibuffer prompt when CHAT-BUFFER is unavailable.
-Returns non-nil when the write is approved."
-  (if (emagent-tools--allowed-p tool-name)
+Returns non-nil when the write is approved.
+
+When `emagent-tools--acp-session-p' is set, return t — ACP handles permission."
+  (if (or emagent-tools--acp-session-p (emagent-tools--allowed-p tool-name))
       t
     (let* ((diff (emagent-tools--write-diff-string resolved new-content))
            (preamble (when diff
@@ -275,57 +259,38 @@ Returns non-nil when the write is approved."
 
 (defun emagent-tools--symbols-in-form (form symbols)
   "Return symbols from SYMBOLS found anywhere in FORM."
-  (let (found stack)
-    (setq stack (list form))
-    (while stack
-      (let ((sexp (pop stack)))
-        (when sexp
-          (if (memq sexp symbols)
-              (push sexp found)
-            (when (consp sexp)
-              (push (cdr sexp) stack)
-              (push (car sexp) stack))))))
-    (delete-dups found)))
+  (emagent-policy-match--symbols-in-form form symbols))
 
 (defun emagent-tools--eval-form-read (form-str)
   "Return FORM-STR parsed as `(progn ,@forms)'."
   (read (concat "(progn " (string-trim (or form-str "")) ")")))
 
 (defun emagent-tools--eval-form-dangerous-allowed-p (form-str dangerous)
-  "Return non-nil when the user allows evaluating FORM-STR with DANGEROUS symbols."
-  (let* ((ops (mapconcat #'symbol-name dangerous ", "))
-         (preview (truncate-string-to-width form-str 400 nil nil "…"))
-         (preamble (format "\n#+begin_src elisp\n%s\n#+end_src" preview))
-         (prompt (format "Eval contains: *%s*" ops)))
-    (if (and emagent-tools--chat-buffer
-             (buffer-live-p emagent-tools--chat-buffer))
-        (eq 'yes
-            (emagent-tools--buttons-prompt
-             prompt
-             '(("Allow" . yes) ("Deny" . no))
-             emagent-tools--chat-buffer
-             preamble))
-      (y-or-n-p (format "Eval contains %s — allow? " ops)))))
+  "Return non-nil when the user allows evaluating FORM-STR with DANGEROUS symbols.
+When `emagent-tools--acp-session-p' is set, return t — ACP handles permission."
+  (or emagent-tools--acp-session-p
+      (let* ((ops (mapconcat #'symbol-name dangerous ", "))
+             (preview (truncate-string-to-width form-str 400 nil nil "…"))
+             (preamble (format "\n#+begin_src elisp\n%s\n#+end_src" preview))
+             (prompt (format "Eval contains: *%s*" ops)))
+        (if (and emagent-tools--chat-buffer
+                 (buffer-live-p emagent-tools--chat-buffer))
+            (eq 'yes
+                (emagent-tools--buttons-prompt
+                 prompt
+                 '(("Allow" . yes) ("Deny" . no))
+                 emagent-tools--chat-buffer
+                 preamble))
+          (y-or-n-p (format "Eval contains %s — allow? " ops))))))
+
+(defun emagent-tools--eval-form-check (form-str)
+  "Return nil when FORM-STR may run; otherwise a permission plist.
+`:deny' blocks execution; `:confirm' needs user approval at the ACP gate."
+  (emagent-policy-check-elisp form-str))
 
 (defun emagent-tools--eval-form-guard (form-str)
   "Return nil when FORM-STR passes eval guardrails, else an error string."
-  (let* ((form-str (string-trim (or form-str "")))
-         (parsed (condition-case parse-err
-                     (emagent-tools--eval-form-read form-str)
-                   (error
-                    (format "Elisp read error: %s"
-                            (error-message-string parse-err)))))
-         (blocked (emagent-tools--symbols-in-form parsed emagent-tools-eval-blocked-symbols))
-         (dangerous (emagent-tools--symbols-in-form parsed emagent-tools-eval-dangerous-symbols)))
-    (cond
-     (blocked
-      (format "Eval blocked (%s). Use the dedicated emagent tools instead."
-              (mapconcat #'symbol-name blocked ", ")))
-     (dangerous
-      (unless (emagent-tools--eval-form-dangerous-allowed-p form-str dangerous)
-        (format "Eval cancelled: contains %s"
-                (mapconcat #'symbol-name dangerous ", "))))
-     (t nil))))
+  (emagent-policy-enforce-string (emagent-policy-check-elisp form-str) form-str))
 
 (defun emagent-tools--eval-form-execute (form-str)
   "Evaluate FORM-STR after guardrails; return nil on success or an error string."
@@ -449,46 +414,52 @@ Call this before writing non-trivial Elisp."
   (require 'emagent-prompts)
   emagent-acp-elisp-guide)
 
-(defun emagent-tools--structural-error-p (result prefixes)
-  "Return non-nil when RESULT looks like an error string from PREFIXES."
-  (or (string-prefix-p "SYNTAX ERROR" result)
-      (seq-some (lambda (p) (string-prefix-p p result)) prefixes)))
-
 (defun emagent-tool-check-structural-file (file)
-  "Validate FILE with its structural language plugin."
-  (emagent-struct-check-file file (emagent-tools--read-structural-file-content file)))
+  "Validate FILE with lisp-sitter (when available)."
+  (if (emagent-struct-available-p)
+      (emagent-struct-check (emagent-tools--read-structural-file-content file) file)
+    (emagent-elisp-check-file-content
+     (emagent-tools--read-structural-file-content file) file)))
 
 (defun emagent-tool-check-structural-node (file node)
-  "Validate NODE text for FILE's structural language plugin."
-  (emagent-struct-check-node file node))
+  "Validate NODE text with lisp-sitter for FILE's language."
+  (if (emagent-struct-available-p)
+      (emagent-struct-check-node node (emagent-struct--lang-for file))
+    (if (string-match-p "\\.el\\'" file)
+        (emagent-elisp-check-form node)
+      (format "No checker for %s (install lisp-sitter)" file))))
 
-(defun emagent-tool-structural-tree (file &optional depth)
-  "Return a shallow structural outline of FILE."
-  (emagent-struct-outline file (emagent-tools--read-structural-file-content file)
-                          depth))
+(defun emagent-tool-structural-tree (file &optional _depth)
+  "Return a shallow structural outline of FILE using lisp-sitter."
+  (if (emagent-struct-available-p)
+      (emagent-struct-tree (emagent-tools--read-structural-file-content file) file)
+    (let ((err (emagent-tools--read-structural-file-content file)))
+      (if (string-empty-p err)
+          ""
+        (format "install lisp-sitter to see structural outline of %s" file)))))
 
 (defun emagent-tool-structural-bounds (file symbol)
   "Return START:END byte positions for SYMBOL in FILE."
-  (emagent-struct-node-bounds file (emagent-tools--read-structural-file-content file)
-                              symbol))
+  (emagent-struct-bounds (emagent-tools--read-structural-file-content file)
+                         file symbol))
 
 (defun emagent-tool-structural-replace (file symbol new-body)
   "Replace top-level node SYMBOL in FILE with complete NEW-BODY text."
   (let* ((content (emagent-tools--read-structural-file-content file))
-         (updated (emagent-struct-replace-node file content symbol new-body)))
-    (if (emagent-tools--structural-error-p
-         updated '("No " "new_body" "node must"))
-        updated
-      (emagent-tools--structural-write file updated new-body))))
+         (updated (emagent-struct-replace content file symbol new-body)))
+    (emagent-tools--write-file-content file updated)
+    (when emagent-struct-eval-after-structural-edit
+      (ignore-errors (eval (read new-body))))
+    (format "Wrote %s" (expand-file-name file))))
 
 (defun emagent-tool-structural-insert (file after-symbol node)
   "Insert complete top-level NODE after AFTER-SYMBOL in FILE."
   (let* ((content (emagent-tools--read-structural-file-content file))
-         (updated (emagent-struct-insert-after file content after-symbol node)))
-    (if (emagent-tools--structural-error-p
-         updated '("No " "node must" "__start__"))
-        updated
-      (emagent-tools--structural-write file updated node))))
+         (updated (emagent-struct-insert content file after-symbol node)))
+    (emagent-tools--write-file-content file updated)
+    (when emagent-struct-eval-after-structural-edit
+      (ignore-errors (eval (read node))))
+    (format "Wrote %s" (expand-file-name file))))
 
 (defun emagent-tool-check-elisp (form)
   "Check FORM for Emacs Lisp syntax errors without executing it.

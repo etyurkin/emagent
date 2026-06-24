@@ -87,7 +87,7 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
         (funcall cb "No conversation to compress"))))
   (emagent-acp--refresh-mode-line state))
 
-(defun emagent-acp-send-prompt (user-text)
+(cl-defun emagent-acp-send-prompt (user-text)
   "Send USER-TEXT to the current buffer's ACP session."
   (let* ((state (emagent-acp--session))
          (session-id (map-elt state :session-id)))

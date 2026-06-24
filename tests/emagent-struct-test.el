@@ -1,46 +1,75 @@
-;;; emagent-struct-test.el --- ERT tests for structural editing plugins -*- lexical-binding: t; -*-
+;;; emagent-struct-test.el --- ERT tests for lisp-sitter CLI proxy -*- lexical-binding: t; -*-
+
+;;; Commentary:
+;;
+;; Tests for the lisp-sitter CLI proxy.  All tests are skipped when the
+;; lisp-sitter binary is not installed.
 
 ;;; Code:
 
 (require 'ert)
 (require 'emagent-struct)
 
-(ert-deftest emagent-struct-test-plugin-ids ()
-  (let ((ids (mapcar (lambda (p) (plist-get p :id)) emagent-struct--plugins)))
-    (should (member 'elisp ids))
-    (should (member 'python ids))
-    (should (member 'commonlisp ids))))
+(ert-deftest emagent-struct-test-available-p ()
+  (should (booleanp (emagent-struct-available-p))))
 
-(ert-deftest emagent-struct-test-plugin-for-path ()
-  (should (emagent-struct-plugin-for-path "foo.el"))
-  (should (emagent-struct-plugin-for-path "bar.py"))
-  (should (emagent-struct-plugin-for-path "baz.lisp"))
-  (should (emagent-struct-plugin-for-path "qux.cl"))
-  (should-not (emagent-struct-plugin-for-path "readme.txt")))
+(ert-deftest emagent-struct-test-lang-for ()
+  (should (string= "elisp" (emagent-struct--lang-for "foo.el")))
+  (should (string= "commonlisp" (emagent-struct--lang-for "foo.lisp")))
+  (should (string= "commonlisp" (emagent-struct--lang-for "foo.cl")))
+  (should (string= "scheme" (emagent-struct--lang-for "foo.scm")))
+  (should (string= "scheme" (emagent-struct--lang-for "foo.ss")))
+  (should (string= "scheme" (emagent-struct--lang-for "foo.sld"))))
 
-(ert-deftest emagent-struct-test-check-file-unknown ()
-  (should (string-match-p "No structural plugin"
-                          (emagent-struct-check-file "readme.txt" "hello"))))
+(ert-deftest emagent-struct-test-lisp-file-p ()
+  (should (emagent-struct--lisp-file-p "foo.el"))
+  (should (emagent-struct--lisp-file-p "foo.lisp"))
+  (should (emagent-struct--lisp-file-p "foo.cl"))
+  (should (emagent-struct--lisp-file-p "foo.scm"))
+  (should-not (emagent-struct--lisp-file-p "foo.txt"))
+  (should-not (emagent-struct--lisp-file-p "foo.rs")))
 
-(ert-deftest emagent-struct-test-anchors ()
-  (should (emagent-struct--anchor-start-p "__start__"))
-  (should (emagent-struct--anchor-start-p ""))
-  (should (emagent-struct--anchor-end-p "__end__"))
-  (should-not (emagent-struct--anchor-end-p "__start__")))
+(ert-deftest emagent-struct-test-tree ()
+  (skip-unless (emagent-struct-available-p))
+  (let ((out (emagent-struct-tree "(defun foo () 1)" "test.el")))
+    (should (string-match-p "foo" out))))
 
-(ert-deftest emagent-struct-test-write-blocked-when-treesit ()
-  (let* ((dir (make-temp-file "emagent-struct-" t))
-         (path (expand-file-name "blocked.el" dir))
-         (emagent-struct-require-edits t))
-    (unwind-protect
-        (progn
-          (write-region "(defun x () 1)" nil path)
-          (cl-letf (((symbol-function 'emagent-elisp-treesit-available-p) (lambda () t)))
-            (should (string-match-p "structural_\\*"
-                                    (emagent-struct-write-blocked-message path)))
-            (let ((emagent-struct--structural-write-p t))
-              (should-not (emagent-struct-write-blocked-message path)))))
-      (delete-directory dir t))))
+(ert-deftest emagent-struct-test-bounds ()
+  (skip-unless (emagent-struct-available-p))
+  (let ((out (emagent-struct-bounds "(defun foo () 1)" "test.el" "foo")))
+    (should (string-match-p "^[0-9]+:[0-9]+$" out))))
+
+(ert-deftest emagent-struct-test-replace ()
+  (skip-unless (emagent-struct-available-p))
+  (let ((out (emagent-struct-replace "(defun foo () 1)" "test.el" "foo"
+                                     "(defun foo () 2)")))
+    (should (string-match-p "2" out))))
+
+(ert-deftest emagent-struct-test-insert ()
+  (skip-unless (emagent-struct-available-p))
+  (let ((out (emagent-struct-insert "(defun foo () 1)" "test.el" "__end__"
+                                    "(defun bar () 2)")))
+    (should (string-match-p "bar" out))))
+
+(ert-deftest emagent-struct-test-check ()
+  (skip-unless (emagent-struct-available-p))
+  (should (string= "OK"
+                   (emagent-struct-check "(defun foo () 1)" "test.el"))))
+
+(ert-deftest emagent-struct-test-check-node ()
+  (skip-unless (emagent-struct-available-p))
+  (should (string= "OK"
+                   (emagent-struct-check-node "(defun foo () 1)" "elisp"))))
+
+(ert-deftest emagent-struct-test-get ()
+  (skip-unless (emagent-struct-available-p))
+  (let ((out (emagent-struct-get "(defun foo () 1)" "test.el" "foo")))
+    (should (string-match-p "defun foo" out))))
+
+(ert-deftest emagent-struct-test-replace-error ()
+  (skip-unless (emagent-struct-available-p))
+  (should-error (emagent-struct-replace "(defun foo () 1)" "test.el" "nonexistent"
+                                        "(defun bar () 2)")))
 
 (provide 'emagent-struct-test)
 

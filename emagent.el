@@ -47,6 +47,10 @@
          (emagent--register-load-path root)
          (emagent--register-elpaca-recipe)))))
 
+(defun emagent--mode-p ()
+  "Return non-nil when `emagent-mode' is active in the current buffer."
+  (and (boundp 'emagent-mode) emagent-mode))
+
 (eval-and-compile (emagent--bootstrap-load-path))
 (emagent--bootstrap-load-path)
 
@@ -487,6 +491,38 @@ leaves the session files in the old location and causes session/load to fail."
         (emagent-acp-shutdown-buffer))
       (emagent-acp-ensure-connected)
       (message "emagent: project → %s, reconnecting…" new-dir))))
+
+(dolist (sym '(emagent-trust-workspace
+               emagent-trust-claude-reconnect
+               emagent-set-project-directory
+               emagent-cursor-start
+               emagent-claude-start
+               emagent-chat-send
+               emagent-chat-send-or-babel
+               emagent-chat-beginning-of-line
+               emagent-chat-cycle-response
+               emagent-chat-cycle-or-org-cycle
+               emagent-chat-insert-last-response
+               emagent-chat-insert-src-block
+               emagent-chat-attach-buffer
+               emagent-chat-yank
+               emagent-chat-attach-image
+               emagent-chat-attach-error-context
+               emagent-chat-attach-files
+               emagent-chat-interrupt
+               emagent-chat-new-prompt
+               emagent-chat-quit
+               emagent-chat-tab
+               emagent-dispatch
+               emagent-btw
+               emagent-log-view
+               emagent-log-refresh
+               emagent-set-model
+               emagent-tool-eval
+               emagent-tool-org-move-subtree-to-parent
+               emagent-embark-copy-src-block
+               emagent-embark-insert-src-block))
+  (put sym 'completion-predicate #'emagent--mode-p))
 
 (provide 'emagent)
 

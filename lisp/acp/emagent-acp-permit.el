@@ -29,11 +29,176 @@
 (require 'emagent-log)
 (require 'emagent-acp-custom)
 (require 'emagent-acp-state)
+(require 'emagent-acp-tool-call)
+(require 'emagent-tools)
+(require 'emagent-policy)
+
+(declare-function emagent-chat-allowed-permissions "emagent-chat")
+(declare-function emagent-chat-add-allowed-permission "emagent-chat")
 
 (declare-function emagent-acp--send-request "emagent-acp")
 (declare-function emagent-acp--emit-tool-call-display "emagent-acp")
 (declare-function emagent-chat--open-response-p "emagent-chat")
 (declare-function emagent-cursor-enrich-tool-call-update "emagent-cursor")
+
+(defun emagent-acp--permission-option-deny-p (opt)
+  "Return non-nil when OPT is a deny-type ACP permission option."
+  (let ((kind (downcase (or (map-elt opt 'kind) "")))
+        (id (downcase (or (map-elt opt 'optionId) "")))
+        (name (downcase (or (map-elt opt 'name) ""))))
+    (or (member kind '("deny" "deny_once" "deny-once" "reject"))
+        (member id '("deny" "deny_once" "deny-once" "no" "reject"))
+        (string-match-p "deny\\|reject" id)
+        (string-match-p "\\`\\(?:deny\\|no\\|reject\\)" name))))
+
+(defun emagent-acp--permission-option-always-id (options)
+  "Return allow_always/allow-always optionId from OPTIONS, or nil."
+  (when options
+    (or (map-elt (seq-find (lambda (opt)
+                             (let ((id (downcase (or (map-elt opt 'optionId) ""))))
+                               (member id '("allow_always" "allow-always"))))
+                   options)
+                'optionId)
+        (map-elt (seq-find (lambda (opt)
+                             (let ((kind (downcase (or (map-elt opt 'kind) ""))))
+                               (member kind '("allow_always" "allow-always"))))
+                   options)
+                'optionId))))
+
+(defconst emagent-acp--permission-acp-allow-prefer
+  '("allow_once" "allow-once" "run_once" "yes" "run" "allow")
+  "ACP optionIds emagent may return to the agent (never allow_always).")
+
+(defconst emagent-acp--permission-emagent-choices
+  '(("Allow" . :allow-once)
+    ("Allow for session" . :allow-session)
+    ("Allow always" . :allow-always)
+    ("Allow all (session)" . :allow-all)
+    ("Deny" . :deny))
+  "User-facing permission choices handled by emagent, not the external agent.")
+
+(defun emagent-acp--permission-acp-allow-id (options)
+  "Return a one-shot allow optionId from OPTIONS; never allow_always.
+When no one-shot option is available, falls back to allow_always as
+last resort so the permission can still be granted."
+  (or (map-elt (seq-find (lambda (opt)
+                           (let ((id (downcase (or (map-elt opt 'optionId) ""))))
+                             (and id (member id emagent-acp--permission-acp-allow-prefer))))
+                 options)
+              'optionId)
+      (let ((fallback (map-elt (seq-find #'emagent-acp--permission-option-allow-p options)
+                               'optionId)))
+        (when (and fallback
+                   (not (member (downcase fallback) '("allow_always" "allow-always"))))
+          fallback))
+      ;; Last resort: use allow_always when no one-shot option exists.
+      (let ((always (emagent-acp--permission-option-always-id options)))
+        (when always
+          (emagent-log "permission: no one-shot allow option found, falling back to allow_always")
+          always))))
+
+(defun emagent-acp--permission-acp-deny-id (options)
+  "Return a deny optionId from OPTIONS, or nil."
+  (map-elt (seq-find #'emagent-acp--permission-option-deny-p options) 'optionId))
+
+(defun emagent-acp--tool-call-eval-form (tool-call)
+  "Return an eval form string from permission TOOL-CALL, or nil."
+  (when tool-call
+    (let ((raw (or (map-elt tool-call 'arguments)
+                   (map-elt tool-call 'rawInput))))
+      (when-let ((data (emagent-acp--tool-call-normalize-data raw)))
+        (or (emagent-acp--tool-call-data-get data 'form)
+            (emagent-acp--tool-call-data-get data 'code))))))
+
+(defun emagent-acp--tool-call-path (tool-call)
+  "Return a file path from permission TOOL-CALL, or nil."
+  (when tool-call
+    (let ((raw (or (map-elt tool-call 'arguments)
+                   (map-elt tool-call 'rawInput))))
+      (when-let ((data (emagent-acp--tool-call-normalize-data raw)))
+        (or (emagent-acp--tool-call-data-get data 'path)
+            (emagent-acp--tool-call-data-get data 'file_path)
+            (emagent-acp--tool-call-data-get data 'file))))))
+
+(defun emagent-acp--permission-fingerprint (tool-call)
+  "Return a stable fingerprint string for auto-allowing similar TOOL-CALLs."
+  (when tool-call
+    (let* ((kind (downcase (or (map-elt tool-call 'kind) "")))
+           (title (or (map-elt tool-call 'title) ""))
+           (command (emagent-acp--tool-call-command-text tool-call))
+           (form (emagent-acp--tool-call-eval-form tool-call))
+           (path (emagent-acp--tool-call-path tool-call)))
+      (cond
+       ((and (string= kind "execute") (stringp command) (not (string-empty-p command)))
+        (format "execute:%s" (car (split-string command "[[:space:]]+" t))))
+       (form
+        ;; Key on the form text itself: distinct elisp forms must not share a
+        ;; fingerprint, or approving one would auto-allow unrelated evals.
+        (format "eval:%s" (secure-hash 'sha1 form)))
+       ((and (member kind '("read" "write")) path)
+        (format "%s:%s" kind path))
+       ((not (string-empty-p title))
+        (format "%s:%s" (if (string-empty-p kind) "tool" kind) title))
+       (command (format "execute:%s" command))
+       (t "unknown")))))
+
+(defun emagent-acp--tool-call-execute-p (tool-call)
+  "Return non-nil when TOOL-CALL is an execute (shell) request."
+  (let ((kind (and (listp tool-call) (map-elt tool-call 'kind))))
+    (and (stringp kind) (equal (downcase kind) "execute"))))
+
+(defun emagent-acp--permission-validate (tool-call)
+  "Return nil when TOOL-CALL passes emagent checks.
+Otherwise (:deny . REASON) or (:confirm . REASON)."
+  (or       (when-let ((form (emagent-acp--tool-call-eval-form tool-call)))
+        (emagent-policy-check-elisp form))
+      (when-let* ((command (and (emagent-acp--tool-call-execute-p tool-call)
+                                (emagent-acp--tool-call-command-text tool-call))))
+        (emagent-policy-check-shell command))))
+
+(defun emagent-acp--permission-auto-allowed-p (state fingerprint chat-buffer)
+  "Return non-nil when FINGERPRINT is auto-approved for STATE or CHAT-BUFFER."
+  (or (map-elt state :session-auto-approve)
+      (and fingerprint
+           (or (member fingerprint (or (map-elt state :permission-auto-allow) nil))
+               (and chat-buffer (buffer-live-p chat-buffer)
+                    (with-current-buffer chat-buffer
+                      (member fingerprint (emagent-chat-allowed-permissions))))))))
+
+(defun emagent-acp--permission-gate-auto-approve-p (state tool-call validation fingerprint chat-buffer)
+  "Return non-nil when emagent should approve without prompting."
+  (and (not (and validation (eq (car validation) :deny)))
+       (or (emagent-acp--permission-auto-allowed-p state fingerprint chat-buffer)
+           (and (eq emagent-acp-auto-approve-permissions t)
+                (not (and validation (eq (car validation) :confirm))))
+           (and (eq emagent-acp-auto-approve-permissions 'safe)
+                (not (emagent-acp--tool-call-shell-needs-confirm-p tool-call))
+                (not (and validation (eq (car validation) :confirm)))))))
+
+(defun emagent-acp--permission-apply-choice (state fingerprint chat-buffer choice)
+  "Record user CHOICE for FINGERPRINT in STATE and CHAT-BUFFER."
+  (pcase choice
+    (:allow-all
+     (map-put! state :session-auto-approve t)
+     (emagent-log "permission: allow all (session)"))
+    (:allow-session
+     (when fingerprint
+       (map-put! state :permission-auto-allow
+                 (append (or (map-elt state :permission-auto-allow) nil)
+                         (list fingerprint)))))
+    (:allow-always
+     (when fingerprint
+       (map-put! state :permission-auto-allow
+                 (append (or (map-elt state :permission-auto-allow) nil)
+                         (list fingerprint)))
+       (when (and chat-buffer (buffer-live-p chat-buffer))
+         (with-current-buffer chat-buffer
+           (emagent-chat-add-allowed-permission fingerprint)))))
+    (_ nil)))
+
+(defun emagent-acp--permission-approved-choice-p (choice)
+  "Return non-nil when user CHOICE approves the request."
+  (memq choice '(:allow-once :allow-session :allow-always :allow-all)))
 
 (defun emagent-acp--permission-option-allow-p (opt)
   "Return non-nil when OPT is an allow-type ACP permission option."
@@ -44,19 +209,6 @@
         (member id '("allow_once" "allow-once" "allow_always" "allow-always" "allow" "yes" "run" "run_once"))
         (string-match-p "allow" id)
         (string-match-p "\\`\\(?:allow\\|yes\\|run\\)" name))))
-
-(defun emagent-acp--permission-option-id (options)
-  "Return an allow-type option id from OPTIONS.
-Tries preferred optionIds, then `kind' = allow, then name/id matching allow.
-Never returns a deny option.  OPTIONS may be a list or vector."
-  (let ((prefer '("allow_once" "allow-once" "allow_always" "allow-always" "allow" "yes" "run" "run_once")))
-    (or (map-elt (seq-find (lambda (opt)
-                             (let ((id (map-elt opt 'optionId)))
-                               (and id (member id prefer))))
-                           options)
-                 'optionId)
-        (map-elt (seq-find #'emagent-acp--permission-option-allow-p options)
-                 'optionId))))
 
 (defconst emagent-acp--tool-call-detail-limit 120
   "Maximum detail length shown in Executing tool-call lines.")
@@ -82,43 +234,20 @@ Never returns a deny option.  OPTIONS may be a list or vector."
        (or (map-elt state :cursor-tool-resolve-worker)
            (map-elt state :cursor-tool-resolve-queue))))
 
-(defconst emagent-acp--dangerous-command-regexps
-  (mapconcat #'identity
-             '("\\brm[[:space:]]+-[rf]+"
-               "\\brm[[:space:]]+--recursive"
-               "\\brm[[:space:]]+--force"
-               "\\bdd[[:space:]]+"
-               "\\bmkfs\\."
-               "\\bmke2fs\\b"
-               "\\bformat[[:space:]]+"
-               "\\bshutdown\\b"
-               "\\breboot\\b"
-               "\\binit[[:space:]]+0\\b"
-               "\\bsudo[[:space:]]+rm"
-               "curl[[:space:]]+.*|.*sh\\b"
-               "\\btrash\\b"
-               "kill[[:space:]]+-9"
-               ">*/dev/[sh]d[a-z]"
-               "chmod[[:space:]]+-R[[:space:]]*777")
-             "\\|")
-  "Regexp matching shell commands that are destructive enough to prompt about.
-Auto-approve in `safe' mode skips these and prompts for confirmation.")
+(defun emagent-acp--tool-call-shell-needs-confirm-p (tool-call)
+  "Return non-nil when TOOL-CALL is execute and policy requires confirmation."
+  (when-let ((command (and (emagent-acp--tool-call-execute-p tool-call)
+                            (emagent-acp--tool-call-command-text tool-call))))
+    (emagent-policy-shell-needs-confirm-p command)))
 
 (defun emagent-acp--tool-call-command-text (tool-call)
   "Extract the command string from a tool-call ACP object."
-  (or (let ((raw (or (map-elt tool-call 'rawInput)
-                     (map-elt tool-call 'arguments))))
-        (when (stringp raw)
-          (condition-case nil
-              (let ((parsed (json-parse-string raw
-                                               :object-type 'alist
-                                               :array-type 'list
-                                               :null-object nil
-                                               :false-object nil)))
-                (or (map-elt parsed 'command)
-                    (map-elt parsed 'text)
-                    (map-elt parsed 'cmd)))
-            (error nil))))
+  (or (when-let* ((raw (or (map-elt tool-call 'rawInput)
+                           (map-elt tool-call 'arguments)))
+                  (data (emagent-acp--tool-call-normalize-data raw)))
+        (or (emagent-acp--tool-call-data-get data 'command)
+            (emagent-acp--tool-call-data-get data 'text)
+            (emagent-acp--tool-call-data-get data 'cmd)))
       (map-elt tool-call 'subtitle)
       (map-elt tool-call 'title)))
 
@@ -163,26 +292,10 @@ For reads, returns nil (the question line is enough)."
             (format "** Allow edit\n#+BEGIN_SRC sh\n%s\n#+END_SRC" command))))
        (t nil)))))
 
-(defun emagent-acp--tool-call-dangerous-p (tool-call)
-  "Return non-nil when TOOL-CALL is a shell command with destructive intent.
-Read and write tools are always safe.
-
-For execute tools, analyses the command text against known dangerous
-patterns: recursive deletes, disk writes, formatting, and similar.
-Harmless commands like `mvn compile', `git status', or `ls' pass
-through without prompting."
-  (let ((kind (and (listp tool-call) (map-elt tool-call 'kind))))
-    (when (and (stringp kind) (equal (downcase kind) "execute"))
-      (let ((command (emagent-acp--tool-call-command-text tool-call)))
-        (and (stringp command)
-             (string-match-p emagent-acp--dangerous-command-regexps command))))))
-
 (defun emagent-acp--permission-interactive-p (state)
-  "Return non-nil when ACP permission prompts may need user input.
-For `safe' auto-approve mode this returns t because the per-tool
-decision is made in `emagent-acp--handle-one-permission'."
-  (and (not (eq emagent-acp-auto-approve-permissions t))
-       (not (map-elt state :session-auto-approve))))
+  "Return non-nil when ACP permission prompts may need user input."
+  (and (not (map-elt state :session-auto-approve))
+       (not (eq emagent-acp-auto-approve-permissions t))))
 
 
 (defun emagent-acp--schedule-permission-drain (state)

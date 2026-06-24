@@ -76,7 +76,9 @@ Run \\[emagent-mode] to reconnect a saved session."
         emagent-chat-model (or emagent-chat-model (emagent-chat--read-model-property))
         emagent-chat-provider (emagent-chat-agent)
         emagent-chat-allowed-tools (or emagent-chat-allowed-tools
-                                       (emagent-chat--read-allowed-tools-property)))
+                                       (emagent-chat--read-allowed-tools-property))
+        emagent-chat-allowed-permissions (or emagent-chat-allowed-permissions
+                                            (emagent-chat--read-allowed-permissions-property)))
   (when-let ((model (or emagent-chat-model (emagent-chat--read-model-property))))
     (emagent-chat-set-model model))
   (setq-local default-directory (emagent-chat--session-directory))

@@ -21,8 +21,6 @@
 (require 'cl-lib)
 (require 'org)
 (require 'org-element)
-(require 'emagent-struct)
-(require 'emagent-elisp)
 (require 'emagent-tools-file)
 
 (declare-function emagent-tools--root-directory "emagent-tools")

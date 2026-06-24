@@ -56,12 +56,13 @@ By default emagent writes only to `emagent-log-buffer-name'."
 (defvar-local emagent-log--line-count 0
   "Cached count of lines in the emagent log buffer.")
 
-(defun emagent-log--truncate (buffer)
+(defun emagent-log--truncate (buffer lines-added)
   "Drop oldest lines in BUFFER when over `emagent-log-max-lines'.
-Uses a buffer-local counter instead of `count-lines' to avoid O(n) scanning."
+LINES-ADDED is the number of lines the latest entry inserted.  Uses a
+buffer-local counter instead of `count-lines' to avoid O(n) scanning."
   (when (and emagent-log-max-lines (> emagent-log-max-lines 0))
     (with-current-buffer buffer
-      (cl-incf emagent-log--line-count)
+      (cl-incf emagent-log--line-count lines-added)
       (when (> emagent-log--line-count emagent-log-max-lines)
         (let ((drop (- emagent-log--line-count emagent-log-max-lines)))
           (save-excursion
@@ -98,7 +99,9 @@ the end of STRING visible."
         (unless (bolp)
           (insert "\n"))
         (insert (format-time-string "[%H:%M:%S] ") text)
-        (emagent-log--truncate buffer))
+        ;; A single entry's TEXT may span multiple lines (e.g. the model
+        ;; list); count them all so the buffer trims at the real limit.
+        (emagent-log--truncate buffer (length (split-string text "\n"))))
       (when-let ((window (get-buffer-window buffer t)))
         (with-selected-window window
           (goto-char (point-max))

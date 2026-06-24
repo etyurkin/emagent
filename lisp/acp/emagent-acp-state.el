@@ -131,6 +131,7 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :permission-drain-timer nil state)
     (puthash :deferred-complete-response nil state)
     (puthash :session-auto-approve nil state)
+    (puthash :permission-auto-allow nil state)
     (puthash :external-tool-gate-reasons nil state)
     (puthash :external-tool-gate-proactive-logged nil state)
     (puthash :external-tool-refusal-logged nil state)

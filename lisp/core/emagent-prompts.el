@@ -136,16 +136,11 @@ Follow these rules to avoid them:
 1. ALWAYS call check_elisp before eval for any form longer than 3 lines.
    check_elisp validates syntax without executing — errors include line:column.
 
-2. For .el, .py, .lisp, and .cl files when tree-sitter is unavailable, call
-   check_structural_file before write_file.
-
-3. When tree-sitter is installed for a language, use structural tools only:
+2. For .el, .lisp, .cl, .scm files when lisp-sitter is available (via MCP tools starting with `structural_*`),
+   use structural tools only:
    New file: structural_insert path __start__ with the first complete node, then
    __end__ or a symbol for more. Change node: structural_tree → structural_bounds
-   → structural_replace. write_file is rejected. Without tree-sitter,
-   check_structural_file then write_file.
-
-4. Keep eval calls short: one logical operation per call (ideally under 15 lines).
+   → structural_replace. Without lisp-sitter, use write_file or check_elisp for basic editing.: one logical operation per call (ideally under 15 lines).
    Chain multiple eval calls rather than writing one monolithic form.
 
 5. Complex multi-node refactors — one structural edit per node, never write_file:
@@ -169,7 +164,7 @@ Follow these rules to avoid them:
 - To revert a write_file mistake, call undo_file — never rewrite from memory.
 - delete-file, write-file, shell-command, call-process are blocked inside eval;
   use the dedicated tools (writes use Emacs unless you enable
-  `emagent-mcp-confirm-write-file' / `emagent-acp-confirm-fs-writes').
+  `emagent-acp-confirm-fs-writes').
 - Do not read iCloud paths or other apps' container directories.
 - Before writing non-trivial Elisp, call `elisp_guide` for ready-to-use
   patterns covering strings, lists, buffers, files, JSON, org-mode, and pitfalls.
@@ -202,9 +197,9 @@ functions most useful in emagent sessions.
 ## Core rules
 
 1. **Always `check_elisp` before `eval`** for forms longer than 3 lines.
-2. **Use `check_structural_file` before `write_file`** on structural files when tree-sitter is unavailable.
-3. **Prefer structural edits** — `structural_tree`, `structural_bounds`,
-   `structural_replace`, `structural_insert` — over full-file rewrites.
+2. **Prefer lisp-sitter structural edits** when available (`structural_tree`, `structural_bounds`,
+   `structural_replace`, `structural_insert`) — over full-file rewrites.
+   When lisp-sitter is not installed, use `write_file` + `check_elisp` for basic editing.
 4. **Wrap multiple forms in `progn`** or pass them as separate eval calls.
 5. **Use `let*` for sequential bindings** — never nest more than 3 levels deep.
 6. **Return a useful string** from eval — the result is your tool output.
@@ -213,32 +208,28 @@ functions most useful in emagent sessions.
 
 ---
 
-## Structural editing (.el, .py, .lisp, .cl)
+## Structural editing (.el, .lisp, .cl, .scm)
 
-Do not patch structural files with line-based search/replace or rewrite entire files
-when changing one top-level node. Use sexp-boundary tools instead.
+When lisp-sitter is installed (check `--json tree` MCP tools are available),
+use sexp-boundary tools instead of line-based search/replace or full-file rewrites.
 
 Workflow:
 
-1. `structural_tree` — list top-level nodes (defun, function, class, ...)
-2. **New file:** `structural_insert` with `after_symbol` `__start__` and the first complete node
-3. **Add nodes:** `structural_insert` with `__end__` or an existing symbol name
-4. **Replace node:** `structural_bounds` → `structural_replace` (complete node text)
+1. `structural_tree` — list top-level forms (defun, define, class, ...)
+2. **New file:** `structural_insert` with `after_symbol` `__start__` and the first complete form
+3. **Add forms:** `structural_insert` with `__end__` or an existing symbol name
+4. **Replace form:** `structural_bounds` → `structural_replace` (complete form text)
 
 `structural_replace` and `structural_insert` validate syntax before save.
 For `.el` files, the new form is eval'd so definitions are live for `eval` immediately.
-When tree-sitter is installed, `write_file` on matching extensions is rejected.
-Without tree-sitter, fall back to `check_structural_file` then `write_file`.
 
-Never pass partial node bodies to `structural_replace` — always a complete form.
+Never pass partial form bodies to `structural_replace` — always a complete s-expression.
 
 ### Multi-node refactors
 
-When changing several top-level nodes, plan with `structural_tree`, then apply one
-structural edit per node. Each call validates and saves independently — a mistake
-only affects one node. Finish with `check_structural_file`. Do not rewrite the whole
-file with `write_file` or load a generated blob with `load-file`; that bypasses the
-safest path exactly when syntax errors are most likely.
+When changing several top-level forms, plan with `structural_tree`, then apply one
+structural edit per form. Each call validates and saves independently — a mistake
+only affects one form. Do not rewrite the whole file with `write_file`.
 
 ---
 
@@ -546,39 +537,27 @@ structural_insert path: foo.el
 ```"
   "Emacs Lisp reference guide served to the agent via the `elisp_guide' MCP tool.")
 
-(declare-function emagent-struct-active-plugins "emagent-struct")
-
-(defun emagent-prompts--structural-plugin-summary (plugin)
-  "Return a one-line summary of PLUGIN for the system prompt."
-  (pcase (plist-get plugin :id)
-    ('elisp ".el (forms eval'd after structural save)")
-    ('python ".py")
-    ('commonlisp ".lisp, .cl")
-    (id (symbol-name id))))
+(declare-function emagent-struct-available-p "emagent-struct")
 
 (defun emagent-prompts--structural-policy ()
   "Return structural editing rules for the system prompt."
   (require 'emagent-struct)
-  (let ((plugins (emagent-struct-active-plugins)))
-    (if plugins
-        (concat "
-
-## Structural editing (tree-sitter active)
-
-Tree-sitter is active for: "
-                (mapconcat #'emagent-prompts--structural-plugin-summary plugins ", ")
-                ".
-
-Use structural_tree, structural_bounds, structural_replace, structural_insert — not write_file.
-Anchors: __start__ (new/empty file), __end__ (append). One complete top-level node per edit.
-Finish with check_structural_file.")
+  (if (emagent-struct-available-p)
       "
 
-## Structural editing (text fallback)
+## Structural editing (lisp-sitter active)
 
-Tree-sitter grammars are not installed for structural plugins (.el, .py, .lisp, .cl).
-Prefer structural tools when available; otherwise validate then write_file.
-Install grammars (see README) for enforced structural-only edits.")))
+lisp-sitter is available for .el, .lisp, .cl, .scm files.
+
+Use structural_tree, structural_bounds, structural_replace, structural_insert — not write_file.
+Anchors: __start__ (new/empty file), __end__ (append). One complete top-level form per edit.
+Finish with check_structural_file."
+    "
+
+## Structural editing (lisp-sitter not installed)
+
+Install lisp-sitter (see README) for structural Lisp editing.
+Without it, use write_file + check_elisp for basic .el editing."))
 
 (defconst emagent-acp-system-prompt-gateway
   "

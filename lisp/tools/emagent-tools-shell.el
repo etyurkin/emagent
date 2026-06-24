@@ -198,30 +198,31 @@ Uses pure Emacs search when `emagent-acp-prefer-emacs' is non-nil."
       "No matches")))
 
 (defun emagent-tools--run-git (&rest args)
-  "Run git ARGS in `default-directory' and return stdout."
+  "Run git ARGS in the session project directory and return stdout."
   (unless (executable-find "git")
     (user-error "git not found on PATH"))
-  (with-temp-buffer
-    (apply #'call-process "git" nil t nil args)
-    (buffer-string)))
+  (let ((default-directory (emagent-tools--root-directory nil)))
+    (with-temp-buffer
+      (apply #'call-process "git" nil t nil args)
+      (buffer-string))))
 
 (defun emagent-tool-git-status ()
   "Return git status for the session project directory."
-  (string-trim (apply #'emagent-tools--run-git "status" "--short" "--branch")))
+  (string-trim (emagent-tools--run-git "status" "--short" "--branch")))
 
 (defun emagent-tool-git-diff (&optional args)
   "Return git diff output.  Optional ARGS is extra git diff arguments."
   (string-trim
    (if (and args (not (string-empty-p args)))
        (apply #'emagent-tools--run-git "diff" (split-string args "[[:space:]]+" t))
-     (apply #'emagent-tools--run-git "diff"))))
+     (emagent-tools--run-git "diff"))))
 
 (defun emagent-tool-git-log (&optional args)
   "Return git log output.  Optional ARGS is extra git log arguments."
   (string-trim
    (if (and args (not (string-empty-p args)))
        (apply #'emagent-tools--run-git "log" (split-string args "[[:space:]]+" t))
-     (apply #'emagent-tools--run-git "log" "--oneline" "-n" "20"))))
+     (emagent-tools--run-git "log" "--oneline" "-n" "20"))))
 
 (defun emagent-tool-org-move-subtree-to-parent ()
   "Move org subtree at point to its parent section after confirmation."
