@@ -124,6 +124,7 @@ messages arrive while a drain is already in progress."
            (pending-input "")
            (message-queue nil)
            (message-queue-busy nil)
+           (drain-pending nil)
            (process-environment (append (map-elt client :environment-variables)
                                         process-environment))
            (stderr-buffer (get-buffer-create
@@ -162,6 +163,7 @@ messages arrive while a drain is already in progress."
                       (error (emagent-acp--log client "REQUEST HANDLER ERROR"
                                        "Failed: %S" err))))))))
            (drain ()
+             (setq drain-pending nil)
              (unless message-queue-busy
                (setq message-queue-busy t)
                (unwind-protect
@@ -170,10 +172,15 @@ messages arrive while a drain is already in progress."
                        (setq message-queue (cdr message-queue))
                        (route incoming)))
                  (setq message-queue-busy nil))
-               (when message-queue (drain))))
+               (when message-queue
+                 (unless drain-pending
+                   (setq drain-pending t)
+                   (run-with-timer 0 nil (lambda () (drain)))))))
            (enqueue (incoming)
              (setq message-queue (append message-queue (list incoming)))
-             (drain)))
+             (unless drain-pending
+               (setq drain-pending t)
+               (run-with-timer 0 nil (lambda () (drain))))))
         (let ((proc
                (let ((default-directory dir))
                  (make-process

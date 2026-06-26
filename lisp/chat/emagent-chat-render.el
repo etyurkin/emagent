@@ -392,193 +392,152 @@ Return non-nil when a line was updated."
   "Show or update a tool-call line for ACP toolCallId ID with LABEL."
   (emagent-chat--append-tool-line label id))
 
-(defun emagent-chat-permission-prompt (question choices &optional tool-call)
+(defun emagent-chat-permission-prompt (question choices callback &optional tool-call)
   "Show QUESTION inside the Thinking block; CHOICES as buttons below #+end_quote.
 When TOOL-CALL is non-nil and has a command or content, a formatted org
 subsection is inserted between the question line and the buttons.
 
-CHOICES is a list of (LABEL . VALUE) pairs.  Blocks via `recursive-edit'
-until a button is clicked or C-g is pressed; removes the question line,
-content block, and buttons afterward.  Returns the VALUE of the clicked
-button, or nil on C-g.
+CHOICES is a list of (LABEL . VALUE) pairs.  Non-blocking: inserts the dialog
+and returns immediately.  CALLBACK is called with the chosen VALUE when a
+button is clicked.
 
-Keyboard shortcuts (active only during the prompt, via `overriding-local-map'):
-  y / RET  — Allow once
-  s        — Allow for session (this kind of request)
-  w        — Allow always (persist in buffer header)
-  a        — Allow all (session)
-  n        — Deny
-  q        — Cancel (same as C-g)"
+Keyboard shortcuts (via keymap text property on the buttons line):
+  y / RET  — Allow once    s — Allow for session
+  w        — Allow always  a — Allow all (session)
+  n        — Deny"
   (when (emagent-chat--open-response-p)
-    (let ((result nil)
-          (buf (current-buffer))
+    (let ((buf (current-buffer))
+          (responded nil)
+          btn-keymap
           question-beg question-end
           content-beg content-end
-          buttons-beg buttons-end
-          key-map)
-      ;; Build keymap for keyboard shortcuts in the body so the
-      ;; byte-compiler sees `result' as a lexical variable caught
-      ;; by the key-binding closures.
-      (setq key-map
-            (let ((map (make-sparse-keymap)))
-              (define-key map (kbd "y")
-                (lambda () (interactive) (setq result :allow-once) (exit-recursive-edit)))
-              (define-key map (kbd "RET")
-                (lambda () (interactive) (setq result :allow-once) (exit-recursive-edit)))
-              (define-key map (kbd "s")
-                (lambda () (interactive) (setq result :allow-session) (exit-recursive-edit)))
-              (define-key map (kbd "w")
-                (lambda () (interactive) (setq result :allow-always) (exit-recursive-edit)))
-              (define-key map (kbd "a")
-                (lambda () (interactive) (setq result :allow-all) (exit-recursive-edit)))
-              (define-key map (kbd "n")
-                (lambda () (interactive) (setq result :deny) (exit-recursive-edit)))
-              (define-key map (kbd "q")
-                (lambda () (interactive) (keyboard-quit)))
-              (dolist (choice choices)
-                (let* ((val (cdr choice))
-                       (id (and (stringp val) (downcase val))))
-                  (cond
-                   ((eq val :allow-once)
-                    (define-key map (kbd "y")
-                      (lambda () (interactive) (setq result :allow-once) (exit-recursive-edit))))
-                   ((eq val :allow-session)
-                    (define-key map (kbd "s")
-                      (lambda () (interactive) (setq result :allow-session) (exit-recursive-edit))))
-                   ((eq val :allow-always)
-                    (define-key map (kbd "w")
-                      (lambda () (interactive) (setq result :allow-always) (exit-recursive-edit))))
-                   ((eq val :allow-all)
-                    (define-key map (kbd "a")
-                      (lambda () (interactive) (setq result :allow-all) (exit-recursive-edit))))
-                   ((eq val :deny)
-                    (define-key map (kbd "n")
-                      (lambda () (interactive) (setq result :deny) (exit-recursive-edit))))
-                   ((and id (string-match-p "allow_always\\|always" id))
-                    (define-key map (kbd "w")
-                      (lambda () (interactive) (setq result val) (exit-recursive-edit))))
-                   ((and id (string-match-p "allow\\|yes\\|run" id))
-                    (define-key map (kbd "y")
-                      (lambda () (interactive) (setq result val) (exit-recursive-edit))))
-                   ((and id (string-match-p "deny\\|no\\|reject" id))
-                    (define-key map (kbd "n")
-                      (lambda () (interactive) (setq result val) (exit-recursive-edit)))))))
-              map))
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          (emagent-chat--writable)
-          (emagent-chat--ensure-response-markers)
-          (emagent-chat--ensure-reasoning-scaffold)
-          (emagent-chat--ensure-reasoning-end-quote)
-          (if-let ((insert-at (emagent-chat--reasoning-stream-marker)))
-              (progn
-                (goto-char insert-at)
-                ;; Capture the begin marker before the leading newline so
-                ;; cleanup deletes that newline too (otherwise blank lines
-                ;; accumulate in the Thinking block across prompts).
-                (setq question-beg (copy-marker (point) nil))
-                (unless (bolp) (insert "\n"))
-                (insert (emagent-chat--format-permission-line question))
-                (put-text-property (marker-position question-beg) (point)
-                                   'face 'emagent-permission-prompt)
-                (emagent-chat--repair-tool-line-faces (marker-position question-beg) (point))
-                (insert "\n")
-                (setq question-end (copy-marker (point) nil))
-                ;; Insert content block (command, edit, etc.) when available.
-                (when-let ((block (and tool-call
-                                       (fboundp 'emagent-acp--tool-call-content-block)
-                                       (emagent-acp--tool-call-content-block tool-call))))
-                  (goto-char (or (emagent-chat--reasoning-block-tail)
+          buttons-beg buttons-end)
+      (let ((cleanup
+             (lambda ()
+               (with-current-buffer buf
+                 (let ((inhibit-read-only t))
+                   (emagent-chat--writable)
+                   (when (and question-beg question-end
+                              (marker-buffer question-beg) (marker-buffer question-end))
+                     (delete-region (marker-position question-beg) (marker-position question-end)))
+                   (when (and buttons-beg buttons-end
+                              (marker-buffer buttons-beg) (marker-buffer buttons-end))
+                     (delete-region (marker-position buttons-beg) (marker-position buttons-end)))
+                   (when (and content-beg content-end
+                              (marker-buffer content-beg) (marker-buffer content-end))
+                     (delete-region (marker-position content-beg) (marker-position content-end)))
+                   (when-let ((stream (emagent-chat--reasoning-stream-marker)))
+                     (setq emagent-chat--thought-marker stream)))))))
+        (with-current-buffer buf
+          (let ((inhibit-read-only t))
+            (emagent-chat--writable)
+            (emagent-chat--ensure-response-markers)
+            (emagent-chat--ensure-reasoning-scaffold)
+            (emagent-chat--ensure-reasoning-end-quote)
+            (if-let ((insert-at (emagent-chat--reasoning-stream-marker)))
+                (progn
+                  (goto-char insert-at)
+                  (setq question-beg (copy-marker (point) nil))
+                  (unless (bolp) (insert "\n"))
+                  (insert (emagent-chat--format-permission-line question))
+                  (put-text-property (marker-position question-beg) (point)
+                                     'face 'emagent-permission-prompt)
+                  (emagent-chat--repair-tool-line-faces (marker-position question-beg) (point))
+                  (insert "\n")
+                  (setq question-end (copy-marker (point) nil))
+                  (when-let ((block (and tool-call
+                                         (fboundp 'emagent-acp--tool-call-content-block)
+                                         (emagent-acp--tool-call-content-block tool-call))))
+                    (goto-char (or (emagent-chat--reasoning-block-tail)
+                                   (marker-position question-end)))
+                    (setq content-beg (copy-marker (point) nil))
+                    (unless (and (bolp)
+                                 (save-excursion
+                                   (forward-line -1)
+                                   (and (bolp) (not (looking-at "^#\\+end_quote")))))
+                      (insert "\n"))
+                    (insert block "\n")
+                    (setq content-end (copy-marker (point) nil)))
+                  (goto-char (or (and content-end (marker-position content-end))
+                                 (emagent-chat--reasoning-block-tail)
                                  (marker-position question-end)))
-                  (setq content-beg (copy-marker (point) nil))
+                  (setq buttons-beg (copy-marker (point) nil))
                   (unless (and (bolp)
                                (save-excursion
                                  (forward-line -1)
                                  (and (bolp) (not (looking-at "^#\\+end_quote")))))
                     (insert "\n"))
-                  (insert block "\n")
-                  (setq content-end (copy-marker (point) nil)))
-                ;; Move to insertion point for buttons.
-                (goto-char (or (and content-end (marker-position content-end))
-                               (emagent-chat--reasoning-block-tail)
-                               (marker-position question-end)))
-                (setq buttons-beg (copy-marker (point) nil))
-                (unless (and (bolp)
-                             (save-excursion
-                               (forward-line -1)
-                               (and (bolp) (not (looking-at "^#\\+end_quote")))))
-                  (insert "\n"))
-                (let ((allow-once-shown nil)
-                      (allow-always-shown nil)
-                      (deny-shown nil))
-                  (dolist (choice choices)
-                    (let* ((val (cdr choice))
-                           (id (and (stringp val) (downcase val)))
-                           (key-hint (cond
-                                      ((eq val :allow-once)
-                                       (setq allow-once-shown t) "y")
-                                      ((eq val :allow-session) "s")
-                                      ((eq val :allow-always)
-                                       (setq allow-always-shown t) "w")
-                                      ((eq val :allow-all) "a")
-                                      ((eq val :deny)
-                                       (setq deny-shown t) "n")
-                                      ((and (not allow-always-shown) id
-                                            (string-match-p "allow_always\\|always" id))
-                                       (setq allow-always-shown t) "w")
-                                      ((and (not allow-once-shown) id
-                                            (string-match-p "allow\\|yes\\|run" id))
-                                       (setq allow-once-shown t) "y")
-                                      ((and (not deny-shown) id
-                                            (string-match-p "deny\\|no\\|reject" id))
-                                       (setq deny-shown t) "n")
-                                      (t nil))))
-                    (insert-button (concat "[" (car choice) "]")
-                                   'action (let ((v (cdr choice)))
-                                             (lambda (_b)
-                                               (setq result v)
-                                               (exit-recursive-edit)))
-                                   'follow-link t)
-                    (when key-hint
-                      (insert (propertize (format " [%s]" key-hint) 'face 'shadow)))
-                    (insert "  "))))
-                (insert (propertize " [C-g]" 'face 'shadow) " cancel")
-                (insert "\n")
-                (setq buttons-end (copy-marker (point) nil)))
-            (setq question-beg nil content-beg nil buttons-beg nil))))
-      (if (not buttons-beg)
-          (setq result (emagent-tools--buttons-prompt question choices buf))
-        (when-let ((win (get-buffer-window buf)))
-          (with-selected-window win
-            (when (and buttons-end (marker-position buttons-end))
-              (goto-char (marker-position buttons-end))
-              (recenter -3))))
-        (unwind-protect
-            (condition-case nil
-                (let ((overriding-local-map key-map))
-                  (recursive-edit))
-              (quit nil))
-          (with-current-buffer buf
-            (let ((inhibit-read-only t))
-              (emagent-chat--writable)
-              (when (and question-beg question-end
-                         (marker-buffer question-beg)
-                         (marker-buffer question-end))
-                (delete-region (marker-position question-beg)
-                               (marker-position question-end)))
-              (when (and buttons-beg buttons-end
-                         (marker-buffer buttons-beg)
-                         (marker-buffer buttons-end))
-                (delete-region (marker-position buttons-beg)
-                               (marker-position buttons-end)))
-              (when (and content-beg content-end
-                         (marker-buffer content-beg)
-                         (marker-buffer content-end))
-                (delete-region (marker-position content-beg)
-                               (marker-position content-end)))
-              (when-let ((stream (emagent-chat--reasoning-stream-marker)))
-                (setq emagent-chat--thought-marker stream))))))
-      result)))
+                  (setq btn-keymap (make-sparse-keymap))
+                  (set-keymap-parent btn-keymap button-map)
+                  ;; Build key-hints alist and populate btn-keymap first
+                  (let* ((allow-once-shown nil) (allow-always-shown nil) (deny-shown nil)
+                         (hints
+                          (mapcar
+                           (lambda (choice)
+                             (let* ((val (cdr choice))
+                                    (id (and (stringp val) (downcase val)))
+                                    (kh (cond
+                                         ((eq val :allow-once) (setq allow-once-shown t) "y")
+                                         ((eq val :allow-session) "s")
+                                         ((eq val :allow-always) (setq allow-always-shown t) "w")
+                                         ((eq val :allow-all) "a")
+                                         ((eq val :deny) (setq deny-shown t) "n")
+                                         ((and (not allow-always-shown) id
+                                               (string-match-p "allow_always\\|always" id))
+                                          (setq allow-always-shown t) "w")
+                                         ((and (not allow-once-shown) id
+                                               (string-match-p "allow\\|yes\\|run" id))
+                                          (setq allow-once-shown t) "y")
+                                         ((and (not deny-shown) id
+                                               (string-match-p "deny\\|no\\|reject" id))
+                                          (setq deny-shown t) "n")
+                                         (t nil))))
+                               (when kh
+                                 (define-key btn-keymap (kbd kh)
+                                             (let ((v val))
+                                               (lambda ()
+                                                 (interactive)
+                                                 (unless responded
+                                                   (setq responded t)
+                                                   (funcall cleanup)
+                                                   (funcall callback v))))))
+                               kh))
+                           choices)))
+                    ;; Now insert buttons with btn-keymap as their keymap
+                    (cl-mapc
+                     (lambda (choice kh)
+                       (let ((val (cdr choice)))
+                         (insert-button
+                          (concat "[" (car choice) "]")
+                          'keymap btn-keymap
+                          'action
+                          (let ((v val))
+                            (lambda (_b)
+                              (unless responded
+                                (setq responded t)
+                                (funcall cleanup)
+                                (funcall callback v))))
+                          'follow-link t)
+                         (when kh
+                           (insert (propertize (format " [%s]" kh) 'face 'shadow)))
+                         (insert "  ")))
+                     choices hints))
+                  (insert "\n")
+                  (setq buttons-end (copy-marker (point) nil)))
+              (setq question-beg nil content-beg nil buttons-beg nil))))
+        (if (not buttons-beg)
+            (let ((preamble (concat
+                             "\n** Request permissions\n"
+                             (when-let ((block (and tool-call
+                                                    (fboundp 'emagent-acp--tool-call-content-block)
+                                                    (emagent-acp--tool-call-content-block tool-call))))
+                               (concat block "\n")))))
+              (emagent-tools--buttons-prompt question choices buf callback preamble))
+          (when-let ((win (get-buffer-window buf)))
+            (with-selected-window win
+              (when (and buttons-beg (marker-position buttons-beg))
+                (goto-char (marker-position buttons-beg))
+                (recenter -3)))))))))
 
 (defun emagent-chat-append-assistant (text)
   "Append TEXT to the current emagent response section."

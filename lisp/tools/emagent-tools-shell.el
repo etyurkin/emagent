@@ -229,8 +229,6 @@ Uses pure Emacs search when `emagent-acp-prefer-emacs' is non-nil."
   (interactive)
   (unless (derived-mode-p 'org-mode)
     (user-error "Not in org-mode"))
-  (unless (emagent-tools--confirm-p 'emagent-tool-org-move-subtree-to-parent)
-    (user-error "Move cancelled"))
   (org-cut-subtree)
   (org-up-element)
   (org-paste-subtree)

@@ -106,70 +106,79 @@ of in the minibuffer.  Bound per MCP dispatch by `emagent-mcp--run-tool'.")
 ACP chat sessions use `session/request_permission' instead; a second MCP
 prompt would not block the agent and is ignored.")
 
-(defconst emagent-tools--permission-choices
-  '((?y "yes" "Allow this call only")
-    (?a "allow all" "Always allow this tool; save it to the document header")
-    (?n "no" "Decline this call"))
-  "Choices offered when confirming an emagent tool call.")
 
-(defun emagent-tools--read-permission (prompt)
-  "Ask the user PROMPT and return `yes', `all', or `no'."
-  (pcase (car (read-multiple-choice prompt emagent-tools--permission-choices))
-    (?y 'yes)
-    (?a 'all)
-    (_ 'no)))
-
-(defun emagent-tools--buttons-prompt (prompt choices chat-buffer &optional preamble)
+(defun emagent-tools--buttons-prompt (prompt choices chat-buffer callback &optional preamble)
   "Insert optional PREAMBLE, PROMPT, and CHOICES as buttons in CHAT-BUFFER.
-CHOICES is a list of (LABEL . VALUE) pairs.  Blocks via `recursive-edit'
-until a button is clicked or C-g is pressed; removes the entire inserted
-block (preamble + prompt + buttons) afterward.
-Returns the VALUE of the clicked button, or nil on C-g.
-Falls back to `completing-read' when CHAT-BUFFER is nil or dead."
+CHOICES is a list of (LABEL . VALUE) pairs.  Non-blocking: inserts the dialog
+and returns immediately.  CALLBACK is called with the VALUE when a button is
+clicked.  Falls back to `completing-read' (synchronous) when CHAT-BUFFER is
+nil or dead, calling CALLBACK with the chosen value."
   (if (not (and chat-buffer (buffer-live-p chat-buffer)))
       (let* ((labels (mapcar #'car choices))
              (label (completing-read (concat prompt " ") labels nil t)))
-        (cdr (assoc label choices)))
-    (let ((result nil) start-mark end-mark)
-      (with-current-buffer chat-buffer
-        (let ((inhibit-read-only t))
-          (when (fboundp 'emagent-chat--writable)
-            (funcall #'emagent-chat--writable))
-          (goto-char (point-max))
-          (unless (bolp) (insert "\n"))
-          (setq start-mark (copy-marker (point) nil))
-          (when preamble (insert preamble))
-          (insert "\n" prompt "\n")
-          (dolist (choice choices)
-            (insert-button (concat "[" (car choice) "]")
-                           'action (let ((v (cdr choice)))
-                                     (lambda (_b)
-                                       (setq result v)
-                                       (exit-recursive-edit)))
-                           'follow-link t)
-            (insert "  "))
-          (insert "\n")
-          (setq end-mark (copy-marker (point) nil))))
-      (when-let ((win (get-buffer-window chat-buffer)))
-        (with-selected-window win
-          (when (with-current-buffer chat-buffer
-                  (pos-visible-in-window-p (point-max) nil t))
-            (goto-char (marker-position end-mark))
-            (recenter -3))))
-      (unwind-protect
-          (condition-case nil
-              (recursive-edit)
-            (quit nil))
-        (when (and start-mark end-mark
-                   (marker-buffer start-mark)
-                   (marker-buffer end-mark))
-          (with-current-buffer chat-buffer
-            (let ((inhibit-read-only t))
-              (when (fboundp 'emagent-chat--writable)
-                (funcall #'emagent-chat--writable))
-              (delete-region (marker-position start-mark)
-                             (marker-position end-mark))))))
-      result)))
+        (funcall callback (cdr (assoc label choices))))
+    (let (start-mark end-mark btn-start (responded nil))
+      (let ((do-respond
+             (lambda (v)
+               (unless responded
+                 (setq responded t)
+                 (when (and start-mark end-mark
+                            (marker-buffer start-mark)
+                            (marker-buffer end-mark))
+                   (with-current-buffer chat-buffer
+                     (let ((inhibit-read-only t))
+                       (when (fboundp 'emagent-chat--writable)
+                         (funcall #'emagent-chat--writable))
+                       (delete-region (marker-position start-mark)
+                                      (marker-position end-mark)))))
+                 (funcall callback v)))))
+        (with-current-buffer chat-buffer
+          (let ((inhibit-read-only t))
+            (when (fboundp 'emagent-chat--writable)
+              (funcall #'emagent-chat--writable))
+            (goto-char (point-max))
+            (unless (bolp) (insert "\n"))
+            (setq start-mark (copy-marker (point) nil))
+            (when preamble (insert preamble))
+            (insert "\n" prompt "\n")
+            ;; Build keymap with all shortcuts BEFORE inserting buttons,
+            ;; then pass it to each insert-button so the button's own
+            ;; overlay keymap contains our shortcuts (higher priority than
+            ;; any external overlay we add afterward).
+            (let ((btn-keymap (make-sparse-keymap)))
+              (setq btn-start (copy-marker (point) nil))
+              (set-keymap-parent btn-keymap button-map)
+              ;; First pass: define all shortcuts in btn-keymap
+              (dolist (choice choices)
+                (let* ((v (cdr choice))
+                       (key (cond
+                             ((memq v '(yes :allow-once)) "y")
+                             ((memq v '(no :deny))        "n")
+                             ((eq v :allow-session)       "s")
+                             ((eq v :allow-always)        "w")
+                             ((memq v '(all :allow-all))  "a")
+                             (t nil))))
+                  (when key
+                    (define-key btn-keymap (kbd key)
+                                (let ((vv v))
+                                  (lambda () (interactive) (funcall do-respond vv)))))))
+              ;; Second pass: insert buttons with btn-keymap as their keymap
+              (dolist (choice choices)
+                (let ((v (cdr choice)))
+                  (insert-button
+                   (concat "[" (car choice) "]")
+                   'keymap btn-keymap
+                   'action (lambda (_b) (funcall do-respond v))
+                   'follow-link t)
+                  (insert "  ")))
+              (insert "\n")
+              (setq end-mark (copy-marker (point) nil)))))
+        (when-let ((win (get-buffer-window chat-buffer)))
+          (with-selected-window win
+            (when (with-current-buffer chat-buffer
+                    (pos-visible-in-window-p (point-max) nil t))
+              (goto-char (marker-position btn-start))
+              (recenter -3))))))))
 
 (defun emagent-tools--remember-allowed-tool (tool-name)
   "Record TOOL-NAME as allowed for this session and persist it when possible."
@@ -183,34 +192,6 @@ Falls back to `completing-read' when CHAT-BUFFER is nil or dead."
   (or (memq tool-name emagent-allowed-tools)
       (memq tool-name emagent-tools--session-allowed-tools)))
 
-(defun emagent-tools--confirm (tool-name prompt)
-  "Return non-nil when TOOL-NAME may run, prompting with PROMPT if needed.
-
-When `emagent-tools--acp-session-p' is set, return t — ACP handles permission."
-  (or emagent-tools--acp-session-p
-      (emagent-tools--allowed-p tool-name)
-      (if (and emagent-tools--chat-buffer
-               (buffer-live-p emagent-tools--chat-buffer))
-          (pcase (emagent-tools--buttons-prompt
-                  prompt
-                  '(("Allow" . yes) ("Allow all" . all) ("Deny" . no))
-                  emagent-tools--chat-buffer)
-            ('yes t)
-            ('all (emagent-tools--remember-allowed-tool tool-name) t)
-            (_ nil))
-        (pcase (emagent-tools--read-permission prompt)
-          ('yes t)
-          ('all (emagent-tools--remember-allowed-tool tool-name) t)
-          (_ nil)))))
-
-(defun emagent-tools--confirm-p (tool-name)
-  "Return non-nil when TOOL-NAME may run without confirmation."
-  (emagent-tools--confirm tool-name (format "Run emagent tool %s? " tool-name)))
-
-(defun emagent-tools--confirm-action-p (tool-name detail)
-  "Like `emagent-tools--confirm-p' but include DETAIL in the prompt."
-  (emagent-tools--confirm
-   tool-name (format "Allow emagent tool %s: %s? " tool-name detail)))
 
 (defun emagent-tools--write-diff-string (resolved new-content)
   "Return a unified diff string comparing RESOLVED with NEW-CONTENT, or nil."
@@ -246,13 +227,15 @@ When `emagent-tools--acp-session-p' is set, return t — ACP handles permission.
   (if (or emagent-tools--acp-session-p (emagent-tools--allowed-p tool-name))
       t
     (let* ((diff (emagent-tools--write-diff-string resolved new-content))
-           (preamble (when diff
-                       (format "\n#+begin_src diff\n%s#+end_src" diff))))
-      (pcase (emagent-tools--buttons-prompt
-              (format "Write %s?" (file-name-nondirectory resolved))
-              '(("Allow" . yes) ("Allow all" . all) ("Deny" . no))
-              chat-buffer
-              preamble)
+           (preamble (when diff (format "\n#+begin_src diff\n%s#+end_src" diff)))
+           (choice nil))
+      (emagent-tools--buttons-prompt
+       (format "Write %s?" (file-name-nondirectory resolved))
+       '(("Allow" . yes) ("Allow all" . all) ("Deny" . no))
+       chat-buffer
+       (lambda (v) (setq choice v))
+       preamble)
+      (pcase choice
         ('all (emagent-tools--remember-allowed-tool tool-name) t)
         ('yes t)
         (_ nil)))))
@@ -275,12 +258,13 @@ When `emagent-tools--acp-session-p' is set, return t — ACP handles permission.
              (prompt (format "Eval contains: *%s*" ops)))
         (if (and emagent-tools--chat-buffer
                  (buffer-live-p emagent-tools--chat-buffer))
-            (eq 'yes
-                (emagent-tools--buttons-prompt
-                 prompt
-                 '(("Allow" . yes) ("Deny" . no))
-                 emagent-tools--chat-buffer
-                 preamble))
+            (let (result)
+              (emagent-tools--buttons-prompt
+               prompt '(("Allow" . yes) ("Deny" . no))
+               emagent-tools--chat-buffer
+               (lambda (v) (setq result v))
+               preamble)
+              (eq 'yes result))
           (y-or-n-p (format "Eval contains %s — allow? " ops))))))
 
 (defun emagent-tools--eval-form-check (form-str)
@@ -445,6 +429,8 @@ Call this before writing non-trivial Elisp."
 
 (defun emagent-tool-structural-replace (file symbol new-body)
   "Replace top-level node SYMBOL in FILE with complete NEW-BODY text."
+  (when-let ((err (emagent-tools--eval-form-guard new-body)))
+    (user-error "%s" err))
   (let* ((content (emagent-tools--read-structural-file-content file))
          (updated (emagent-struct-replace content file symbol new-body)))
     (emagent-tools--write-file-content file updated)
@@ -454,6 +440,8 @@ Call this before writing non-trivial Elisp."
 
 (defun emagent-tool-structural-insert (file after-symbol node)
   "Insert complete top-level NODE after AFTER-SYMBOL in FILE."
+  (when-let ((err (emagent-tools--eval-form-guard node)))
+    (user-error "%s" err))
   (let* ((content (emagent-tools--read-structural-file-content file))
          (updated (emagent-struct-insert content file after-symbol node)))
     (emagent-tools--write-file-content file updated)

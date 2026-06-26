@@ -388,8 +388,9 @@ instead; emagent then writes whatever port it gets into the agent config."
          '()
          (lambda (_args)
            (emagent-tool-elisp-guide))))
-  "Registry of emagent MCP tools: (NAME DESCRIPTION PROPERTIES REQUIRED HANDLER . PLIST).
-PLIST may have :available (a function returning non-nil when the tool may be listed).")
+  "Registry of emagent MCP tools.
+Each entry: (NAME DESCRIPTION PROPERTIES REQUIRED HANDLER . PLIST).
+PLIST may have :available, a predicate returning non-nil to show the tool.")
 
 (defun emagent-mcp--tool-available-p (entry)
   "Return non-nil when ENTRY is available (no :available predicate, or it passes)."
@@ -423,10 +424,9 @@ Only includes tools whose :available predicate passes."
   `((tools . ,(apply #'vector
                      (mapcar
                       (lambda (entry)
-                        (cl-destructuring-bind (name description properties required _handler &rest _) entry
-                          `((name . ,name)
-                            (description . ,description)
-                            (inputSchema . ,(emagent-mcp--tool-schema properties required)))))
+                        `((name . ,(nth 0 entry))
+                          (description . ,(nth 1 entry))
+                          (inputSchema . ,(emagent-mcp--tool-schema (nth 2 entry) (nth 3 entry)))))
                       (seq-filter #'emagent-mcp--tool-available-p emagent-mcp--tools))))))
 
 ;;;; Tool dispatch (runs in the live Emacs, bound to the session context)
@@ -462,7 +462,7 @@ Only includes tools whose :available predicate passes."
            (emagent-tools-allow-all-function
             (emagent-mcp--make-allow-all-fn buffer))
            (emagent-tools--chat-buffer buffer)
-           (emagent-tools--acp-session-p (emagent-mcp--acp-session-p session))
+           (emagent-tools--acp-session-p t)
            (emagent-acp-prefer-emacs (if session
                                          (plist-get session :prefer-emacs)
                                        (and (boundp 'emagent-acp-prefer-emacs)

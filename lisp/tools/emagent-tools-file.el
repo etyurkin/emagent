@@ -20,6 +20,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'emagent-log)
+(require 'emagent-elisp)
 
 (defvar auto-insert)
 
@@ -102,6 +103,10 @@ Each call is recorded as a single undoable change in the target buffer."
          (buffer (or (find-buffer-visiting resolved)
                      (let ((auto-insert nil))
                        (find-file-noselect resolved)))))
+    (when (and emagent-elisp-validate-on-write
+               (emagent-elisp-elisp-file-p resolved))
+      (when-let ((err (emagent-elisp--validate-content-strict content resolved)))
+        (user-error "Validation failed for %s: %s" resolved err)))
     (when (and dir (not (file-exists-p dir)))
       (make-directory dir t))
     (with-temp-buffer
