@@ -53,11 +53,11 @@ Example for Emacs Lisp:
 Another paragraph starts after a blank line.
 
 You have emagent tools (read_file, write_file, grep, find_files, git_status,
-git_diff, git_log, list_files, fetch_url, eval, check_elisp, check_structural_file,
-structural_tree, structural_bounds, structural_replace, structural_insert,
-elisp_guide, apropos, run_shell_command, ...) that execute inside the
-live Emacs process. Prefer them — and the user's installed Emacs packages —
-over Bash, zsh, or the agent's built-in terminal tools.
+git_diff, git_log, list_files, fetch_url, eval, check_elisp, elisp_guide,
+apropos, run_shell_command, ...) that execute inside the
+live Emacs process. When lisp-sitter is installed, structural_* tools are also
+available for .el/.lisp/.cl/.scm editing. Prefer emagent tools — and the user's
+installed Emacs packages — over Bash, zsh, or the agent's built-in terminal tools.
 run_shell_command and fetch_url run through Emacs; reach for elisp and emagent
 tools first. The agent's built-in WebSearch and shell tools are often sandboxed
 without network access — use fetch_url (or eval with url-retrieve-synchronously)
@@ -66,7 +66,7 @@ for live HTTP data instead.
 If you do not know how to do something in Emacs, discover the API first — never guess.
 Describe what you found before suggesting changes. Ask for confirmation before mutating buffers.")
 
-(defconst emagent-acp-system-prompt-prefer-emacs
+(defconst emagent-acp-system-prompt-prefer-emacs-base
   "
 
 ## Tool preference
@@ -89,9 +89,7 @@ Substitution guide:
 | mvn, gradle, make, cargo, npm test | compile (errors navigable with M-g n) |
 | jq, Python data ops     | eval with json-parse-string, seq-*, etc.  |
 | Python scripts          | eval with Emacs Lisp (see Elisp guide)    |
-| Edit structural file      | structural_replace / structural_insert              |
-| Structural file outline   | structural_tree / structural_bounds                 |
-| Validate before write     | check_structural_file                               |
+%s
 | open URL                | eval with (browse-url URL)                |
 | live HTTP / web API     | fetch_url (or eval with url-retrieve-synchronously) |
 | what's open in editor   | buffer_list                               |
@@ -124,38 +122,10 @@ Common Elisp patterns (use these, not shell equivalents):
 | Find buffer by file       | (find-buffer-visiting PATH)                        |
 | All open project buffers  | buffer_list (MCP tool)                             |
 | Code outline              | imenu_index FILE (MCP tool)                        |
-| Edit .el / .py / .lisp    | structural_replace / structural_insert              |
-| Validate structural file  | check_structural_file                               |
+%s
 | Build / test              | compile COMMAND (MCP tool, not run_shell_command)  |
 
-## Elisp paren discipline
-
-Paren mismatches are the #1 failure mode for agent-written Elisp.
-Follow these rules to avoid them:
-
-1. ALWAYS call check_elisp before eval for any form longer than 3 lines.
-   check_elisp validates syntax without executing — errors include line:column.
-
-2. For .el, .lisp, .cl, .scm files when lisp-sitter is available (via MCP tools starting with `structural_*`),
-   use structural tools only:
-   New file: structural_insert path __start__ with the first complete node, then
-   __end__ or a symbol for more. Change node: structural_tree → structural_bounds
-   → structural_replace. Without lisp-sitter, use write_file or check_elisp for basic editing.: one logical operation per call (ideally under 15 lines).
-   Chain multiple eval calls rather than writing one monolithic form.
-
-5. Complex multi-node refactors — one structural edit per node, never write_file:
-   structural_tree → structural_replace / structural_insert per node
-   (each validated before save) → check_structural_file on the whole file.
-
-6. Use let* for sequential work — avoid deep nesting:
-   GOOD:  (let* ((x (foo)) (y (bar x))) (baz y))
-   AVOID: (baz (bar (foo)))  ; hard to count parens, no intermediate values
-
-7. Close each sub-form before opening the next at the same level.
-   Never defer closing parentheses to the end of a long block.
-
-8. When a paren mismatch is reported, do not re-guess. Call check_elisp or
-   check_structural_file FIRST, verify it returns \"OK\", then retry.
+%s
 
 ## Emacs tool rules
 
@@ -177,13 +147,103 @@ Follow these rules to avoid them:
 
 ## Full emagent tool list
 
-read_file, write_file, undo_file, delete_file, delete_directory,
-list_files, find_files, grep, git_status, git_diff, git_log,
-project_directory, buffer_list, imenu_index, compile,
-eval, check_elisp, check_structural_file, check_structural_node,
-structural_tree, structural_bounds, structural_replace, structural_insert,
-elisp_guide, fetch_url, apropos, apropos_doc, describe_symbol,
-find_function, where_is, run_shell_command.")
+%s"
+  "Static core of the prefer-Emacs system prompt.
+See `emagent-prompts--prefer-emacs-prompt'.")
+
+(defun emagent-prompts--prefer-emacs-substitution-rows ()
+  "Return substitution-guide rows for Lisp file editing."
+  (require 'emagent-struct)
+  (if (emagent-struct-available-p)
+      "| Edit .el / .lisp / .cl / .scm | structural_replace / structural_insert (write_file refused) |
+| Structural file outline   | structural_tree / structural_bounds                 |
+| Validate Lisp file        | check_structural_file                               |"
+    "| Edit .el files            | write_file + check_elisp (small, focused edits)   |
+| Validate before save      | check_elisp                                         |"))
+
+(defun emagent-prompts--prefer-emacs-elisp-pattern-rows ()
+  "Return Elisp-pattern table rows for Lisp file editing."
+  (require 'emagent-struct)
+  (if (emagent-struct-available-p)
+      "| Edit .el / .lisp / .cl / .scm | structural_replace / structural_insert              |
+| Validate structural file  | check_structural_file                               |"
+    "| Edit .el files            | write_file + check_elisp                            |
+| Validate Elisp            | check_elisp                                         |"))
+
+(defun emagent-prompts--prefer-emacs-paren-discipline ()
+  "Return the Elisp paren discipline section for the system prompt."
+  (require 'emagent-struct)
+  (concat
+   "## Elisp paren discipline
+
+Paren mismatches are the #1 failure mode for agent-written Elisp.
+Follow these rules to avoid them:
+
+1. ALWAYS call check_elisp before eval for any form longer than 3 lines.
+   check_elisp validates syntax without executing — errors include line:column.
+
+"
+   (if (emagent-struct-available-p)
+       "2. lisp-sitter is installed. For .el, .lisp, .cl, .scm files use structural_* MCP tools only.
+   write_file on Lisp files is refused — use structural_insert / structural_replace instead.
+   New file: structural_insert path __start__ with the first complete node, then __end__ or a symbol.
+   Change node: structural_tree → structural_bounds → structural_replace.
+
+4. Use structural_find_errors or check_structural_file when tree-sitter reports problems.
+
+5. Complex multi-node refactors — one structural edit per node, never write_file:
+   structural_tree → structural_replace / structural_insert per node
+   (each validated before save) → check_structural_file on the whole file.
+
+"
+     "2. lisp-sitter is not installed. For .el files use write_file + check_elisp.
+   Keep each edit small and focused; validate with check_elisp before eval.
+
+4. After write_file on .el, run check_elisp on changed forms before eval.
+
+5. Multi-node refactors without lisp-sitter: one small write_file per form,
+   check_elisp after each write — do not rewrite whole files from memory.
+
+")
+   "3. Keep eval forms small: one logical operation per call (ideally under 15 lines).
+   Chain multiple eval calls rather than writing one monolithic form.
+
+6. Use let* for sequential work — avoid deep nesting:
+   GOOD:  (let* ((x (foo)) (y (bar x))) (baz y))
+   AVOID: (baz (bar (foo)))  ; hard to count parens, no intermediate values
+
+7. Close each sub-form before opening the next at the same level.
+   Never defer closing parentheses to the end of a long block.
+
+8. When a paren mismatch is reported, do not re-guess. Call check_elisp"
+   (if (emagent-struct-available-p)
+       " or check_structural_file"
+     "")
+   " FIRST, verify it returns \"OK\", then retry."))
+
+(defun emagent-prompts--prefer-emacs-tool-list ()
+  "Return the full emagent tool list paragraph for the system prompt."
+  (require 'emagent-struct)
+  (if (emagent-struct-available-p)
+      "read_file, write_file (not for .el/.lisp/.cl/.scm), undo_file, delete_file,
+delete_directory, list_files, find_files, grep, git_status, git_diff, git_log,
+project_directory, buffer_list, imenu_index, compile, eval, check_elisp,
+check_structural_file, check_structural_node, structural_* (lisp-sitter suite),
+elisp_guide, fetch_url, apropos, apropos_doc, describe_symbol, find_function,
+where_is, run_shell_command."
+    "read_file, write_file, undo_file, delete_file, delete_directory, list_files,
+find_files, grep, git_status, git_diff, git_log, project_directory, buffer_list,
+imenu_index, compile, eval, check_elisp, elisp_guide, fetch_url, apropos,
+apropos_doc, describe_symbol, find_function, where_is, run_shell_command.
+(structural_* tools appear after installing lisp-sitter.)"))
+
+(defun emagent-prompts--prefer-emacs-prompt ()
+  "Return the prefer-Emacs system prompt section for ACP sessions."
+  (format emagent-acp-system-prompt-prefer-emacs-base
+          (emagent-prompts--prefer-emacs-substitution-rows)
+          (emagent-prompts--prefer-emacs-elisp-pattern-rows)
+          (emagent-prompts--prefer-emacs-paren-discipline)
+          (emagent-prompts--prefer-emacs-tool-list)))
 
 (defconst emagent-acp-elisp-guide
   "# Emacs Lisp Guide for emagent
@@ -539,19 +599,30 @@ structural_insert path: foo.el
 
 (declare-function emagent-struct-available-p "emagent-struct")
 
+(defun emagent-prompts--structural-tool-list ()
+  "Return a comma-separated list of lisp-sitter MCP tool names."
+  (require 'emagent-mcp-structural)
+  (string-join (mapcar #'car emagent-mcp--structural-tools) ", "))
+
 (defun emagent-prompts--structural-policy ()
   "Return structural editing rules for the system prompt."
   (require 'emagent-struct)
   (if (emagent-struct-available-p)
-      "
+      (format "
 
 ## Structural editing (lisp-sitter active)
 
-lisp-sitter is available for .el, .lisp, .cl, .scm files.
+lisp-sitter is installed. For .el, .lisp, .cl, .scm files:
 
-Use structural_tree, structural_bounds, structural_replace, structural_insert — not write_file.
-Anchors: __start__ (new/empty file), __end__ (append). One complete top-level form per edit.
-Finish with check_structural_file."
+- write_file is refused — use structural_* tools only.
+- Prefer Emacs Lisp (eval) over Python, shell, or other languages for automation.
+- Workflow: structural_tree → structural_bounds → structural_replace / structural_insert.
+  Anchors: __start__ (new/empty file), __end__ (append). One complete top-level form per edit.
+- structural_find_errors locates missing parens; structural_complete fixes drafts before check_node.
+- Finish with check_structural_file.
+
+Available lisp-sitter tools: %s."
+              (emagent-prompts--structural-tool-list))
     "
 
 ## Structural editing (lisp-sitter not installed)

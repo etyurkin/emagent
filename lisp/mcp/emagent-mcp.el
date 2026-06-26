@@ -29,6 +29,7 @@
   (require 'cl-lib))
 
 (require 'emagent-tools)
+(require 'emagent-mcp-structural)
 
 ;; Defined in emagent-acp.el; declared here to avoid a circular require.
 (defvar emagent-acp-prefer-emacs)
@@ -117,7 +118,8 @@ instead; emagent then writes whatever port it gets into the agent config."
    (t (format "%s" value))))
 
 (defconst emagent-mcp--tools
-  (list
+  (append
+   (list
    (list "read_file"
          "Read a file through Emacs, including unsaved buffer contents. Returns its text."
          '(("path" . ((type . "string")
@@ -132,7 +134,7 @@ instead; emagent then writes whatever port it gets into the agent config."
                                    (emagent-mcp--arg args "line")
                                    (emagent-mcp--arg args "limit"))))
    (list "write_file"
-         "Write CONTENT to a file through an Emacs buffer (one undoable change)."
+         "Write CONTENT to a file through an Emacs buffer (one undoable change). Refused for .el/.lisp/.cl/.scm when lisp-sitter is installed — use structural_* tools instead."
          '(("path" . ((type . "string")
                       (description . "Absolute path, or relative to the session root.")))
            ("content" . ((type . "string")
@@ -306,75 +308,6 @@ instead; emagent then writes whatever port it gets into the agent config."
          '()
          (lambda (args)
            (emagent-tool-imenu-index (emagent-mcp--arg args "file"))))
-   (list "check_structural_file"
-         "[lisp-sitter] Validate a whole file (.el, .lisp, .cl, .scm). Returns \"OK\" or a syntax error. Only available when lisp-sitter is installed."
-         '(("path" . ((type . "string")
-                      (description . "Path to the file, relative to session root."))))
-         '("path")
-         (lambda (args)
-           (emagent-tool-check-structural-file (emagent-mcp--arg args "path")))
-         :available #'emagent-struct-available-p)
-   (list "check_structural_node"
-         "[lisp-sitter] Validate a complete top-level node without saving. Returns \"OK\" or an error."
-         '(("path" . ((type . "string")
-                      (description . "Path to the file, relative to session root.")))
-           ("node" . ((type . "string")
-                      (description . "Complete top-level node text to validate."))))
-         '("path" "node")
-         (lambda (args)
-           (emagent-tool-check-structural-node (emagent-mcp--arg args "path")
-                                               (emagent-mcp--arg args "node")))
-         :available #'emagent-struct-available-p)
-   (list "structural_tree"
-         "[lisp-sitter] List top-level forms in a file via lisp-sitter (defun, define, class, ...)."
-         '(("path" . ((type . "string")
-                      (description . "Path to the file, relative to session root.")))
-           ("depth" . ((type . "integer")
-                       (description . "Reserved; ignored for now."))))
-         '()
-         (lambda (args)
-           (emagent-tool-structural-tree (emagent-mcp--arg args "path")
-                                         (emagent-mcp--arg args "depth")))
-         :available #'emagent-struct-available-p)
-   (list "structural_bounds"
-         "[lisp-sitter] Return byte positions START:END for a named top-level form."
-         '(("path" . ((type . "string")
-                      (description . "Path to the file, relative to session root.")))
-           ("symbol" . ((type . "string")
-                        (description . "Node name to locate (defun, function, class name)."))))
-         '("path" "symbol")
-         (lambda (args)
-           (emagent-tool-structural-bounds (emagent-mcp--arg args "path")
-                                           (emagent-mcp--arg args "symbol")))
-         :available #'emagent-struct-available-p)
-   (list "structural_replace"
-         "[lisp-sitter] Replace one top-level form with complete new text. Validates via lisp-sitter before saving."
-         '(("path" . ((type . "string")
-                      (description . "Path to the file, relative to session root.")))
-           ("symbol" . ((type . "string")
-                        (description . "Node name to replace.")))
-           ("new_body" . ((type . "string")
-                          (description . "Complete replacement form text."))))
-         '("path" "symbol" "new_body")
-         (lambda (args)
-           (emagent-tool-structural-replace (emagent-mcp--arg args "path")
-                                            (emagent-mcp--arg args "symbol")
-                                            (emagent-mcp--arg args "new_body")))
-         :available #'emagent-struct-available-p)
-   (list "structural_insert"
-         "[lisp-sitter] Insert a complete top-level form using __start__ (new file), __end__ (append), or a symbol name."
-         '(("path" . ((type . "string")
-                      (description . "Path to the file, relative to session root.")))
-           ("after_symbol" . ((type . "string")
-                              (description . "__start__, __end__, or name of an existing top-level form.")))
-           ("node" . ((type . "string")
-                      (description . "Complete top-level form text to insert."))))
-         '("path" "after_symbol" "node")
-         (lambda (args)
-           (emagent-tool-structural-insert (emagent-mcp--arg args "path")
-                                           (emagent-mcp--arg args "after_symbol")
-                                           (emagent-mcp--arg args "node")))
-         :available #'emagent-struct-available-p)
    (list "check_elisp"
          "Check an Emacs Lisp form for syntax errors (paren balance, read errors) WITHOUT executing it. Returns \"OK\" or an error description with line:column. Always call this before eval for forms longer than 3 lines."
          '(("form" . ((type . "string")
@@ -388,6 +321,7 @@ instead; emagent then writes whatever port it gets into the agent config."
          '()
          (lambda (_args)
            (emagent-tool-elisp-guide))))
+   emagent-mcp--structural-tools)
   "Registry of emagent MCP tools.
 Each entry: (NAME DESCRIPTION PROPERTIES REQUIRED HANDLER . PLIST).
 PLIST may have :available, a predicate returning non-nil to show the tool.")

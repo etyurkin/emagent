@@ -46,7 +46,17 @@
 (require 'emagent-acp-send)
 (require 'emagent-prompts)
 
+(declare-function emagent-prompts--prefer-emacs-prompt "emagent-prompts")
 (declare-function emagent-prompts--structural-policy "emagent-prompts")
+
+(defun emagent-acp--system-prompt ()
+  "Return the system prompt for new ACP sessions."
+  (concat emagent-acp-system-prompt
+          (emagent-mcp-gateway-system-prompt)
+          (when emagent-acp-prefer-emacs
+            (emagent-prompts--prefer-emacs-prompt))
+          (when emagent-acp-prefer-emacs
+            (emagent-prompts--structural-policy))))
 
 (declare-function emagent-chat-clear-slash-commands "emagent-chat-slash")
 (declare-function emagent-chat-seed-cursor-slash-commands "emagent-chat-slash")
@@ -62,15 +72,6 @@
 (declare-function emagent-chat--spinner-start "emagent-chat-mode-line")
 (declare-function emagent-cursor-enrich-tool-call-update "emagent-cursor")
 (declare-function emagent-cursor-normalize-slash-prompt "emagent-cursor")
-
-(defun emagent-acp--system-prompt ()
-  "Return the system prompt for new ACP sessions."
-  (concat emagent-acp-system-prompt
-          (emagent-mcp-gateway-system-prompt)
-          (when emagent-acp-prefer-emacs
-            emagent-acp-system-prompt-prefer-emacs)
-          (when emagent-acp-prefer-emacs
-            (emagent-prompts--structural-policy))))
 
 (defun emagent-acp-prefer-emacs-p ()
   "Return non-nil when emagent instructs the agent to prefer Emacs tools."

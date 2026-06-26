@@ -132,6 +132,9 @@ Each call is recorded as a single undoable change in the target buffer."
 
 (defun emagent-tool-write-file (path content)
   "Write CONTENT to PATH through Emacs after user confirmation."
+  (when (emagent-struct-write-required-p path)
+    (user-error "Refusing write_file on %s: lisp-sitter is installed — use structural_* tools"
+                (emagent-tools--root-directory path)))
   (let ((resolved (emagent-tools--root-directory path)))
     (when (emagent-tools--protected-fs-path-p path)
       (user-error "Refusing Emacs access to %s (iCloud or another app's container)"

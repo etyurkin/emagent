@@ -37,6 +37,13 @@ falls back to write_file + check_elisp."
   :type 'boolean
   :group 'emagent-struct)
 
+(defcustom emagent-struct-require-for-lisp-files t
+  "When non-nil and lisp-sitter is installed, refuse write_file on Lisp files.
+
+Agents must use structural_* MCP tools for .el, .lisp, .cl, and .scm files."
+  :type 'boolean
+  :group 'emagent-struct)
+
 ;; ── Language detection ────────────────────────────────────────────
 
 (defun emagent-struct--lang-for (path)
@@ -74,6 +81,18 @@ Signal an error when lisp-sitter exits non-zero."
                (truncate-string-to-width
                 (car (split-string (buffer-string) "\n" t)) 80 nil nil "…"))))))
 
+(defun emagent-struct--call-path (&rest args)
+  "Run lisp-sitter ARGS against a file path; return trimmed stdout."
+  (emagent-struct--ensure)
+  (with-temp-buffer
+    (let ((exit (apply #'call-process emagent-struct-lisp-sitter-bin nil
+                      (current-buffer) nil args)))
+      (if (= exit 0)
+          (string-trim (buffer-string))
+        (error "lisp-sitter exited %d: %s" exit
+               (truncate-string-to-width
+                (car (split-string (buffer-string) "\n" t)) 80 nil nil "…"))))))
+
 (define-error 'emagent-struct-unavailable
   "lisp-sitter is not installed; install it with `make install` in the lisp-sitter repo"
   'error)
@@ -92,11 +111,13 @@ Signal an error when lisp-sitter exits non-zero."
   (and emagent-struct-lisp-sitter-bin
        (file-executable-p emagent-struct-lisp-sitter-bin)))
 
-(defun emagent-struct-tree (content path)
+(defun emagent-struct-tree (content path &optional depth)
   "Return JSON structural outline of CONTENT for PATH's language."
   (emagent-struct--ensure)
-  (emagent-struct--call content "tree" "-" "--json"
-                        "--lang" (emagent-struct--lang-for path)))
+  (let ((args (list "tree" "-" "--json" "--lang" (emagent-struct--lang-for path))))
+    (when (and depth (> depth 1))
+      (setq args (append args (list "--depth" (number-to-string depth)))))
+    (apply #'emagent-struct--call content args)))
 
 (defun emagent-struct-bounds (content path symbol)
   "Return START:END string for SYMBOL in CONTENT for PATH's language."
@@ -141,6 +162,95 @@ Returns \"OK\" or error text."
   (emagent-struct--ensure)
   (emagent-struct--call content "get" "-" symbol
                         "--lang" (emagent-struct--lang-for path)))
+
+(defun emagent-struct-complete (lang body)
+  "Complete missing closing parens in BODY for LANG."
+  (emagent-struct--ensure)
+  (emagent-struct--call body "complete" "--lang" lang "--body-file" "-"))
+
+(defun emagent-struct-find-errors (path)
+  "Return tree-sitter error report for file at absolute PATH."
+  (emagent-struct--call-path "find-errors" path))
+
+(defun emagent-struct-context (path)
+  "Return structural context (outline + forms) for file at PATH."
+  (emagent-struct--call-path "context" path))
+
+(defun emagent-struct-format-file (path &optional write)
+  "Re-indent file at PATH; when WRITE is non-nil, save the result."
+  (let ((args (list "fmt" path)))
+    (when write (setq args (append args '("--write"))))
+    (apply #'emagent-struct--call-path args)))
+
+(defun emagent-struct-rename-file (path old new &optional refs no-refs)
+  "Rename form OLD to NEW in file at PATH; return updated file text."
+  (let ((args (list "rename" path old new)))
+    (when refs (setq args (append args '("--refs"))))
+    (when no-refs (setq args (append args '("--no-refs"))))
+    (apply #'emagent-struct--call-path args)))
+
+(defun emagent-struct-wrap-file (path symbol wrap &optional bindings condition)
+  "Wrap SYMBOL's body in WRAP construct in file at PATH."
+  (let ((args (list "wrap" path symbol "--in" wrap)))
+    (when bindings (setq args (append args (list "--bindings" bindings))))
+    (when condition (setq args (append args (list "--condition" condition))))
+    (apply #'emagent-struct--call-path args)))
+
+(defun emagent-struct-remove-file (path symbol &optional keep-calls)
+  "Remove top-level SYMBOL from file at PATH."
+  (let ((args (list "remove" path symbol)))
+    (when keep-calls (setq args (append args '("--keep-calls"))))
+    (apply #'emagent-struct--call-path args)))
+
+(defun emagent-struct-move-file (path symbol after)
+  "Move SYMBOL after AFTER in file at PATH."
+  (emagent-struct--call-path "move" path symbol after))
+
+(defun emagent-struct-substitute-file (path symbol pattern replacement)
+  "Substitute PATTERN with REPLACEMENT inside SYMBOL in file at PATH."
+  (emagent-struct--call-path "substitute" path symbol
+                             "--pattern" pattern "--replacement" replacement))
+
+(defun emagent-struct-extract-file (path symbol pattern name &optional params)
+  "Extract PATTERN into new function NAME inside SYMBOL in file at PATH."
+  (let ((args (list "extract" path symbol "--pattern" pattern "--name" name)))
+    (when (and params (not (string-empty-p params)))
+      (setq args (append args (list "--params" params))))
+    (apply #'emagent-struct--call-path args)))
+
+(defun emagent-struct-callers-file (path symbol)
+  "Return callers of SYMBOL in file at PATH."
+  (emagent-struct--call-path "callers" path symbol))
+
+(defun emagent-struct-instrument-file (path symbol &optional with at wrap)
+  "Instrument SYMBOL in file at PATH."
+  (let ((args (list "instrument" path symbol)))
+    (when with (setq args (append args (list "--with" with))))
+    (when at (setq args (append args (list "--at" at))))
+    (when wrap (setq args (append args (list "--wrap" wrap))))
+    (apply #'emagent-struct--call-path args)))
+
+(defun emagent-struct-flatten-file (path symbol)
+  "Inline SYMBOL's body at call sites in file at PATH."
+  (emagent-struct--call-path "flatten" path symbol))
+
+(defun emagent-struct-convert-let-file (path symbol to)
+  "Convert let/let* for SYMBOL to TO in file at PATH."
+  (emagent-struct--call-path "convert-let" path symbol "--to" to))
+
+(defun emagent-struct-splice-file (path symbol pattern)
+  "Splice PATTERN inside SYMBOL in file at PATH."
+  (emagent-struct--call-path "splice" path symbol "--pattern" pattern))
+
+(defun emagent-struct-raise-file (path symbol pattern)
+  "Raise PATTERN inside SYMBOL in file at PATH."
+  (emagent-struct--call-path "raise" path symbol "--pattern" pattern))
+
+(defun emagent-struct-write-required-p (path)
+  "Return non-nil when PATH must be edited with structural tools."
+  (and emagent-struct-require-for-lisp-files
+       (emagent-struct-available-p)
+       (emagent-struct--lisp-file-p path)))
 
 (provide 'emagent-struct)
 ;;; emagent-struct.el ends here

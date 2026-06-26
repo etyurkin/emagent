@@ -3,6 +3,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'emagent-test-utils)
 (require 'emagent-tools)
 
 ;;;; Session root boundary
@@ -42,50 +43,36 @@
 (ert-deftest emagent-tools-test-buttons-prompt-removes-block ()
   (with-temp-buffer
     (insert "before\n")
-    (let ((buf (current-buffer)))
-      (run-at-time 0.01 nil
-                   (lambda ()
-                     (with-current-buffer buf
-                       (save-excursion
-                         (goto-char (point-min))
-                         (while (and (not (eobp)) (not (button-at (point))))
-                           (forward-char 1))
-                         (when (button-at (point))
-                           (push-button (point)))))))
-      (let ((result (emagent-tools--buttons-prompt
-                      "Allow test?"
-                      '(("Allow" . ok))
-                      buf)))
-        (should (eq result 'ok))
-        (should (string= "before\n" (buffer-string)))))))
+    (let ((buf (current-buffer))
+          (result nil))
+      (emagent-tools--buttons-prompt
+       "Allow test?"
+       '(("Allow" . ok))
+       buf
+       (lambda (v) (setq result v)))
+      (emagent-test--push-first-button buf)
+      (should (eq result 'ok))
+      (should (string= "before\n" (buffer-string))))))
 
 (ert-deftest emagent-tools-test-buttons-prompt-survives-insert-before ()
   "Prompt cleanup still works when streaming inserts before the block."
   (with-temp-buffer
     (insert "before\n")
-    (let ((buf (current-buffer)))
-      (run-at-time 0.005 nil
-                   (lambda ()
-                     (with-current-buffer buf
-                       (goto-char (point-min))
-                       (insert "streamed "))))
-      (run-at-time 0.01 nil
-                   (lambda ()
-                     (with-current-buffer buf
-                       (save-excursion
-                         (goto-char (point-min))
-                         (while (and (not (eobp)) (not (button-at (point))))
-                           (forward-char 1))
-                         (when (button-at (point))
-                           (push-button (point)))))))
-      (let ((result (emagent-tools--buttons-prompt
-                      "Allow compile?"
-                      '(("Allow" . ok))
-                      buf)))
-        (should (eq result 'ok))
-        (should (string-match-p "\\`streamed before\n\\'" (buffer-string)))
-        (should-not (string-match-p "Allow compile?" (buffer-string)))
-        (should-not (string-match-p "\\[Allow\\]" (buffer-string)))))))
+    (let ((buf (current-buffer))
+          (result nil))
+      (emagent-tools--buttons-prompt
+       "Allow compile?"
+       '(("Allow" . ok))
+       buf
+       (lambda (v) (setq result v)))
+      (with-current-buffer buf
+        (goto-char (point-min))
+        (insert "streamed "))
+      (emagent-test--push-first-button buf)
+      (should (eq result 'ok))
+      (should (string-match-p "\\`streamed before\n\\'" (buffer-string)))
+      (should-not (string-match-p "Allow compile?" (buffer-string)))
+      (should-not (string-match-p "\\[Allow\\]" (buffer-string))))))
 
 ;;;; Elisp syntax check
 
@@ -144,6 +131,18 @@
           (should-error
            (emagent-tool-structural-insert
             file "__start__" "(kill-emacs)")))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-write-file-blocked-for-lisp ()
+  :tags '(lisp-sitter)
+  (skip-unless (emagent-struct-available-p))
+  (let* ((dir (make-temp-file "emagent-tools-write-block-" t))
+         (file "blocked.el")
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir))
+    (unwind-protect
+        (should-error
+         (emagent-tool-write-file file "(defun foo () 1)"))
       (delete-directory dir t))))
 
 (ert-deftest emagent-tools-test-eval-form-guard-blocked ()

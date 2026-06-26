@@ -3,6 +3,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'emagent-prompts)
 
 (ert-deftest emagent-prompts-test-system-prompt ()
@@ -12,10 +13,27 @@
   (should (string-match-p "read_file" emagent-acp-system-prompt)))
 
 (ert-deftest emagent-prompts-test-prefer-emacs-prompt ()
-  (should (string-match-p "Tool preference" emagent-acp-system-prompt-prefer-emacs))
-  (should (string-match-p "check_elisp" emagent-acp-system-prompt-prefer-emacs))
-  (should (string-match-p "check_structural_file" emagent-acp-system-prompt-prefer-emacs))
-  (should (string-match-p "structural_replace" emagent-acp-system-prompt-prefer-emacs)))
+  (require 'emagent-struct)
+  (let ((prompt (emagent-prompts--prefer-emacs-prompt)))
+    (should (string-match-p "Tool preference" prompt))
+    (should (string-match-p "check_elisp" prompt))
+    (if (emagent-struct-available-p)
+        (progn
+          (should (string-match-p "check_structural_file" prompt))
+          (should (string-match-p "structural_replace" prompt))
+          (should (string-match-p "write_file refused" prompt)))
+      (progn
+        (should (string-match-p (regexp-quote "write_file + check_elisp") prompt))
+        (should-not (string-match-p "write_file refused" prompt))
+        (should-not (string-match-p "structural_replace" prompt))))))
+
+(ert-deftest emagent-prompts-test-prefer-emacs-prompt-simulated-no-lisp-sitter ()
+  (cl-letf (((symbol-function 'emagent-struct-available-p) (lambda () nil)))
+    (let ((prompt (emagent-prompts--prefer-emacs-prompt)))
+      (should (string-match-p "lisp-sitter is not installed" prompt))
+      (should (string-match-p (regexp-quote "write_file + check_elisp") prompt))
+      (should-not (string-match-p "structural_replace" prompt))
+      (should-not (string-match-p "write_file refused" prompt)))))
 
 (ert-deftest emagent-prompts-test-elisp-guide ()
   (should (string-match-p "Paren rules" emagent-acp-elisp-guide))
@@ -28,8 +46,11 @@
 
 (ert-deftest emagent-prompts-test-structural-policy ()
   (require 'emagent-struct)
-  (should (string-match-p "Structural editing"
-                          (emagent-prompts--structural-policy))))
+  (let ((policy (emagent-prompts--structural-policy)))
+    (should (string-match-p "Structural editing" policy))
+    (when (emagent-struct-available-p)
+      (should (string-match-p "write_file is refused" policy))
+      (should (string-match-p "structural_replace" policy)))))
 
 (ert-deftest emagent-prompts-test-gateway-prompt ()
   (should (string-match-p "OAuth" emagent-acp-system-prompt-gateway)))

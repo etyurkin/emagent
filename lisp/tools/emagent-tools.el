@@ -12,6 +12,25 @@
 (require 'org)
 (require 'org-element)
 (require 'emagent-struct)
+
+(declare-function emagent-struct-write-required-p "emagent-struct")
+(declare-function emagent-struct-tree "emagent-struct")
+(declare-function emagent-struct-find-errors "emagent-struct")
+(declare-function emagent-struct-context "emagent-struct")
+(declare-function emagent-struct-complete "emagent-struct")
+(declare-function emagent-struct-format-file "emagent-struct")
+(declare-function emagent-struct-rename-file "emagent-struct")
+(declare-function emagent-struct-wrap-file "emagent-struct")
+(declare-function emagent-struct-remove-file "emagent-struct")
+(declare-function emagent-struct-move-file "emagent-struct")
+(declare-function emagent-struct-substitute-file "emagent-struct")
+(declare-function emagent-struct-extract-file "emagent-struct")
+(declare-function emagent-struct-callers-file "emagent-struct")
+(declare-function emagent-struct-instrument-file "emagent-struct")
+(declare-function emagent-struct-flatten-file "emagent-struct")
+(declare-function emagent-struct-convert-let-file "emagent-struct")
+(declare-function emagent-struct-splice-file "emagent-struct")
+(declare-function emagent-struct-raise-file "emagent-struct")
 (require 'emagent-elisp)
 (require 'emagent-tools-file)
 (require 'emagent-tools-intro)
@@ -86,15 +105,15 @@ Signal an error when the result escapes `emagent-tools--root-boundary'."
   "Tools allowed without confirmation for the current session only.
 
 Bound by the MCP dispatcher from the chat buffer's persisted allow-list so a
-per-document choice (see `emagent-tools-allow-all-function') is honoured on the
-next call without touching the global `emagent-allowed-tools'.")
+per-document choice (see `emagent-tools-allow-all-function') is honoured on
+the next call without touching the global `emagent-allowed-tools'.")
 
 (defvar emagent-tools-allow-all-function nil
   "Function of one tool symbol, called when the user chooses \"allow all\".
 
-Bound by the MCP dispatcher to persist the choice for the session (emagent
-writes it to the chat buffer's =#+EMAGENT_ALLOWED_TOOLS= header).  Nil means the
-choice only lasts for the current call.")
+Bound by the MCP dispatcher to persist the choice per project directory under
+`emagent-permissions-directory'.  Nil means the choice only lasts for the
+current call.")
 
 (defvar emagent-tools--chat-buffer nil
   "The emagent chat buffer for the active session.
@@ -398,6 +417,20 @@ Call this before writing non-trivial Elisp."
   (require 'emagent-prompts)
   emagent-acp-elisp-guide)
 
+(defun emagent-tools--structural-sync-path (file)
+  "Sync FILE buffer content to disk; return absolute path."
+  (let ((content (emagent-tools--read-structural-file-content file)))
+    (emagent-tools--write-file-content file content)
+    (emagent-tools--root-directory file)))
+
+(defun emagent-tools--structural-apply-file-result (file result)
+  "Write RESULT to FILE when it is updated content, not a status line."
+  (if (or (string-prefix-p "Wrote " result) (string-empty-p result))
+      result
+    (progn
+      (emagent-tools--write-file-content file result)
+      (format "Wrote %s" (emagent-tools--root-directory file)))))
+
 (defun emagent-tool-check-structural-file (file)
   "Validate FILE with lisp-sitter (when available)."
   (if (emagent-struct-available-p)
@@ -413,14 +446,119 @@ Call this before writing non-trivial Elisp."
         (emagent-elisp-check-form node)
       (format "No checker for %s (install lisp-sitter)" file))))
 
-(defun emagent-tool-structural-tree (file &optional _depth)
-  "Return a shallow structural outline of FILE using lisp-sitter."
+(defun emagent-tool-structural-tree (file &optional depth)
+  "Return a structural outline of FILE using lisp-sitter."
   (if (emagent-struct-available-p)
-      (emagent-struct-tree (emagent-tools--read-structural-file-content file) file)
+      (emagent-struct-tree (emagent-tools--read-structural-file-content file) file depth)
     (let ((err (emagent-tools--read-structural-file-content file)))
       (if (string-empty-p err)
           ""
         (format "install lisp-sitter to see structural outline of %s" file)))))
+
+(defun emagent-tool-structural-get (file symbol)
+  "Return full text of top-level SYMBOL in FILE."
+  (emagent-struct-get (emagent-tools--read-structural-file-content file) file symbol))
+
+(defun emagent-tool-structural-find-errors (file)
+  "Return tree-sitter MISSING/ERROR nodes for FILE."
+  (emagent-struct-find-errors (emagent-tools--structural-sync-path file)))
+
+(defun emagent-tool-structural-context (file)
+  "Return outline and full text of each top-level form in FILE."
+  (emagent-struct-context (emagent-tools--structural-sync-path file)))
+
+(defun emagent-tool-structural-complete (lang body)
+  "Complete missing closing parens in BODY for LANG."
+  (emagent-struct-complete lang body))
+
+(defun emagent-tool-structural-format (file &optional write)
+  "Re-indent FILE with lisp-sitter."
+  (let ((path (emagent-tools--structural-sync-path file)))
+    (if write
+        (progn
+          (emagent-struct-format-file path t)
+          (format "Wrote %s" path))
+      (emagent-struct-format-file path nil))))
+
+(defun emagent-tool-structural-rename (file old new &optional refs no-refs)
+  "Rename top-level form OLD to NEW in FILE."
+  (emagent-tools--structural-apply-file-result
+   file
+   (emagent-struct-rename-file (emagent-tools--structural-sync-path file)
+                               old new refs no-refs)))
+
+(defun emagent-tool-structural-wrap (file symbol wrap &optional bindings condition)
+  "Wrap SYMBOL's body in WRAP in FILE."
+  (emagent-tools--structural-apply-file-result
+   file
+   (emagent-struct-wrap-file (emagent-tools--structural-sync-path file)
+                             symbol wrap bindings condition)))
+
+(defun emagent-tool-structural-remove (file symbol &optional keep-calls)
+  "Remove top-level SYMBOL from FILE."
+  (emagent-tools--structural-apply-file-result
+   file
+   (emagent-struct-remove-file (emagent-tools--structural-sync-path file)
+                               symbol keep-calls)))
+
+(defun emagent-tool-structural-move (file symbol after)
+  "Move top-level SYMBOL after AFTER in FILE."
+  (emagent-tools--structural-apply-file-result
+   file
+   (emagent-struct-move-file (emagent-tools--structural-sync-path file)
+                             symbol after)))
+
+(defun emagent-tool-structural-substitute (file symbol pattern replacement)
+  "Replace PATTERN with REPLACEMENT inside SYMBOL in FILE."
+  (emagent-tools--structural-apply-file-result
+   file
+   (emagent-struct-substitute-file (emagent-tools--structural-sync-path file)
+                                   symbol pattern replacement)))
+
+(defun emagent-tool-structural-extract (file symbol pattern name &optional params)
+  "Extract PATTERN into new function NAME inside SYMBOL in FILE."
+  (emagent-tools--structural-apply-file-result
+   file
+   (emagent-struct-extract-file (emagent-tools--structural-sync-path file)
+                                symbol pattern name params)))
+
+(defun emagent-tool-structural-callers (file symbol)
+  "Return callers of SYMBOL in FILE."
+  (emagent-struct-callers-file (emagent-tools--structural-sync-path file) symbol))
+
+(defun emagent-tool-structural-instrument (file symbol &optional with at wrap)
+  "Instrument SYMBOL in FILE with tracing."
+  (emagent-tools--structural-apply-file-result
+   file
+   (emagent-struct-instrument-file (emagent-tools--structural-sync-path file)
+                                   symbol with at wrap)))
+
+(defun emagent-tool-structural-flatten (file symbol)
+  "Inline SYMBOL at call sites in FILE."
+  (emagent-tools--structural-apply-file-result
+   file
+   (emagent-struct-flatten-file (emagent-tools--structural-sync-path file) symbol)))
+
+(defun emagent-tool-structural-convert-let (file symbol to)
+  "Convert let/let* for SYMBOL to TO in FILE."
+  (emagent-tools--structural-apply-file-result
+   file
+   (emagent-struct-convert-let-file (emagent-tools--structural-sync-path file)
+                                    symbol to)))
+
+(defun emagent-tool-structural-splice (file symbol pattern)
+  "Splice PATTERN inside SYMBOL in FILE."
+  (emagent-tools--structural-apply-file-result
+   file
+   (emagent-struct-splice-file (emagent-tools--structural-sync-path file)
+                                symbol pattern)))
+
+(defun emagent-tool-structural-raise (file symbol pattern)
+  "Raise PATTERN inside SYMBOL in FILE."
+  (emagent-tools--structural-apply-file-result
+   file
+   (emagent-struct-raise-file (emagent-tools--structural-sync-path file)
+                              symbol pattern)))
 
 (defun emagent-tool-structural-bounds (file symbol)
   "Return START:END byte positions for SYMBOL in FILE."
