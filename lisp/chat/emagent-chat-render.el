@@ -34,7 +34,9 @@
     (goto-char (or at (point)))
     (unless (bolp)
       (insert "\n"))
-    (insert (format "\n%s\n" emagent-chat-response-begin))
+    (insert (format "\n%s\n%s\n"
+                    emagent-chat-response-headline
+                    emagent-chat-response-begin))
     (setq emagent-chat--response-body-start (point-marker))
     (emagent-chat--insert-reasoning-scaffold)))
 
@@ -62,7 +64,8 @@
     (if (string-empty-p trimmed)
         ""
       (format "#+begin_quote %s\n%s\n#+end_quote\n\n"
-              emagent-chat--thinking-block-label trimmed))))
+              emagent-chat--thinking-block-label
+              (emagent-chat--escape-reasoning-text trimmed)))))
 
 (defun emagent-chat--reasoning-block-bounds ()
   "Return (CONTENT-START . CONTENT-END) for a closed Reasoning block at point."
@@ -177,12 +180,60 @@ folding the inner region only so incomplete parses never break the buffer."
       (insert (format "%s\n\n" emagent-chat-response-end)))))
 
 (defun emagent-chat--reset-response-state ()
+  (emagent-chat--cancel-thought-flush)
   (setq emagent-chat--assistant-marker nil
         emagent-chat--response-body-start nil
         emagent-chat--thought-open-p nil
         emagent-chat--thought-marker nil
         emagent-chat--reasoning-streamed-p nil)
   (clrhash emagent-chat--tool-call-lines))
+
+(defun emagent-chat--cancel-thought-flush ()
+  "Discard pending reasoning chunks and cancel any flush timer."
+  (when emagent-chat--thought-flush-timer
+    (cancel-timer emagent-chat--thought-flush-timer)
+    (setq emagent-chat--thought-flush-timer nil))
+  (setq emagent-chat--thought-pending ""))
+
+(defun emagent-chat--schedule-thought-flush ()
+  "Debounce reasoning inserts using `emagent-chat-thought-stream-delay'."
+  (when emagent-chat--thought-flush-timer
+    (cancel-timer emagent-chat--thought-flush-timer))
+  (setq emagent-chat--thought-flush-timer
+        (run-with-timer emagent-chat-thought-stream-delay nil
+                        (lambda ()
+                          (setq emagent-chat--thought-flush-timer nil)
+                          (emagent-chat--flush-thought-pending)))))
+
+(defun emagent-chat--insert-thought-now (text)
+  "Insert reasoning TEXT at the open Thinking marker."
+  (when (and (not (string-empty-p text))
+             (emagent-chat--open-response-p))
+    (let ((inhibit-read-only t))
+      (emagent-chat--writable)
+      (emagent-chat--ensure-response-markers)
+      (emagent-chat--ensure-thought-stream)
+      (when (and emagent-chat--thought-marker
+                 (marker-position emagent-chat--thought-marker))
+        (let ((inhibit-modification-hooks t))
+          (save-excursion
+            (goto-char emagent-chat--thought-marker)
+            (emagent-chat--insert-reasoning-text text)
+            (setq emagent-chat--thought-marker (point-marker)
+                  emagent-chat--assistant-marker (point-marker)
+                  emagent-chat--reasoning-streamed-p t)))))))
+
+(defun emagent-chat--flush-thought-pending ()
+  "Insert any batched reasoning text into the open Thinking block."
+  (when emagent-chat--thought-flush-timer
+    (cancel-timer emagent-chat--thought-flush-timer)
+    (setq emagent-chat--thought-flush-timer nil))
+  (let ((text emagent-chat--thought-pending))
+    (setq emagent-chat--thought-pending "")
+    (when (not (string-empty-p text))
+      (emagent-chat--with-streaming-view
+       (lambda ()
+         (emagent-chat--insert-thought-now text))))))
 
 (defun emagent-chat--ensure-response-markers ()
   "Set body markers for the open response when they were lost."
@@ -216,26 +267,15 @@ folding the inner region only so incomplete parses never break the buffer."
 (defun emagent-chat-append-thought (text)
   "Append reasoning TEXT to the open Reasoning block."
   (when (not (string-empty-p text))
-    (emagent-chat--with-stable-view
-      (lambda ()
-        (with-current-buffer (current-buffer)
-          (when (emagent-chat--open-response-p)
-            (let ((inhibit-read-only t))
-              (emagent-chat--writable)
-              (emagent-chat--ensure-response-markers)
-              (emagent-chat--ensure-thought-stream)
-              (when (and emagent-chat--thought-marker
-                         (marker-position emagent-chat--thought-marker))
-                (save-excursion
-                  (goto-char emagent-chat--thought-marker)
-                  (emagent-chat--insert-reasoning-text text)
-                  (setq emagent-chat--thought-marker (point-marker)
-                        emagent-chat--assistant-marker (point-marker)
-                        emagent-chat--reasoning-streamed-p t)))
-              (font-lock-flush))))))))
+    (setq emagent-chat--thought-pending
+          (concat emagent-chat--thought-pending text))
+    (if (or noninteractive (<= emagent-chat-thought-stream-delay 0))
+        (emagent-chat--flush-thought-pending)
+      (emagent-chat--schedule-thought-flush))))
 
 (defun emagent-chat-close-thought ()
   "Close and hide the open Reasoning block, if any."
+  (emagent-chat--flush-thought-pending)
   (emagent-chat--with-stable-view
     (lambda ()
       (with-current-buffer (current-buffer)
@@ -283,15 +323,16 @@ folding the inner region only so incomplete parses never break the buffer."
 
 (defun emagent-chat--insert-reasoning-text (text)
   "Insert TEXT at `emagent-chat--thought-marker' before the Reasoning tail."
-  (if (and (eolp)
-           (save-excursion
-             (forward-line 1)
-             (looking-at "#\\+end_quote"))
-           (save-excursion
-             (beginning-of-line)
-             (looking-at "→ ")))
-      (insert "\n" text)
-    (insert text)))
+  (let ((safe (emagent-chat--escape-reasoning-text text)))
+    (if (and (eolp)
+             (save-excursion
+               (forward-line 1)
+               (looking-at "#\\+end_quote"))
+             (save-excursion
+               (beginning-of-line)
+               (looking-at "→ ")))
+        (insert "\n" safe)
+      (insert safe))))
 
 (defun emagent-chat--org-verbatim-paths (text)
   "Wrap absolute paths in org =verbatim= so /Users/ is not parsed as /italic/."
@@ -302,8 +343,18 @@ folding the inner region only so incomplete parses never break the buffer."
   (format "→ %s" (emagent-chat--org-verbatim-paths label)))
 
 (defun emagent-chat--format-permission-line (question)
-  "Return a Thinking-block permission question line for QUESTION."
+  "Return a permission question line for QUESTION."
   (format "? %s" (emagent-chat--org-verbatim-paths question)))
+
+(defun emagent-chat--permission-content-block (tool-call)
+  "Return org subsection markup for TOOL-CALL, or nil."
+  (when (and tool-call (fboundp 'emagent-acp--tool-call-content-block))
+    (emagent-acp--tool-call-content-block tool-call)))
+
+(defun emagent-chat--insert-permission-newline-if-needed ()
+  "Insert a separating newline unless point already starts a fresh line."
+  (unless (bolp)
+    (insert "\n")))
 
 (defun emagent-chat--repair-tool-line-faces (start end)
   "Re-apply path faces after org font-lock on tool-call lines."
@@ -393,9 +444,11 @@ Return non-nil when a line was updated."
   (emagent-chat--append-tool-line label id))
 
 (defun emagent-chat-permission-prompt (question choices callback &optional tool-call)
-  "Show QUESTION inside the Thinking block; CHOICES as buttons below #+end_quote.
-When TOOL-CALL is non-nil and has a command or content, a formatted org
-subsection is inserted between the question line and the buttons.
+  "Show permission UI after the open Thinking block.
+
+When TOOL-CALL carries a shell command or edit payload, inserts an org
+subsection with that content outside `#+end_quote', then CHOICES as buttons.
+Otherwise inserts a ? question line before the buttons.
 
 CHOICES is a list of (LABEL . VALUE) pairs.  Non-blocking: inserts the dialog
 and returns immediately.  CALLBACK is called with the chosen VALUE when a
@@ -407,6 +460,7 @@ Keyboard shortcuts (via keymap text property on the buttons line):
   n        — Deny"
   (when (emagent-chat--open-response-p)
     (let ((buf (current-buffer))
+          (content-block (emagent-chat--permission-content-block tool-call))
           (responded nil)
           btn-keymap
           question-beg question-end
@@ -434,39 +488,30 @@ Keyboard shortcuts (via keymap text property on the buttons line):
             (emagent-chat--ensure-response-markers)
             (emagent-chat--ensure-reasoning-scaffold)
             (emagent-chat--ensure-reasoning-end-quote)
-            (if-let ((insert-at (emagent-chat--reasoning-stream-marker)))
+            (if-let ((insert-at (emagent-chat--reasoning-block-tail)))
                 (progn
                   (goto-char insert-at)
-                  (setq question-beg (copy-marker (point) nil))
-                  (unless (bolp) (insert "\n"))
-                  (insert (emagent-chat--format-permission-line question))
-                  (put-text-property (marker-position question-beg) (point)
-                                     'face 'emagent-permission-prompt)
-                  (emagent-chat--repair-tool-line-faces (marker-position question-beg) (point))
-                  (insert "\n")
-                  (setq question-end (copy-marker (point) nil))
-                  (when-let ((block (and tool-call
-                                         (fboundp 'emagent-acp--tool-call-content-block)
-                                         (emagent-acp--tool-call-content-block tool-call))))
-                    (goto-char (or (emagent-chat--reasoning-block-tail)
-                                   (marker-position question-end)))
+                  (when content-block
                     (setq content-beg (copy-marker (point) nil))
-                    (unless (and (bolp)
-                                 (save-excursion
-                                   (forward-line -1)
-                                   (and (bolp) (not (looking-at "^#\\+end_quote")))))
-                      (insert "\n"))
-                    (insert block "\n")
+                    (emagent-chat--insert-permission-newline-if-needed)
+                    (insert content-block "\n")
                     (setq content-end (copy-marker (point) nil)))
                   (goto-char (or (and content-end (marker-position content-end))
-                                 (emagent-chat--reasoning-block-tail)
-                                 (marker-position question-end)))
+                                 insert-at))
+                  (unless content-block
+                    (setq question-beg (copy-marker (point) nil))
+                    (emagent-chat--insert-permission-newline-if-needed)
+                    (insert (emagent-chat--format-permission-line question))
+                    (put-text-property (marker-position question-beg) (point)
+                                       'face 'emagent-permission-prompt)
+                    (emagent-chat--repair-tool-line-faces (marker-position question-beg) (point))
+                    (insert "\n")
+                    (setq question-end (copy-marker (point) nil)))
+                  (goto-char (or (and question-end (marker-position question-end))
+                                 (and content-end (marker-position content-end))
+                                 insert-at))
                   (setq buttons-beg (copy-marker (point) nil))
-                  (unless (and (bolp)
-                               (save-excursion
-                                 (forward-line -1)
-                                 (and (bolp) (not (looking-at "^#\\+end_quote")))))
-                    (insert "\n"))
+                  (emagent-chat--insert-permission-newline-if-needed)
                   (setq btn-keymap (make-sparse-keymap))
                   (set-keymap-parent btn-keymap button-map)
                   ;; Build key-hints alist and populate btn-keymap first
@@ -523,16 +568,20 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                          (insert "  ")))
                      choices hints))
                   (insert "\n")
-                  (setq buttons-end (copy-marker (point) nil)))
+                  (setq buttons-end (copy-marker (point) nil))
+                  (when-let ((stream (emagent-chat--reasoning-stream-marker)))
+                    (setq emagent-chat--thought-marker stream)))
               (setq question-beg nil content-beg nil buttons-beg nil))))
         (if (not buttons-beg)
-            (let ((preamble (concat
+            (let ((content-block (or content-block
+                                     (emagent-chat--permission-content-block tool-call)))
+                  (preamble (concat
                              "\n** Request permissions\n"
-                             (when-let ((block (and tool-call
-                                                    (fboundp 'emagent-acp--tool-call-content-block)
-                                                    (emagent-acp--tool-call-content-block tool-call))))
-                               (concat block "\n")))))
-              (emagent-tools--buttons-prompt question choices buf callback preamble))
+                             (when content-block
+                               (concat content-block "\n")))))
+              (emagent-tools--buttons-prompt
+               (if content-block "" question)
+               choices buf callback preamble))
           (when-let ((win (get-buffer-window buf)))
             (with-selected-window win
               (when (and buttons-beg (marker-position buttons-beg))
@@ -578,7 +627,7 @@ Keyboard shortcuts (via keymap text property on the buttons line):
         (save-excursion
           (goto-char beg)
           (forward-line 1)
-          (insert trimmed)
+          (insert (emagent-chat--escape-reasoning-text trimmed))
           (unless (bolp) (insert "\n")))))))
 
 (defun emagent-chat--finalize-streamed-assistant (converted)

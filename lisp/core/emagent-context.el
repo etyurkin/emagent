@@ -37,11 +37,12 @@
 (defun emagent-context--org-info ()
   "Return org headline info at point when in org-mode."
   (when (derived-mode-p 'org-mode)
-    (let ((element (org-element-at-point)))
-      (when (eq (org-element-type element) 'headline)
-        (list (cons :title (org-element-property :raw-value element))
-              (cons :level (org-element-property :level element))
-              (cons :tags (org-element-property :tags element)))))))
+    (ignore-errors
+      (let ((element (org-element-at-point)))
+        (when (eq (org-element-type element) 'headline)
+          (list (cons :title (org-element-property :raw-value element))
+                (cons :level (org-element-property :level element))
+                (cons :tags (org-element-property :tags element))))))))
 
 (declare-function which-function "which-func")
 

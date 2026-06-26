@@ -83,6 +83,23 @@
     (puthash :external-tool-gate-reasons nil state)
     state))
 
+(defun emagent-test--push-first-button (&optional buffer)
+  "Click the first button in BUFFER, or the current buffer when omitted."
+  (with-current-buffer (or buffer (current-buffer))
+    (goto-char (point-min))
+    (while (and (not (eobp)) (not (button-at (point))))
+      (forward-char 1))
+    (when-let ((btn (button-at (point))))
+      (button-activate btn t))))
+
+(defun emagent-test--mock-buttons-prompt (choice &optional on-call)
+  "Return a mock `emagent-tools--buttons-prompt' that invokes CALLBACK with CHOICE."
+  (cl-function
+   (lambda (&rest args)
+     (when on-call (funcall on-call args))
+     (when-let ((callback (nth 3 args)))
+       (funcall callback choice)))))
+
 (defun emagent-test--with-mcp-session (root fn)
   "Register a temporary MCP session at ROOT and run FN with TOKEN and BUFFER."
   (let ((token (emagent-mcp-make-token))

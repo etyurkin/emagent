@@ -154,6 +154,16 @@
        (should (string-match-p "^Thinking " head))
        (should (string-match-p "●\\|○" head))))))
 
+(ert-deftest emagent-chat-test-mode-line-allow-no-spinner ()
+  (emagent-test--with-busy-session
+   (lambda ()
+     (puthash :permission-busy t emagent-acp--session)
+     (let* ((parts (emagent-chat--mode-line-strings))
+            (head (substring-no-properties (car parts))))
+       (should (string-match-p "^emagent:Allow\\?" head))
+       (should (not (string-match-p "●\\|○" head)))
+       (should (not (emagent-chat--spinner-active-p)))))))
+
 (ert-deftest emagent-chat-test-mode-line-idle-when-busy-clears ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
@@ -166,6 +176,29 @@
        (puthash :busy nil emagent-acp--session)
        (emagent-chat--refresh-mode-line)
        (should (string-match-p "Idle" emagent-chat--mode-line-head))))))
+
+(ert-deftest emagent-chat-test-spinner-sync-frame ()
+  (let ((emagent-chat-spinner-interval 0.1)
+        (emagent-chat-spinner-style 'dots))
+    (setq emagent-chat--spinner-start-time (- (float-time) 0.25))
+    (emagent-chat--spinner-sync-frame)
+    (should (= (% (floor 0.25 0.1) 4) emagent-chat--spinner-frame))))
+
+(ert-deftest emagent-chat-test-spinner-refresh-without-cache ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (setq emagent-acp--session (make-hash-table :test 'eq))
+     (puthash :busy t emagent-acp--session)
+     (with-current-buffer buffer
+       (setq emagent-chat--mode-line-head nil
+             emagent-chat--mode-line-tail nil
+             emagent-chat--mode-line-cache nil
+             emagent-chat--spinner-frame 0)
+       (should (emagent-chat--spinner-refresh-buffer buffer))
+       (should (string-match-p "Thinking ●" emagent-chat--mode-line-head))
+       (setq emagent-chat--spinner-frame 1)
+       (should (emagent-chat--spinner-refresh-buffer buffer))
+       (should (string-match-p "Thinking ○●○" emagent-chat--mode-line-head))))))
 
 (ert-deftest emagent-chat-test-restore-window-views-keeps-point ()
   (with-temp-buffer
@@ -301,9 +334,40 @@
           (emagent-chat-show-tool-call "id1" "grep: pattern")
           (let ((text (substring-no-properties (buffer-string))))
             (should (string-match-p
-                     "before\n#\\+end_quote\nmiddle after\n→ grep: pattern"
+                     "before\n,#\\+end_quote\nmiddle after\n→ grep: pattern"
                      text))
             (should-not (string-match-p "middle\n→ grep" text)))))))))
+
+(ert-deftest emagent-chat-test-escape-reasoning-text ()
+  (should (string= ",#+end_quote"
+                   (emagent-chat--escape-reasoning-text "#+end_quote")))
+  (should (string= ",* headline"
+                   (emagent-chat--escape-reasoning-text "* headline")))
+  (should (string= "plain\n,#+BEGIN_SRC elisp"
+                   (emagent-chat--escape-reasoning-text "plain\n#+BEGIN_SRC elisp"))))
+
+(ert-deftest emagent-chat-test-close-unclosed-code-fence ()
+  (let ((out (emagent-chat--convert-agent-markup "text\n```elisp\n(+ 1 2)\n")))
+    (should (string-match-p "#\\+BEGIN_SRC elisp" out))
+    (should (string-match-p "(\\+ 1 2)" out))
+    (should (string-match-p "#\\+END_SRC" out))
+    (should-not (string-match-p "```" out))))
+
+(ert-deftest emagent-chat-test-close-unclosed-org-src ()
+  (let ((out (emagent-chat--convert-agent-markup
+              "see:\n#+BEGIN_SRC shell\n#!/bin/sh\necho hi\n")))
+    (should (string-match-p "#\\+END_SRC" out))
+    (should-not (string-match-p "#\\+BEGIN_SRC shell\\n#!/bin/sh\\necho hi\\s-*\\'" out))))
+
+(ert-deftest emagent-chat-test-begin-response-wraps-headline ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (emagent-chat--begin-response (point))
+       (let ((text (substring-no-properties (buffer-string))))
+         (should (string-match-p (regexp-quote emagent-chat-response-headline) text))
+         (should (string-match-p (regexp-quote emagent-chat-response-begin) text)))))))
 
 (ert-deftest emagent-chat-test-stream-with-point-away-from-tail ()
   (emagent-test--with-emagent-buffer
@@ -441,21 +505,46 @@
           (goto-char (point-max))
           (emagent-chat--begin-response (point))
           (emagent-chat-show-tool-call "id1" "compile")
-          (let (layout)
-            (emagent-test--with-mocks
-                (((symbol-function 'recursive-edit)
-                  (lambda ()
-                    (setq layout (substring-no-properties (buffer-string)))
-                    (signal 'quit nil))))
-              (emagent-chat-permission-prompt
-               "make test"
-               '(("Allow once" . "allow-once"))))
-            (should (string-match-p "\\? make test" layout))
-            (should (string-match-p "#\\+end_quote\n\n\\[Allow once\\]" layout))
+          (let (layout args tool-call)
+            (setq args (make-hash-table :test 'equal))
+            (puthash "command" "make test" args)
+            (setq tool-call `((toolCallId . "tool_compile")
+                               (title . "compile")
+                               (arguments . ,args)))
+            (emagent-chat-permission-prompt
+             "make test"
+             '(("Allow once" . :allow-once))
+             (lambda (_choice)
+               (setq layout (substring-no-properties (buffer-string))))
+             tool-call)
+            (setq layout (substring-no-properties (buffer-string)))
+            (should (string-match-p "#\\+end_quote\n\n\\*\\* Allow execute" layout))
+            (should (string-match-p "#\\+BEGIN_SRC sh\nmake test\n#\\+END_SRC" layout))
+            (should (string-match-p "#\\+END_SRC\n\\[Allow once\\]" layout))
+            (should-not (string-match-p "\\? make test" layout))
+            (emagent-test--push-first-button buffer)
             (let ((text (substring-no-properties (buffer-string))))
               (should (string-match-p "#\\+end_quote" text))
               (should-not (string-match-p "\\? make test" text))
               (should-not (string-match-p "\\[Allow once\\]" text))))))))))
+
+(ert-deftest emagent-chat-test-buffer-display ()
+  (let ((disable-visual
+         (lambda ()
+           (when (derived-mode-p 'emagent-mode)
+             (visual-line-mode -1)
+             (setq-local truncate-lines t)))))
+    (unwind-protect
+        (progn
+          (add-hook 'org-mode-hook disable-visual 50)
+          (emagent-test--with-emagent-buffer
+           (lambda (buffer _dir)
+             (with-current-buffer buffer
+               (should (bound-and-true-p visual-line-mode))
+               (should-not truncate-lines)
+               (when (fboundp 'org-phscroll-mode)
+                 (should (bound-and-true-p org-phscroll-mode)))))))
+      (remove-hook 'org-mode-hook disable-visual 50))))
 
 (provide 'emagent-chat-test)
 

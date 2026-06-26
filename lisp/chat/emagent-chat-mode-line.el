@@ -50,9 +50,6 @@
 (defvar emagent-chat--spinner-timer nil
   "Repeating timer that advances the spinner while any session is busy.")
 
-(defvar emagent-chat--spinner-refresh-timer nil
-  "One-shot idle timer that applies spinner frame updates to mode lines.")
-
 (defun emagent-chat--spinner-after-custom-set (sym val)
   "Set SYM to VAL and refresh emagent mode lines."
   (set-default sym val)
@@ -118,6 +115,9 @@ When nil, the spinner inherits the mode-line height."
 (defvar emagent-chat--spinner-frame 0
   "Current spinner frame index into `emagent-chat--spinner-frames'.")
 
+(defvar emagent-chat--spinner-start-time nil
+  "Epoch time when the busy spinner animation started, or nil when idle.")
+
 (defconst emagent-chat--spinner-dot-frames '((t nil nil) (nil t nil) (nil nil t) (nil t nil))
   "Four-frame chase: @00, 0@0, 00@, 0@0, …")
 
@@ -159,8 +159,20 @@ When nil, the spinner inherits the mode-line height."
     (propertize (aref emagent-chat--spinner-frames emagent-chat--spinner-frame)
                 'face face)))
 
+(defun emagent-chat--spinner-sync-frame ()
+  "Update `emagent-chat--spinner-frame' from elapsed time since spinner start."
+  (when emagent-chat--spinner-start-time
+    (let* ((count (emagent-chat--spinner-frame-count))
+           (interval (max 0.05 emagent-chat-spinner-interval)))
+      (setq emagent-chat--spinner-frame
+            (% (floor (/ (- (float-time) emagent-chat--spinner-start-time)
+                         interval))
+               count))
+      t)))
+
 (defun emagent-chat--spinner-string ()
   "Return the current spinner rendering for the mode line."
+  (emagent-chat--spinner-sync-frame)
   (pcase emagent-chat-spinner-style
     ('dots (emagent-chat--spinner-dot-grid))
     (_ (emagent-chat--spinner-braille))))
@@ -168,6 +180,12 @@ When nil, the spinner inherits the mode-line height."
 (defun emagent-chat--mode-line-spinner-suffix ()
   "Return the propertized busy spinner suffix for the mode line."
   (concat " " (emagent-chat--spinner-string)))
+
+(defun emagent-chat--spinner-active-p ()
+  "Return non-nil when the mode-line thinking spinner should animate."
+  (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p)
+       (not (and (fboundp 'emagent-acp-waiting-permission-p)
+                 (emagent-acp-waiting-permission-p)))))
 
 ;;; -------------------------------------------------------------------------
 ;;; Mode-line cache and refresh
@@ -185,12 +203,12 @@ When nil, the spinner inherits the mode-line height."
 (defun emagent-chat--spinner-refresh-buffer (buffer)
   "Refresh BUFFER's cached mode line while its session is busy."
   (with-current-buffer buffer
-    (when (and emagent-chat--mode-line-tail
-               (fboundp 'emagent-acp-busy-p)
-               (emagent-acp-busy-p))
+    (when (and (derived-mode-p 'emagent-mode)
+               (emagent-chat--spinner-active-p))
       (emagent-chat--mode-line-recompute)
       (when (get-buffer-window buffer 'visible)
-        (force-mode-line-update t)))))
+        (force-mode-line-update t))
+      t)))
 
 (defun emagent-chat--mode-line-recompute ()
   "Rebuild cached mode-line strings for the current emagent buffer."
@@ -212,24 +230,28 @@ When nil, the spinner inherits the mode-line height."
   (force-mode-line-update t)
   ;; Force immediate redisplay when the session is busy so the
   ;; mode-line animation starts without waiting for user input.
-  (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
+  (when (emagent-chat--spinner-active-p)
     (redisplay t)))
 
 ;;;###autoload
 (defun emagent-chat--refresh-mode-line-soon ()
-  "Queue a single idle mode-line recompute for the current buffer."
+  "Queue a single mode-line recompute for the current buffer."
   (let ((buf (current-buffer)))
     (when emagent-chat--mode-line-refresh-timer
       (cancel-timer emagent-chat--mode-line-refresh-timer))
-    (setq emagent-chat--mode-line-refresh-timer
-          (run-with-idle-timer
-           0 nil
+    (let ((refresh
            (lambda ()
              (setq emagent-chat--mode-line-refresh-timer nil)
              (when (buffer-live-p buf)
                (with-current-buffer buf
                  (emagent-chat--mode-line-recompute)
-                 (force-mode-line-update t))))))))
+                 (force-mode-line-update t)
+                 (when (emagent-chat--spinner-active-p)
+                   (redisplay t)))))))
+      (setq emagent-chat--mode-line-refresh-timer
+            (if (emagent-chat--spinner-active-p)
+                (run-with-timer 0 nil refresh)
+              (run-with-idle-timer 0 nil refresh))))))
 
 ;;; -------------------------------------------------------------------------
 ;;; Mode-line string assembly
@@ -245,7 +267,7 @@ When nil, the spinner inherits the mode-line height."
          (kind  (and (fboundp 'emagent-acp-current-tool-kind) (emagent-acp-current-tool-kind)))
          (rss   (and (fboundp 'emagent-acp-agent-rss) (emagent-acp-agent-rss)))
          (connected (or busy ready))
-         (spinner (when (and busy (not waiting-permission))
+         (spinner (when (emagent-chat--spinner-active-p)
                     (emagent-chat--mode-line-spinner-suffix)))
          (busy-face '(bold mode-line-emphasis))
          (head (cond
@@ -288,43 +310,34 @@ When nil, the spinner inherits the mode-line height."
 
 (defun emagent-chat--spinner-refresh-idle ()
   "Apply the current spinner frame to busy emagent buffers; stop when idle."
-  (setq emagent-chat--spinner-refresh-timer nil)
-  (let ((any-busy nil))
+  (let ((any-busy nil)
+        (redisplay-p nil))
     (dolist (buf (buffer-list))
       (when (buffer-live-p buf)
         (with-current-buffer buf
           (when (and (derived-mode-p 'emagent-mode)
-                     (fboundp 'emagent-acp-busy-p)
-                     (emagent-acp-busy-p))
+                     (emagent-chat--spinner-active-p))
             (setq any-busy t)
-            (emagent-chat--spinner-refresh-buffer buf)))))
+            (when (emagent-chat--spinner-refresh-buffer buf)
+              (setq redisplay-p t))))))
+    (when redisplay-p
+      (redisplay t))
     (unless any-busy
       (when emagent-chat--spinner-timer
         (cancel-timer emagent-chat--spinner-timer))
-      (setq emagent-chat--spinner-timer nil))))
-
-(defun emagent-chat--spinner-schedule-refresh ()
-  "Schedule a lightweight idle refresh of visible busy mode lines."
-  (when emagent-chat--spinner-refresh-timer
-    (cancel-timer emagent-chat--spinner-refresh-timer))
-  (setq emagent-chat--spinner-refresh-timer
-        (run-at-time 0 nil #'emagent-chat--spinner-refresh-idle)))
+      (setq emagent-chat--spinner-timer nil
+            emagent-chat--spinner-start-time nil))))
 
 (defun emagent-chat--spinner-tick ()
-  "Advance spinner one frame and queue an idle mode-line refresh."
-  (setq emagent-chat--spinner-frame
-        (% (1+ emagent-chat--spinner-frame)
-           (emagent-chat--spinner-frame-count)))
-  (emagent-chat--spinner-schedule-refresh))
+  "Refresh visible busy mode lines for the current spinner frame."
+  (emagent-chat--spinner-sync-frame)
+  (emagent-chat--spinner-refresh-idle))
 
 ;;;###autoload
 (defun emagent-chat--spinner-restart-timer ()
   "Restart the spinner timer using `emagent-chat-spinner-interval'."
   (when emagent-chat--spinner-timer
     (cancel-timer emagent-chat--spinner-timer))
-  (when emagent-chat--spinner-refresh-timer
-    (cancel-timer emagent-chat--spinner-refresh-timer)
-    (setq emagent-chat--spinner-refresh-timer nil))
   (setq emagent-chat--spinner-timer
         (run-with-timer 0 emagent-chat-spinner-interval
                         #'emagent-chat--spinner-tick)))
@@ -333,7 +346,13 @@ When nil, the spinner inherits the mode-line height."
 (defun emagent-chat--spinner-start ()
   "Start the spinner timer if not already running."
   (unless emagent-chat--spinner-timer
-    (emagent-chat--spinner-restart-timer)))
+    (setq emagent-chat--spinner-start-time (float-time)
+          emagent-chat--spinner-frame 0)
+    (emagent-chat--spinner-restart-timer))
+  (when (derived-mode-p 'emagent-mode)
+    (emagent-chat--mode-line-recompute)
+    (force-mode-line-update t)
+    (redisplay t)))
 
 ;;;###autoload
 (defun emagent-chat--mode-line-context-usage ()

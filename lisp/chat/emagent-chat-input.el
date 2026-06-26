@@ -102,19 +102,24 @@ Returns the buffer position after the formatted heading."
 (defun emagent-chat--delete-following-response (pos)
   "Delete the response block after POS, stopping before the next user heading.
 
-Deletes from the first '# --- emagent ---' after POS up to (but not
-including) the next '* user>' heading, whether bare or with content."
+Deletes from the first `emagent-chat-response-headline' or
+`# --- emagent ---' after POS up to (but not including) the next
+`* user>' heading, whether bare or with content."
   (save-excursion
     (goto-char pos)
     (skip-chars-forward " \t\n")
-    (when (looking-at emagent-chat--response-begin-re)
+    (unless (or (looking-at emagent-chat--response-headline-re)
+                (looking-at emagent-chat--response-begin-re))
+      (or (re-search-forward emagent-chat--response-headline-re nil t)
+          (re-search-forward emagent-chat--response-begin-re nil t)))
+    (when (or (looking-at emagent-chat--response-headline-re)
+              (looking-at emagent-chat--response-begin-re))
       (let ((start (line-beginning-position))
             (inhibit-read-only t))
         (emagent-chat--writable)
         (when (re-search-forward emagent-chat--response-end-re nil t)
           (forward-line 1)
           (skip-chars-forward " \t\n")
-          ;; Stop here — leave whatever follows (next heading, stub, or nothing).
           (delete-region start (point)))))))
 
 (defun emagent-chat--user-heading-follows-p ()
@@ -139,6 +144,7 @@ including) the next '* user>' heading, whether bare or with content."
       (and (not (string-match-p "^#\\+" line))
            (not (string-match-p "^# " line))
            (not (string-match-p "^\\* Emagent\\b" line))
+           (not (string-match-p emagent-chat--response-headline-re line))
            (not (string-match-p emagent-chat--response-begin-re line))
            (not (string-match-p emagent-chat--response-end-re line))
            (not (string-match-p "^#\\+BEGIN_SRC" line))
@@ -223,7 +229,10 @@ response delimiter."
                         (goto-char heading-pos)
                         (forward-line 1)
                         (if (re-search-forward
-                             (concat "^\\* \\|" emagent-chat--response-begin-re)
+                             (concat "^\\* \\|"
+                                     emagent-chat--response-headline-re
+                                     "\\|"
+                                     emagent-chat--response-begin-re)
                              (point-max) t)
                             (match-beginning 0)
                           (point-max)))))

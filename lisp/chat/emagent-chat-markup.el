@@ -182,6 +182,22 @@
            result))
     result))
 
+(defun emagent-chat--escape-reasoning-line (line)
+  "Escape LINE so Org will not parse it as structure inside a quote block."
+  (cond
+   ((string-match-p "^#\\+" line)
+    (concat "," line))
+   ((string-match-p "^\\*" line)
+    (concat "," line))
+   (t line)))
+
+;;;###autoload
+(defun emagent-chat--escape-reasoning-text (text)
+  "Escape agent reasoning TEXT before inserting it into a quote block."
+  (if (string-empty-p (or text ""))
+      ""
+    (mapconcat #'emagent-chat--escape-reasoning-line (split-string text "\n") "\n")))
+
 (defun emagent-chat--convert-code-fences (text)
   "Convert markdown ``` fences in TEXT to org src blocks."
   (let ((pos 0)
@@ -196,8 +212,12 @@
                  (body-start (match-end 0))
                  (tag (string-trim (substring text after-fence tag-end))))
             (if (not (string-match "```" text body-start))
-                (progn (push (substring text fence-start body-start) parts)
-                       (setq pos body-start))
+                (let ((body (substring text body-start)))
+                  (push (format "#+BEGIN_SRC %s\n%s\n#+END_SRC"
+                                (emagent-chat--lang-from-src-tag tag)
+                                body)
+                        parts)
+                  (setq pos (length text)))
               (let* ((body-end (match-beginning 0))
                      (close-end (match-end 0))
                      (body (substring text body-start body-end)))
@@ -208,6 +228,24 @@
                 (setq pos close-end)))))))
     (push (substring text pos) parts)
     (apply #'concat (nreverse parts))))
+
+(defun emagent-chat--close-unclosed-org-src (text)
+  "Append missing #+END_SRC lines for unclosed org src blocks in TEXT."
+  (let ((lines (split-string text "\n"))
+        (open nil)
+        (result nil))
+    (dolist (line lines)
+      (cond
+       ((string-match-p "^#\\+BEGIN_SRC\\b" line)
+        (when open (push "#+END_SRC" result))
+        (setq open t)
+        (push line result))
+       ((string-match-p "^#\\+END_SRC\\b" line)
+        (setq open nil)
+        (push line result))
+       (t (push line result))))
+    (when open (push "#+END_SRC" result))
+    (mapconcat #'identity (nreverse result) "\n")))
 
 (defun emagent-chat--fix-org-src-citations (text)
   "Rewrite file-citation language tags in org src block headers."
@@ -245,12 +283,13 @@
 ;;;###autoload
 (defun emagent-chat--convert-agent-markup (text)
   "Convert leftover markdown markup in agent responses to org."
-  (emagent-chat--normalize-response-spacing
-   (emagent-chat--convert-markdown-tables
-    (emagent-chat--normalize-elisp-src-tags
-     (emagent-chat--convert-code-fences
-      (emagent-chat--fix-org-src-citations
-       (emagent-chat--unwrap-outer-org-src text)))))))
+  (emagent-chat--close-unclosed-org-src
+   (emagent-chat--normalize-response-spacing
+    (emagent-chat--convert-markdown-tables
+     (emagent-chat--normalize-elisp-src-tags
+      (emagent-chat--convert-code-fences
+       (emagent-chat--fix-org-src-citations
+        (emagent-chat--unwrap-outer-org-src text))))))))
 
 (provide 'emagent-chat-markup)
 ;;; emagent-chat-markup.el ends here

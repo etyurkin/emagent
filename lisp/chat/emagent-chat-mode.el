@@ -35,20 +35,38 @@
             (re-search-forward "^\\(?:#\\+\\)?STARTUP:.*\\bhideblocks\\b" nil t))
     (emagent-chat--write-top-property "STARTUP" "hideblocks")))
 
+(defun emagent-chat--disable-incompatible-org-minor-modes ()
+  "Turn off org minor modes that break on emagent chat buffer content."
+  (when (fboundp 'org-appear-mode)
+    (org-appear-mode -1))
+  (setq-local org-element-use-cache nil))
+
+(defun emagent-chat--setup-buffer-display ()
+  "Configure prose wrapping and table scrolling for emagent buffers.
+
+Prose uses `visual-line-mode'.  Wide org tables scroll horizontally via
+`org-phscroll-mode', which applies only inside table regions — not buffer-wide.
+`truncate-lines' must stay nil; phscroll does not work when it is t.
+
+Runs late on `org-mode-hook' so it overrides user hooks (e.g. org-modern
+`kwarks/org--table-buffer-setup') that disable wrapping globally."
+  (when (derived-mode-p 'emagent-mode)
+    (setq-local org-startup-truncated nil
+                truncate-lines nil)
+    (when (boundp 'word-wrap)
+      (setq-local word-wrap t))
+    (visual-line-mode 1)
+    (when (fboundp 'org-phscroll-mode)
+      (org-phscroll-mode 1))))
+
 (defun emagent-chat--setup-faces ()
   "Configure org highlighting, line wrap, and block folding for emagent buffers."
+  (emagent-chat--disable-incompatible-org-minor-modes)
   (setq-local org-src-fontify-natively t
               org-ellipsis "…"
               org-fontify-quote-and-verse-blocks t
-              org-cycle-hide-block-startup t
-              org-startup-truncated nil
-              truncate-lines nil)
-  (when (boundp 'word-wrap)
-    (setq-local word-wrap t))
-  (visual-line-mode 1)
-  ;; org-phscroll: horizontal scroll for wide tables while prose wraps.
-  (when (fboundp 'org-phscroll-mode)
-    (org-phscroll-mode 1)))
+              org-cycle-hide-block-startup t)
+  (emagent-chat--setup-buffer-display))
 
 (defun emagent-chat--setup-faces-deferred ()
   "Re-apply `emagent-chat--setup-faces' after org startup hooks finish."
@@ -86,6 +104,7 @@ Run \\[emagent-mode] to reconnect a saved session."
       (emagent-chat--setup-doom-modeline)
     (setq-local mode-line-format (list "" 'emagent-mode-line "")))
   (org-indent-mode -1)
+  (emagent-chat--disable-incompatible-org-minor-modes)
   (when-let ((dir (emagent-chat-project-directory)))
     (rename-buffer (emagent-chat--buffer-name-for-label
                     (emagent-chat--short-cwd-label dir))
@@ -172,6 +191,7 @@ executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'.
         (call-interactively 'emagent--transient-menu))
     (message "emagent: SPC=send, p=prompt, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
 
+(add-hook 'org-mode-hook #'emagent-chat--setup-buffer-display 110 t)
 (add-hook 'emagent-mode-hook #'emagent-chat--setup-faces 100 t)
 (dolist (buffer (buffer-list))
   (with-current-buffer buffer
