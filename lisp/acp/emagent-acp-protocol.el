@@ -11,7 +11,7 @@
 ;; coexist with xenodium/acp.el in the same Emacs session.
 ;;
 ;;   - Client is created as a hash table so map-put! works on Emacs 30+.
-;;   - Incoming message queue drains synchronously and reschedules when a
+;;   - Incoming message queue drains in bounded batches and reschedules when a
 ;;     drain is already in progress (fixes the stall in acp.el 0.12.2).
 ;;   - emagent-acp-make-session-load-request accepts an optional :meta keyword.
 ;;   - emagent-acp-make-session-prompt-request accepts an optional :images keyword
@@ -28,6 +28,7 @@
 (require 'cl-lib)
 (require 'map)
 (require 'json)
+(require 'emagent-acp-custom)
 
 ;;;; Configuration
 
@@ -100,11 +101,11 @@ modify each outgoing JSON-RPC request before it is sent."
        (process-live-p (map-elt client :process))))
 
 (cl-defun emagent-acp--start-client (&key client)
-  "Start the CLIENT process with a synchronous, rescheduling message-queue drain.
+  "Start the CLIENT process with a cooperative, timer-driven message queue.
 
-Unlike the vanilla acp.el implementation, messages are routed immediately
-rather than via a deferred timer, preventing queue stalls when multiple
-messages arrive while a drain is already in progress."
+Wire lines are queued from the process filter; JSON parsing and handler
+dispatch run via `run-with-timer' in bounded batches so Emacs timers and
+redisplay are not starved during heavy agent output."
   (unless client (error ":client is required"))
   (unless (map-elt client :command) (error ":command is required"))
   (when (emagent-acp--client-started-p client)
@@ -123,6 +124,7 @@ messages arrive while a drain is already in progress."
            (coding-system-for-write 'utf-8-unix)
            (pending-input "")
            (message-queue nil)
+           (message-queue-tail nil)
            (message-queue-busy nil)
            (drain-pending nil)
            (process-environment (append (map-elt client :environment-variables)
@@ -144,7 +146,15 @@ messages arrive while a drain is already in progress."
                           (funcall h err)))))
                   nil t))
       (cl-labels
-          ((route (incoming)
+          ((route-parsed (json)
+             (when-let* ((obj (condition-case nil
+                                  (emagent-acp--parse-json json)
+                                (error
+                                 (emagent-acp--log client "JSON PARSE ERROR"
+                                           "Invalid JSON: %s" json)
+                                 nil))))
+               (route (emagent-acp--make-message :json json :object obj))))
+           (route (incoming)
              (let ((print-circle t) (print-level 25) (print-length 200))
                (emagent-acp--route-incoming-message
                 :message incoming :client client
@@ -167,20 +177,28 @@ messages arrive while a drain is already in progress."
              (unless message-queue-busy
                (setq message-queue-busy t)
                (unwind-protect
-                   (while message-queue
-                     (let ((incoming (car message-queue)))
+                   (let ((batch 0)
+                         (limit (max 1 emagent-acp-message-drain-batch-size)))
+                     (while (and message-queue (< batch limit))
+                       (setq batch (1+ batch))
+                       (route-parsed (car message-queue))
                        (setq message-queue (cdr message-queue))
-                       (route incoming)))
+                       (unless message-queue
+                         (setq message-queue-tail nil))))
                  (setq message-queue-busy nil))
                (when message-queue
                  (unless drain-pending
                    (setq drain-pending t)
                    (run-with-timer 0 nil (lambda () (drain)))))))
-           (enqueue (incoming)
-             (setq message-queue (append message-queue (list incoming)))
-             (unless drain-pending
-               (setq drain-pending t)
-               (run-with-timer 0 nil (lambda () (drain))))))
+           (enqueue (json-line)
+             (let ((cell (list json-line)))
+               (if message-queue-tail
+                   (setcdr message-queue-tail cell)
+                 (setq message-queue cell))
+               (setq message-queue-tail cell)
+               (unless drain-pending
+                 (setq drain-pending t)
+                 (run-with-timer 0 nil (lambda () (drain)))))))
         (let ((proc
                (let ((default-directory dir))
                  (make-process
@@ -201,13 +219,7 @@ messages arrive while a drain is already in progress."
                       (while (setq pos (string-search "\n" pending-input start))
                         (let ((json (substring pending-input start pos)))
                           (emagent-acp--log client "INCOMING LINE" "%s" json)
-                          (when-let* ((obj (condition-case nil
-                                               (emagent-acp--parse-json json)
-                                             (error
-                                              (emagent-acp--log client "JSON PARSE ERROR"
-                                                        "Invalid JSON: %s" json)
-                                              nil))))
-                            (enqueue (emagent-acp--make-message :json json :object obj))))
+                          (enqueue json))
                         (setq start (1+ pos)))
                       (setq pending-input (substring pending-input start))))
                   :sentinel

@@ -56,8 +56,10 @@ iCloud Drive prompts.  Set to nil only if you prefer the agent's own file tools.
   "Automatically approve ACP session permission prompts at the emagent gate.
 
 When nil (default), emagent prompts in the chat buffer unless the user has
-already allowed the request fingerprint for this session or in the buffer
-header (#+EMAGENT_ALLOWED_PERMISSIONS).
+already allowed the request fingerprint for this ACP session
+(`emagent-permissions-directory'/sessions), globally (\"Allow always\"), per
+project directory (projects/), or in a legacy buffer header
+(#+EMAGENT_ALLOWED_PERMISSIONS).
 
 When `safe', read and write tools are auto-approved without prompting.
 Execute (shell) commands are inspected for destructive operations — rm,
@@ -124,6 +126,14 @@ completes."
 (defcustom emagent-acp-render-delay 0.05
   "Seconds to wait after the last prompt chunk before rendering the response."
   :type 'number
+  :group 'emagent)
+
+(defcustom emagent-acp-message-drain-batch-size 1
+  "ACP wire messages handled per timer event before yielding to Emacs.
+
+1 keeps the UI responsive during heavy agent output.  Raise only if you
+prefer throughput and accept longer stretches without timer service."
+  :type 'integer
   :group 'emagent)
 
 (defcustom emagent-log-agent-stderr nil
