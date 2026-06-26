@@ -32,9 +32,18 @@
 (require 'emagent-acp-tool-call)
 (require 'emagent-tools)
 (require 'emagent-policy)
+(require 'emagent-permissions)
 
 (declare-function emagent-chat-allowed-permissions "emagent-chat")
-(declare-function emagent-chat-add-allowed-permission "emagent-chat")
+(declare-function emagent-chat-project-directory "emagent-chat")
+
+(defun emagent-acp--hydrate-session-permissions (state session-id)
+  "Load ~/.emagent session permissions for SESSION-ID into STATE."
+  (when (and session-id (not (string-empty-p session-id)))
+    (map-put! state :permission-auto-allow
+              (copy-sequence (emagent-permissions-session-fingerprints session-id)))
+    (when (emagent-permissions-session-auto-approve-p session-id)
+      (map-put! state :session-auto-approve t))))
 
 (declare-function emagent-acp--send-request "emagent-acp")
 (declare-function emagent-acp--emit-tool-call-display "emagent-acp")
@@ -142,10 +151,29 @@ last resort so the permission can still be granted."
        (command (format "execute:%s" command))
        (t "unknown")))))
 
+(defun emagent-acp--tool-call-infer-kind (tool-call)
+  "Guess tool-call kind when ACP omits it (common with Cursor permissions)."
+  (when tool-call
+    (let* ((explicit (map-elt tool-call 'kind))
+           (title (downcase (or (map-elt tool-call 'title) "")))
+           (raw (or (map-elt tool-call 'rawInput) (map-elt tool-call 'arguments)))
+           (data (when raw (emagent-acp--tool-call-normalize-data raw)))
+           (content (when data (emagent-acp--tool-call-data-get data 'content)))
+           (edits (when data (emagent-acp--tool-call-data-get data 'edits)))
+           (command (emagent-acp--tool-call-command-text tool-call)))
+      (cond
+       ((and explicit (not (string-empty-p explicit)))
+        (downcase explicit))
+       ((or (and content (not (string-empty-p content))) edits) "write")
+       ((string-match-p "\\(?:edit\\|write\\|apply\\|replace\\|patch\\)" title) "write")
+       ((string-match-p "\\`read" title) "read")
+       (command "execute")
+       (t nil)))))
+
 (defun emagent-acp--tool-call-execute-p (tool-call)
   "Return non-nil when TOOL-CALL is an execute (shell) request."
-  (let ((kind (and (listp tool-call) (map-elt tool-call 'kind))))
-    (and (stringp kind) (equal (downcase kind) "execute"))))
+  (let ((kind (emagent-acp--tool-call-infer-kind tool-call)))
+    (and kind (member kind '("execute")))))
 
 (defun emagent-acp--permission-validate (tool-call)
   "Return nil when TOOL-CALL passes emagent checks.
@@ -161,9 +189,16 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
   (or (map-elt state :session-auto-approve)
       (and fingerprint
            (or (member fingerprint (or (map-elt state :permission-auto-allow) nil))
+               (member fingerprint (emagent-permissions-global-fingerprints))
+               (member fingerprint
+                       (emagent-permissions-session-fingerprints
+                        (map-elt state :session-id)))
                (and chat-buffer (buffer-live-p chat-buffer)
                     (with-current-buffer chat-buffer
-                      (member fingerprint (emagent-chat-allowed-permissions))))))))
+                      (or (member fingerprint (emagent-chat-allowed-permissions))
+                          (member fingerprint
+                                  (emagent-permissions-project-fingerprints
+                                   (emagent-chat-project-directory))))))))))
 
 (defun emagent-acp--permission-gate-auto-approve-p (state tool-call validation fingerprint chat-buffer)
   "Return non-nil when emagent should approve without prompting."
@@ -175,25 +210,24 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
                 (not (emagent-acp--tool-call-shell-needs-confirm-p tool-call))
                 (not (and validation (eq (car validation) :confirm)))))))
 
-(defun emagent-acp--permission-apply-choice (state fingerprint chat-buffer choice)
-  "Record user CHOICE for FINGERPRINT in STATE and CHAT-BUFFER."
+(defun emagent-acp--permission-apply-choice (state fingerprint _chat-buffer choice)
+  "Record user CHOICE for FINGERPRINT in STATE."
   (pcase choice
     (:allow-all
      (map-put! state :session-auto-approve t)
+     (when-let ((session-id (map-elt state :session-id)))
+       (emagent-permissions-set-session-auto-approve session-id))
      (emagent-log "permission: allow all (session)"))
     (:allow-session
      (when fingerprint
        (map-put! state :permission-auto-allow
                  (append (or (map-elt state :permission-auto-allow) nil)
-                         (list fingerprint)))))
+                         (list fingerprint)))
+       (when-let ((session-id (map-elt state :session-id)))
+         (emagent-permissions-add-session-fingerprint session-id fingerprint))))
     (:allow-always
      (when fingerprint
-       (map-put! state :permission-auto-allow
-                 (append (or (map-elt state :permission-auto-allow) nil)
-                         (list fingerprint)))
-       (when (and chat-buffer (buffer-live-p chat-buffer))
-         (with-current-buffer chat-buffer
-           (emagent-chat-add-allowed-permission fingerprint)))))
+       (emagent-permissions-add-global-fingerprint fingerprint)))
     (_ nil)))
 
 (defun emagent-acp--permission-approved-choice-p (choice)
@@ -256,8 +290,8 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
 For shell commands, returns a code block with the command.
 For edits, returns the file path and content.
 For reads, returns nil (the question line is enough)."
-  (when (and (listp tool-call) (map-elt tool-call 'kind))
-    (let* ((kind (downcase (or (map-elt tool-call 'kind) "")))
+  (when tool-call
+    (let* ((kind (emagent-acp--tool-call-infer-kind tool-call))
            (raw (or (map-elt tool-call 'rawInput)
                     (map-elt tool-call 'arguments)))
            (command (emagent-acp--tool-call-command-text tool-call))
@@ -270,27 +304,28 @@ For reads, returns nil (the question line is enough)."
                            (emagent-acp--tool-call-normalize-data raw)
                            'file_path)
                           detail))))
-      (cond
-       ((member kind '("execute" ""))
-        (when command
-          (format "** Allow execute\n#+BEGIN_SRC sh\n%s\n#+END_SRC" command)))
-       ((equal kind "write")
-        (if path
-            (let ((content (emagent-acp--tool-call-data-get
-                           (emagent-acp--tool-call-normalize-data raw)
-                           'content))
-                  (lang (if (string-match "\\.\\([a-z]+\\)\\'" path)
-                            (match-string 1 path)
-                          "text"))
-                  (heading (if detail (format "Allow edit: %s" detail)
-                             "Allow edit")))
-              (if (and content (not (string-empty-p content)))
-                  (format "** %s\n#+BEGIN_SRC %s\n%s\n#+END_SRC"
-                          heading lang (substring content 0 (min (length content) 1000)))
-                (format "** Allow edit\n= %s =" path)))
+      (when kind
+        (cond
+         ((member kind '("execute" ""))
           (when command
-            (format "** Allow edit\n#+BEGIN_SRC sh\n%s\n#+END_SRC" command))))
-       (t nil)))))
+            (format "** Allow execute\n#+BEGIN_SRC sh\n%s\n#+END_SRC" command)))
+         ((equal kind "write")
+          (if path
+              (let ((content (emagent-acp--tool-call-data-get
+                             (emagent-acp--tool-call-normalize-data raw)
+                             'content))
+                    (lang (if (string-match "\\.\\([a-z]+\\)\\'" path)
+                              (match-string 1 path)
+                            "text"))
+                    (heading (if detail (format "Allow edit: %s" detail)
+                               "Allow edit")))
+                (if (and content (not (string-empty-p content)))
+                    (format "** %s\n#+BEGIN_SRC %s\n%s\n#+END_SRC"
+                            heading lang (substring content 0 (min (length content) 1000)))
+                  (format "** Allow edit\n= %s =" path)))
+            (when command
+              (format "** Allow edit\n#+BEGIN_SRC sh\n%s\n#+END_SRC" command))))
+         (t nil))))))
 
 (defun emagent-acp--permission-interactive-p (state)
   "Return non-nil when ACP permission prompts may need user input."

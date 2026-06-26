@@ -94,6 +94,7 @@
 (ert-deftest emagent-acp-session-test-permission-handle-one-replies-once-after-always ()
   (let* ((state (emagent-test--make-acp-state))
          (args (make-hash-table :test 'equal))
+         (perms-dir (emagent-test--temp-directory))
          (request `((id . "req1")
                      (params . ((title . "Allow compile?")
                                 (options . [((optionId . "allow_always")
@@ -105,19 +106,54 @@
                                              (arguments . ,args)))))))
          (sent-id nil))
     (puthash "command" "make test" args)
-    (let ((emagent-acp-auto-approve-permissions nil))
+    (let ((emagent-acp-auto-approve-permissions nil)
+          (emagent-permissions-directory perms-dir)
+          (emagent-permissions--cache (make-hash-table :test 'equal)))
       (emagent-test--with-mocks
           (((symbol-function 'emagent-chat--open-response-p)
             (lambda () nil))
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) :allow-always))
+            (emagent-test--mock-buttons-prompt :allow-always))
            ((symbol-function 'emagent-acp-send-response)
             (cl-function
              (lambda (&key response &allow-other-keys)
                (setq sent-id (map-nested-elt response '(:result outcome optionId)))))))
         (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
         (should (string= "allow_once" sent-id))
-        (should (member "execute:make" (map-elt state :permission-auto-allow)))))))
+        (should (member "execute:make" (emagent-permissions-global-fingerprints)))
+        (should-not (member "execute:make" (or (map-elt state :permission-auto-allow) nil)))))))
+
+(ert-deftest emagent-acp-session-test-permission-allow-session-persists-by-session-id ()
+  (let ((perms-dir (emagent-test--temp-directory)))
+    (let ((emagent-permissions-directory perms-dir)
+          (emagent-permissions--cache (make-hash-table :test 'equal)))
+      (let* ((state (emagent-test--make-acp-state))
+             (session-id "sess-abc")
+             (fingerprint "execute:make"))
+        (puthash :session-id session-id state)
+        (emagent-acp--permission-apply-choice state fingerprint nil :allow-session)
+        (should (equal '("execute:make")
+                       (emagent-permissions-session-fingerprints session-id)))
+        (should-not (emagent-permissions-session-fingerprints "other-session"))
+        (setq emagent-acp--session nil)
+        (let ((fresh (emagent-test--make-acp-state)))
+          (puthash :session-id session-id fresh)
+          (emagent-acp--hydrate-session-permissions fresh session-id)
+          (should (member fingerprint (map-elt fresh :permission-auto-allow))))))))
+
+(ert-deftest emagent-acp-session-test-permission-allow-all-persists-by-session-id ()
+  (let ((perms-dir (emagent-test--temp-directory)))
+    (let ((emagent-permissions-directory perms-dir)
+          (emagent-permissions--cache (make-hash-table :test 'equal)))
+      (let* ((state (emagent-test--make-acp-state))
+             (session-id "sess-all"))
+        (puthash :session-id session-id state)
+        (emagent-acp--permission-apply-choice state nil nil :allow-all)
+        (should (emagent-permissions-session-auto-approve-p session-id))
+        (setq emagent-acp--session nil)
+        (let ((fresh (emagent-test--make-acp-state)))
+          (emagent-acp--hydrate-session-permissions fresh session-id)
+          (should (map-elt fresh :session-auto-approve)))))))
 
 (defun emagent-test--run-at-time-immediately (_time _repeat fn)
   "Test helper: invoke FN synchronously instead of scheduling."
@@ -154,7 +190,9 @@
       (emagent-test--with-mocks
           (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) (setq prompted t) :allow-once))
+            (emagent-test--mock-buttons-prompt
+             :allow-once
+             (lambda (_) (setq prompted t))))
            ((symbol-function 'emagent-acp-send-response)
             (lambda (&rest _args) nil)))
         (emagent-acp--on-permission :state state :emagent-acp-request request)
@@ -176,7 +214,9 @@
            ((symbol-function 'emagent-acp--agent-launch-string)
             (lambda (_s) "cursor-agent acp"))
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) (setq prompted t) :allow-once))
+            (emagent-test--mock-buttons-prompt
+             :allow-once
+             (lambda (_) (setq prompted t))))
            ((symbol-function 'emagent-acp-send-response)
             (lambda (&rest _args) nil)))
         (emagent-acp--on-permission :state state :emagent-acp-request request)
@@ -193,7 +233,7 @@
     (let ((emagent-acp-auto-approve-permissions nil))
       (emagent-test--with-mocks
           (((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) (setq prompted t) :allow-once))
+            (lambda (&rest _args) (setq prompted t)))
            ((symbol-function 'emagent-acp-send-response)
             (lambda (&rest _args) nil)))
         (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
@@ -214,7 +254,9 @@
           (((symbol-function 'emagent-acp--agent-launch-string)
             (lambda (_s) "cursor-agent acp"))
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) (setq prompted t) :allow-once))
+            (emagent-test--mock-buttons-prompt
+             :allow-once
+             (lambda (_) (setq prompted t))))
            ((symbol-function 'emagent-acp-send-response)
             (lambda (&rest _args) (setq responded t))))
         (emagent-acp--drain-permission-queue state)
@@ -236,7 +278,9 @@
            ((symbol-function 'emagent-acp--agent-launch-string)
             (lambda (_s) "cursor-agent acp"))
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) (setq prompted t) :allow-once))
+            (emagent-test--mock-buttons-prompt
+             :allow-once
+             (lambda (_) (setq prompted t))))
            ((symbol-function 'emagent-acp-send-response) (lambda (&rest _args) nil)))
         (emagent-acp--drain-cursor-tool-resolve-queue state)
         (should prompted)
@@ -285,6 +329,21 @@
                      (emagent-acp--permission-prompt-text request)))))
 
 ;;;; Tool-call display
+
+(ert-deftest emagent-acp-session-test-tool-call-content-block-no-kind ()
+  (let* ((cmd "make test")
+         (args (make-hash-table :test 'equal)))
+    (puthash "command" cmd args)
+    (should (string-match-p "\\*\\* Allow execute"
+                            (emagent-acp--tool-call-content-block
+                             `((toolCallId . "tool_compile")
+                               (title . "compile")
+                               (arguments . ,args)))))
+    (should (string-match-p (regexp-quote cmd)
+                            (emagent-acp--tool-call-content-block
+                             `((toolCallId . "tool_compile")
+                               (title . "compile")
+                               (arguments . ,args)))))))
 
 (ert-deftest emagent-acp-session-test-tool-call-detail ()
   (let ((update '((title . "Read")
@@ -572,7 +631,7 @@
       (emagent-test--with-mocks
           (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) :allow-once))
+            (emagent-test--mock-buttons-prompt :allow-once))
            ((symbol-function 'emagent-acp-send-response) (lambda (&rest _args) nil))
            ((symbol-function 'emagent-acp--render-prompt-response)
             (lambda (_state) (setq completed t))))
@@ -626,7 +685,7 @@
             (lambda (_time _repeat fn) (setq scheduled t) (funcall fn) nil))
            ((symbol-function 'emagent-acp-send-response) (lambda (&rest _args) nil))
            ((symbol-function 'emagent-tools--buttons-prompt)
-            (lambda (&rest _args) :allow-once)))
+            (emagent-test--mock-buttons-prompt :allow-once)))
         (emagent-acp--maybe-recover-stall state)
         (should scheduled)
         (should (null (map-elt state :permission-queue)))))))

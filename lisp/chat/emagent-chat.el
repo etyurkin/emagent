@@ -29,6 +29,7 @@
 (require 'emagent-chat-render)
 (require 'emagent-chat-actions)
 (require 'emagent-chat-mode)
+(require 'emagent-permissions)
 
 (declare-function emagent-chat--refresh-mode-line "emagent-chat-mode-line")
 
@@ -83,6 +84,20 @@
 (defvar-local emagent-chat--reasoning-streamed-p nil
   "Non-nil once reasoning text has been streamed into the open Reasoning block.")
 
+(defvar-local emagent-chat--thought-pending ""
+  "Reasoning chunks not yet inserted into the open Thinking block.")
+
+(defvar-local emagent-chat--thought-flush-timer nil
+  "Timer that batches reasoning stream inserts into the chat buffer.")
+
+(defcustom emagent-chat-thought-stream-delay 0.05
+  "Seconds to batch reasoning stream inserts before updating the buffer.
+
+Lower values feel more live; higher values reduce org font-lock work while the
+agent is thinking."
+  :type 'number
+  :group 'emagent-chat)
+
 (defvar-local emagent-chat--tool-call-lines (make-hash-table :test 'equal)
   "Map ACP toolCallId to (START . END) markers for displayed tool-call lines.")
 
@@ -120,16 +135,14 @@
   "When non-nil, replaces `emagent-cursor-acp-extra-args' for this buffer only.")
 
 (defvar-local emagent-chat-allowed-tools nil
-  "Tools allowed without confirmation for the current emagent buffer.
+  "Extra MCP tools allowed without confirmation for this buffer session.
 
-Persisted in the buffer header as =#+EMAGENT_ALLOWED_TOOLS= and added to when
-the user answers \"allow all\" to a tool confirmation.")
+Project-wide choices persist under `emagent-permissions-directory'.")
 
 (defvar-local emagent-chat-allowed-permissions nil
-  "ACP permission fingerprints auto-approved for the current emagent buffer.
+  "Legacy buffer-local permission fingerprints from #+EMAGENT_ALLOWED_PERMISSIONS.
 
-Persisted in the buffer header as =#+EMAGENT_ALLOWED_PERMISSIONS= when the user
-chooses \"Allow always\" on an ACP permission prompt.")
+New choices persist under `emagent-permissions-directory'.")
 
 (defface emagent-tool-detail
   '((t (:inherit fixed-pitch :slant normal)))
@@ -143,11 +156,18 @@ chooses \"Allow always\" on an ACP permission prompt.")
 
 (defconst emagent-chat-default-slug "emagent")
 
+(defconst emagent-chat-response-headline "** emagent"
+  "Org headline wrapping each agent response under the user prompt.")
+
 (defconst emagent-chat-response-begin "# --- emagent ---")
 (defconst emagent-chat-response-end "# --- /emagent ---")
 
 (defconst emagent-chat--progress-line "/emagent is thinking…/\n"
   "Placeholder body line shown until a prompt finishes rendering.")
+
+(defconst emagent-chat--response-headline-re
+  (concat "^" (regexp-quote emagent-chat-response-headline) "\\s-*$")
+  "Regexp matching the emagent response wrapper headline.")
 
 (defconst emagent-chat--response-begin-re
   "^# --- emagent ---\\s-*$"
@@ -394,37 +414,47 @@ the newest begin delimiter through `point-max'."
         (intern value))))
 
 (defun emagent-chat-allowed-tools ()
-  "Return the tools allowed without confirmation for this emagent buffer."
-  (or emagent-chat-allowed-tools
-      (emagent-chat--read-allowed-tools-property)))
+  "Return MCP tools allowed without confirmation for this buffer's project."
+  (let* ((legacy (or emagent-chat-allowed-tools
+                     (emagent-chat--read-allowed-tools-property)))
+         (stored (when-let ((dir (emagent-chat-project-directory)))
+                   (emagent-permissions-project-tools dir))))
+    (cl-delete-duplicates (append legacy stored))))
 
 (defun emagent-chat-add-allowed-tool (tool)
-  "Allow TOOL for this buffer without confirmation and persist it.
-
-TOOL is a symbol (or a string naming one).  Records it in
-`emagent-chat-allowed-tools' and writes the merged list to the buffer header
-as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
+  "Allow TOOL for this project without confirmation and persist it."
   (let* ((sym (if (stringp tool) (intern tool) tool))
-         (current (emagent-chat-allowed-tools)))
-    (unless (memq sym current)
-      (setq emagent-chat-allowed-tools (append current (list sym)))
-      (emagent-chat--write-top-property
-       emagent-chat--allowed-tools-property
-       (mapconcat #'symbol-name emagent-chat-allowed-tools " ")))))
+         (dir (emagent-chat-project-directory)))
+    (unless (memq sym (emagent-chat-allowed-tools))
+      (setq emagent-chat-allowed-tools (append (or emagent-chat-allowed-tools nil)
+                                               (list sym)))
+      (when dir
+        (emagent-permissions-add-project-tool dir sym)))))
 
 (defun emagent-chat-allowed-permissions ()
-  "Return ACP permission fingerprints auto-approved for this buffer."
+  "Return legacy buffer permission fingerprints still honored at the gate."
   (or emagent-chat-allowed-permissions
       (emagent-chat--read-allowed-permissions-property)))
 
 (defun emagent-chat-add-allowed-permission (fingerprint)
-  "Persist FINGERPRINT as always allowed for ACP permission requests."
-  (let ((current (emagent-chat-allowed-permissions)))
-    (unless (member fingerprint current)
-      (setq emagent-chat-allowed-permissions (append current (list fingerprint)))
-      (emagent-chat--write-top-property
-       emagent-chat--allowed-permissions-property
-       (mapconcat #'identity emagent-chat-allowed-permissions " ")))))
+  "Persist FINGERPRINT as globally allowed for ACP permission requests."
+  (emagent-permissions-add-global-fingerprint fingerprint))
+
+(defun emagent-chat-session-allowed-permissions (session-id)
+  "Return session-scoped permission fingerprints for SESSION-ID."
+  (emagent-permissions-session-fingerprints session-id))
+
+(defun emagent-chat-add-session-permission (session-id fingerprint)
+  "Record FINGERPRINT as session-scoped for SESSION-ID."
+  (emagent-permissions-add-session-fingerprint session-id fingerprint))
+
+(defun emagent-chat-session-auto-approve-p (session-id)
+  "Return non-nil when SESSION-ID has allow-all enabled."
+  (emagent-permissions-session-auto-approve-p session-id))
+
+(defun emagent-chat-set-session-auto-approve (session-id)
+  "Enable allow-all for SESSION-ID."
+  (emagent-permissions-set-session-auto-approve session-id))
 
 (defun emagent-chat--window-at-bottom-p (window)
   "Return non-nil when WINDOW shows the end of the current buffer."
@@ -464,6 +494,14 @@ as #+EMAGENT_ALLOWED_TOOLS, alongside the other #+EMAGENT_* properties."
         (goto-char saved-point))
       (set-marker saved-point nil)
       (emagent-chat--restore-window-views saved-windows))))
+
+(defun emagent-chat--with-streaming-view (fn)
+  "Run FN during live streaming without disturbing windows already at buffer end."
+  (let* ((views (emagent-chat--save-window-views))
+         (pinned (cl-remove-if (lambda (v) (plist-get v :at-bottom)) views)))
+    (unwind-protect
+        (funcall fn)
+      (emagent-chat--restore-window-views pinned))))
 
 (provide 'emagent-chat)
 ;;; emagent-chat.el ends here
