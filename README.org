@@ -273,7 +273,15 @@ and again at MCP execution unless the session is ACP-gated).  Customize
 =emagent-policy-elisp-blocked-symbols= and =emagent-policy-elisp-dangerous-symbols=
 (aliased as =emagent-tools-eval-*-symbols=).
 
-The agent is guided to call =check_elisp= before =eval=.
+The agent is guided to call =check_elisp= before =eval= and =check_structural_file=
+before =write_file= on structural files (=.el=, =.py=, =.lisp=, =.cl=) when
+lisp-sitter is not installed.
+
+When lisp-sitter is installed, =write_file= on Lisp files (=.el=, =.lisp=,
+=.cl=, =.scm=) is rejected and all edits go through =structural_replace= /
+=structural_insert= / =structural_substitute=.  Each call validates the complete
+node text before saving; =.el= files also byte-compile and eval the new form
+after save.  Install lisp-sitter from [[https://github.com/etyurkin/lisp-sitter][etyurkin/lisp-sitter]].
 =elisp_guide= covers Elisp patterns and pitfalls.
 
 ** MCP tools exposed to the agent
@@ -281,7 +289,7 @@ The agent is guided to call =check_elisp= before =eval=.
 | Tool                       | Description                                                               |
 |----------------------------+---------------------------------------------------------------------------|
 | =read_file=                  | Read through Emacs (includes unsaved buffer content)                      |
-| =write_file=                 | Write via Emacs buffer (undo-able, diff shown to user)                    |
+| =write_file=                 | Write via Emacs buffer (undo-able, diff shown); blocked for Lisp when lisp-sitter is installed |
 | =undo_file=                  | Undo edits in a file's buffer and save                                    |
 | =delete_file=                | Delete a file within the session root                                     |
 | =delete_directory=           | Delete a directory within the session root                                |
@@ -300,6 +308,29 @@ The agent is guided to call =check_elisp= before =eval=.
 | =describe_symbol=            | Full docstring + signature                                                |
 | =find_function=              | Return the source location of an Emacs function                           |
 | =where_is=                   | Return the key bindings for an Emacs command                              |
+| =check_structural_file=      | Validate whole Lisp file via lisp-sitter (=.el= byte-compiles)            |
+| =check_structural_node=      | Validate one top-level node without saving                                |
+| =structural_find_errors=     | List MISSING tokens and ERROR nodes in a Lisp file                        |
+| =structural_tree=            | Shallow outline of top-level nodes in a file                              |
+| =structural_context=         | Outline, bounds, and full text of each top-level form                     |
+| =structural_bounds=          | Byte positions of a named top-level form                                  |
+| =structural_get=             | Return the full text of a named top-level form                            |
+| =structural_replace=         | Replace one top-level node with complete new text                         |
+| =structural_insert=          | Insert a top-level node after =__start__=, =__end__=, or a symbol          |
+| =structural_substitute=      | Replace a sub-expression inside a named form                              |
+| =structural_remove=          | Remove a top-level form                                                   |
+| =structural_rename=          | Rename a top-level form and its call sites                                |
+| =structural_move=            | Move a top-level form to a new position in the file                       |
+| =structural_wrap=            | Wrap the body of a named form (=progn=, =let=, =if=, …)                    |
+| =structural_extract=         | Extract a sub-expression into a new function                              |
+| =structural_callers=         | Find all callers of a symbol in a file                                    |
+| =structural_flatten=         | Inline all call sites of a function and remove its definition             |
+| =structural_splice=          | Paredit splice: dissolve a wrapper form, elevating its body               |
+| =structural_raise=           | Paredit raise: promote a sub-expression over its enclosing list           |
+| =structural_complete=        | Complete an unbalanced s-expression by appending closing parens           |
+| =structural_format=          | Re-indent a file (depth-based)                                            |
+| =structural_convert_let=     | Convert between =let= and =let*= bindings                                  |
+| =structural_instrument=      | Instrument a form with tracing                                            |
 
 Build commands (=mvn=, =gradle=, =cargo=, =make=, =npm test=, etc.) are always
 routed through =compile= for navigable error output, regardless of other settings.
