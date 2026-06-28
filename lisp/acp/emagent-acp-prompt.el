@@ -273,9 +273,14 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
   (emagent-acp--reveal-buffer state))
 
 (defun emagent-acp--fatal-agent-error-p (message)
-  "Return non-nil when MESSAGE should abort the in-flight prompt."
-  (string-match-p "timed out\\|timeout\\|failed with status\\|ApiError\\|\\[31merror"
-                  message))
+  "Return non-nil when MESSAGE should abort the in-flight prompt.
+
+RetriableError messages are excluded: the agent handles its own retry
+logic for transient network errors (HTTP/2 CANCEL, connection resets)
+and will recover without aborting the session."
+  (and (not (string-match-p "RetriableError" message))
+       (string-match-p "timed out\\|timeout\\|failed with status\\|ApiError\\|\\[31merror"
+                       message)))
 
 (defun emagent-acp--abort-prompt (state message)
   "Abort the in-flight prompt for STATE and show MESSAGE."

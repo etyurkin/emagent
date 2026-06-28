@@ -52,6 +52,7 @@
      ((string-empty-p message) nil)
      ((string-match-p "\\`\\(?:finished\\|Process\\|acp-client(\\)" message) nil)
      ((string-match-p "\\[32minfo\\|\\[33mwarn" message) nil)
+     ((string-match-p "RetriableError" message) nil)
      ((string-match-p "ApiError\\|failed with status\\|\\[31merror" message) t)
      (t
       (let ((lines (split-string message "\n" t)))
