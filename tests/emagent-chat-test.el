@@ -1,0 +1,811 @@
+;;; emagent-chat-test.el --- ERT tests for emagent chat UI -*- lexical-binding: t; -*-
+
+;;; Code:
+
+(require 'ert)
+(require 'emagent-test-utils)
+(require 'emagent-chat)
+
+;;;; Slugs and labels
+
+(ert-deftest emagent-chat-test-sanitize-slug ()
+  (should (string= "my-project" (emagent-chat--sanitize-slug "My Project")))
+  (should (string= emagent-chat-default-slug (emagent-chat--sanitize-slug "   "))))
+
+(ert-deftest emagent-chat-test-short-cwd-label ()
+  (should (string= "dev-emagent" (emagent-chat--short-cwd-label "~/dev/emagent"))))
+
+(ert-deftest emagent-chat-test-buffer-name-for-label ()
+  (should (string= "*Emagent foo*" (emagent-chat--buffer-name-for-label "foo"))))
+
+;;;; Sendable text
+
+(ert-deftest emagent-chat-test-sendable-line-p ()
+  (should (emagent-chat--sendable-line-p "hello"))
+  (should-not (emagent-chat--sendable-line-p "# comment"))
+  (should-not (emagent-chat--sendable-line-p "#+EMAGENT_PROJECT: x"))
+  (should-not (emagent-chat--sendable-line-p "# --- emagent ---")))
+
+(ert-deftest emagent-chat-test-sendable-text-p ()
+  (should (emagent-chat--sendable-text-p "line one\nline two"))
+  (should-not (emagent-chat--sendable-text-p "# metadata\nprompt")))
+
+
+;;;; Slash commands
+
+(ert-deftest emagent-chat-test-normalize-slash-commands ()
+  (let ((cmds `[((name . "/workflow:dev") (description . "Dev flow")
+                 (input . ((hint . "hint"))))]))
+    (let ((norm (emagent-chat--normalize-slash-commands cmds)))
+      (should (= (length norm) 1))
+      (should (string= (map-elt (car norm) 'name) "workflow:dev"))
+      (should (string= (map-elt (car norm) 'hint) "hint")))))
+
+(ert-deftest emagent-chat-test-merge-slash-commands ()
+  (let ((base (list (emagent-chat--slash-command-plist "plan" "Plan mode")))
+        (extra (list (emagent-chat--slash-command-plist "compress" "Compress")
+                     (emagent-chat--slash-command-plist "plan" "Override"))))
+    (let ((merged (emagent-chat--merge-slash-commands base extra)))
+      (should (= (length merged) 2))
+      (should (string= (map-elt (nth 0 merged) 'name) "compress"))
+      (should (string= (map-elt (nth 1 merged) 'name) "plan"))
+      (should (string= (map-elt (nth 1 merged) 'description) "Override")))))
+
+(ert-deftest emagent-chat-test-compress-command-p ()
+  (should (emagent-chat--compress-command-p "/compress"))
+  (should (emagent-chat--compress-command-p "/compact"))
+  (should (emagent-chat--compress-command-p "/summarize"))
+  (should-not (emagent-chat--compress-command-p "/plan")))
+
+(ert-deftest emagent-chat-test-compress-prompt-text ()
+  (should (string-match-p "<conversation>" (emagent-chat--compress-prompt-text "hello")))
+  (should (string-match-p "hello" (emagent-chat--compress-prompt-text "hello"))))
+
+(ert-deftest emagent-chat-test-apply-compression ()
+  (with-temp-buffer
+    (insert emagent-chat-initial-comment)
+    (insert (format "%sfirst\n\n# --- emagent ---\nreply\n# --- /emagent ---\n"
+                    (emagent-chat--user-heading-prefix)))
+    (emagent-chat--sync-user-zone-marker)
+    (emagent-chat-apply-compression "summary text")
+    (should (string-match-p "\\* emagent> \\[compressed\\]" (buffer-string)))
+    (should (string-match-p "summary text" (buffer-string)))
+    (should-not (string-match-p "first" (buffer-string)))))
+
+(ert-deftest emagent-chat-test-bare-slash-command-p ()
+  (should (emagent-chat--bare-slash-command-p "/compress"))
+  (should (emagent-chat--bare-slash-command-p "/plan refactor auth"))
+  (should (emagent-chat--bare-slash-command-p "/workflow:dev"))
+  (should-not (emagent-chat--bare-slash-command-p "hello"))
+  (should-not (emagent-chat--bare-slash-command-p "/compress\nmore")))
+
+(ert-deftest emagent-chat-test-command-matching ()
+  (should (emagent-chat--command-matches-needle-p "/workflow:dev" "workflow"))
+  (should (emagent-chat--command-matches-needle-p "/skill:relax" "relax"))
+  (should (string= "workflow" (emagent-chat--command-needle-base "workflow:")))
+  (should (string= "relax" (emagent-chat--command-skill-part "/skill:relax"))))
+
+;;;; Response markup
+
+(ert-deftest emagent-chat-test-lang-from-filename ()
+  (should (string= "elisp" (emagent-chat--lang-from-filename "foo.el")))
+  (should (string= "python" (emagent-chat--lang-from-filename "bar.py")))
+  (should (eq nil (emagent-chat--lang-from-filename "foo.xyz"))))
+
+(ert-deftest emagent-chat-test-convert-code-fences ()
+  (let ((out (emagent-chat--convert-code-fences "```elisp\n(+ 1 2)\n```")))
+    (should (string-match-p "#\\+BEGIN_SRC elisp" out))
+    (should (string-match-p "(\\+ 1 2)" out))
+    (should (string-match-p "#\\+END_SRC" out))))
+
+(ert-deftest emagent-chat-test-table-detection ()
+  (should (emagent-chat--table-row-p "| a | b |"))
+  (should (emagent-chat--table-hline-p "|---+---|"))
+  (should-not (emagent-chat--table-hline-p "| a | b |"))
+  (let ((fixed (emagent-chat--fix-table-block '("| a | b |" "|---|---|" "| 1 | 2 |"))))
+    (should (= (length fixed) 3))
+    (should (emagent-chat--table-hline-p (nth 1 fixed)))))
+
+;;;; Spinner
+
+(ert-deftest emagent-chat-test-spinner-frame-count ()
+  (let ((emagent-chat-spinner-style 'dots))
+    (should (= 4 (emagent-chat--spinner-frame-count))))
+  (let ((emagent-chat-spinner-style 'braille))
+    (should (= 10 (emagent-chat--spinner-frame-count)))))
+
+(ert-deftest emagent-chat-test-spinner-dot-chase ()
+  (let ((emagent-chat-spinner-style 'dots)
+        (emagent-chat-spinner-dot-on "●")
+        (emagent-chat-spinner-dot-off "○"))
+    (setq emagent-chat--spinner-frame 0)
+    (should (string= "●○○" (substring-no-properties (emagent-chat--spinner-dot-grid))))
+    (setq emagent-chat--spinner-frame 1)
+    (should (string= "○●○" (substring-no-properties (emagent-chat--spinner-dot-grid))))
+    (setq emagent-chat--spinner-frame 2)
+    (should (string= "○○●" (substring-no-properties (emagent-chat--spinner-dot-grid))))
+    (setq emagent-chat--spinner-frame 3)
+    (should (string= "○●○" (substring-no-properties (emagent-chat--spinner-dot-grid))))
+    (setq emagent-chat--spinner-frame
+          (% (1+ emagent-chat--spinner-frame)
+             (emagent-chat--spinner-frame-count)))
+    (should (string= "●○○" (substring-no-properties (emagent-chat--spinner-dot-grid))))))
+
+(ert-deftest emagent-chat-test-normalize-model-id ()
+  (should (string= "auto" (emagent-chat--normalize-model-id "default[]")))
+  (should (string= "auto" (emagent-chat--normalize-model-id "default")))
+  (should (string= "grok-4.3"
+                   (emagent-chat--normalize-model-id "grok-4.3[context=200k]")))
+  (should (string= "claude-sonnet-4-6"
+                   (emagent-chat--normalize-model-id
+                    "claude-sonnet-4-6[thinking=true]")))
+  (should (string= "gpt-4" (emagent-chat--normalize-model-id "gpt-4"))))
+
+(ert-deftest emagent-chat-test-canonical-model-id ()
+  (should (string= "default[]" (emagent-chat--canonical-model-id "auto")))
+  (should (string= "default[]" (emagent-chat--canonical-model-id "default")))
+  (should (string= "grok-4.3[context=200k]"
+                   (emagent-chat--canonical-model-id "grok-4.3[context=200k]"))))
+
+(ert-deftest emagent-chat-test-model-choice-label ()
+  (should (string= "grok-4.3[context=200k]"
+                   (emagent-chat--model-choice-label
+                    "grok-4.3[context=200k]" "grok-4.3")))
+  (should (string= "default[] (Auto)"
+                   (emagent-chat--model-choice-label "default[]" "Auto")))
+  (should (string= "gpt-4 (GPT 4)"
+                   (emagent-chat--model-choice-label "gpt-4" "GPT 4"))))
+
+(ert-deftest emagent-chat-test-model-choice-label-display ()
+  (let ((label (emagent-chat--model-choice-label-display
+                "composer-2.5[fast=true]" "composer-2.5")))
+    (should (string= "composer-2.5[fast=true]" (substring-no-properties label)))
+    (should (eq 'emagent-model-choice-model (get-text-property 0 'face label)))
+    (should (eq 'emagent-model-choice-detail (get-text-property 12 'face label))))
+  (let ((label (emagent-chat--model-choice-label-display "default[]" "Auto")))
+    (should (string= "default[] (Auto)" (substring-no-properties label)))
+    (should (eq 'emagent-model-choice-model (get-text-property 0 'face label)))
+    (should (eq 'emagent-model-choice-detail (get-text-property 7 'face label))))
+  (let ((label (emagent-chat--model-choice-label-display "haiku" "Haiku")))
+    (should (string= "haiku (Haiku)" (substring-no-properties label)))
+    (should (eq 'emagent-model-choice-model (get-text-property 0 'face label)))
+    (should (eq 'emagent-model-choice-detail (get-text-property 5 'face label)))))
+
+(ert-deftest emagent-chat-test-set-model-stores-canonical-id ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (emagent-chat-set-model "default[]")
+       (should (string= "default[]" (emagent-chat-model)))
+       (should (string= "auto" (emagent-chat-model-display)))
+       (should (string-match-p "^#\\+EMAGENT_MODEL: default\\[\\]"
+                               (buffer-string)))
+       (emagent-chat-set-model "grok-4.3[context=200k]")
+       (should (string= "grok-4.3[context=200k]" (emagent-chat-model)))
+       (should (string= "grok-4.3" (emagent-chat-model-display)))))))
+
+(ert-deftest emagent-chat-test-mode-line-thinking ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (setq emagent-acp--session (make-hash-table :test 'eq))
+     (puthash :busy t emagent-acp--session)
+     (pop-to-buffer buffer)
+     (with-current-buffer buffer
+       (let* ((parts (emagent-chat--mode-line-strings))
+              (head (substring-no-properties (car parts))))
+         (should (string-match-p "^Thinking " head))
+         (should (string-match-p "●\\|○" head)))))))
+
+(ert-deftest emagent-chat-test-mode-line-allow-no-spinner ()
+  (emagent-test--with-busy-session
+   (lambda ()
+     (puthash :permission-busy t emagent-acp--session)
+     (let* ((parts (emagent-chat--mode-line-strings))
+            (head (substring-no-properties (car parts))))
+       (should (string-match-p "^emagent:Allow\\?" head))
+       (should (not (string-match-p "●\\|○" head)))
+       (should (not (emagent-chat--spinner-active-p)))))))
+
+(ert-deftest emagent-chat-test-mode-line-idle-when-busy-clears ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (setq emagent-acp--session (make-hash-table :test 'eq))
+     (puthash :busy t emagent-acp--session)
+     (puthash :ready t emagent-acp--session)
+     (with-current-buffer buffer
+       (pop-to-buffer buffer)
+       (emagent-chat--mode-line-recompute)
+       (should (string-match-p "^Thinking " emagent-chat--mode-line-head))
+       (puthash :busy nil emagent-acp--session)
+       (emagent-chat--refresh-mode-line)
+       (should (string-match-p "Idle" emagent-chat--mode-line-head))))))
+
+(ert-deftest emagent-chat-test-mode-line-refresh-deferred-when-inactive ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (setq emagent-acp--session (make-hash-table :test 'eq))
+     (puthash :busy t emagent-acp--session)
+     (with-temp-buffer
+       (pop-to-buffer (current-buffer))
+       (with-current-buffer buffer
+         (setq emagent-chat--mode-line-stale-p nil
+               emagent-chat--mode-line-head "old")
+         (emagent-chat--refresh-mode-line-soon)
+         (should emagent-chat--mode-line-stale-p)
+         (should (string= "old" emagent-chat--mode-line-head)))
+       (pop-to-buffer buffer)
+       (with-current-buffer buffer
+         (emagent-chat--refresh-mode-line-on-focus)
+         (should-not emagent-chat--mode-line-stale-p)
+         (should (string-match-p "^Thinking" emagent-chat--mode-line-head)))))))
+
+(ert-deftest emagent-chat-test-font-lock-deferred-when-inactive ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-temp-buffer
+       (pop-to-buffer (current-buffer))
+       (with-current-buffer buffer
+         (setq emagent-chat--font-lock-deferred-p nil)
+         (emagent-chat--maybe-font-lock-flush)
+         (should emagent-chat--font-lock-deferred-p))
+       (pop-to-buffer buffer)
+       (with-current-buffer buffer
+         (emagent-chat--flush-deferred-font-lock)
+         (should-not emagent-chat--font-lock-deferred-p))))))
+
+(ert-deftest emagent-chat-test-inactive-bell-rings-when-background-update ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (let ((rings 0)
+             (emagent-chat-inactive-bell t)
+             (emagent-chat-inactive-osx-notification nil)
+             (emagent-chat-inactive-bell-cooldown 0)
+             (emagent-chat--emacs-focused-p nil)
+             (emagent-chat--last-inactive-bell-time 0.0))
+         (cl-letf (((symbol-function 'get-buffer-window)
+                    (lambda (&rest _args) nil))
+                   ((symbol-function 'ding)
+                    (lambda (&rest _args)
+                      (setq rings (1+ rings)))))
+           (emagent-chat--notify-inactive-update)
+           (should (= rings 1))))))))
+
+(ert-deftest emagent-chat-test-inactive-bell-throttled-and-suppressed-when-active ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (let ((rings 0)
+             (emagent-chat-inactive-bell t)
+             (emagent-chat-inactive-osx-notification nil)
+             (emagent-chat-inactive-bell-cooldown 60)
+             (emagent-chat--emacs-focused-p nil)
+             (emagent-chat--last-inactive-bell-time 0.0)
+             (now 1000.0))
+         (cl-letf (((symbol-function 'float-time)
+                    (lambda () now))
+                   ((symbol-function 'get-buffer-window)
+                    (lambda (&rest _args) nil))
+                   ((symbol-function 'ding)
+                    (lambda (&rest _args)
+                      (setq rings (1+ rings)))))
+           (emagent-chat--notify-inactive-update)
+           (should (= rings 1))
+           (emagent-chat--notify-inactive-update)
+           (should (= rings 1)))
+         (cl-letf (((symbol-function 'get-buffer-window)
+                    (lambda (&rest _args) t))
+                   ((symbol-function 'ding)
+                    (lambda (&rest _args)
+                      (setq rings (1+ rings)))))
+           (emagent-chat--notify-inactive-update)
+           (should (= rings 1)))
+         (let ((emagent-chat--emacs-focused-p t))
+           (cl-letf (((symbol-function 'get-buffer-window)
+                      (lambda (&rest _args) nil))
+                     ((symbol-function 'ding)
+                      (lambda (&rest _args)
+                        (setq rings (1+ rings)))))
+             (emagent-chat--notify-inactive-update)
+             (should (= rings 1)))))))))
+
+(ert-deftest emagent-chat-test-spinner-sync-frame ()
+  (let ((emagent-chat-spinner-interval 0.1)
+        (emagent-chat-spinner-style 'dots))
+    (setq emagent-chat--spinner-start-time (- (float-time) 0.25))
+    (emagent-chat--spinner-sync-frame)
+    (should (= (% (floor 0.25 0.1) 4) emagent-chat--spinner-frame))))
+
+(ert-deftest emagent-chat-test-spinner-ensure-running ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (setq emagent-acp--session (make-hash-table :test 'eq))
+     (puthash :busy t emagent-acp--session)
+     (setq emagent-chat--spinner-timer nil
+           emagent-chat--spinner-start-time nil)
+     (with-current-buffer buffer
+       (pop-to-buffer buffer)
+       (emagent-chat--spinner-ensure-running)
+       (should emagent-chat--spinner-timer)
+       (puthash :permission-busy t emagent-acp--session)
+       (emagent-chat--spinner-refresh-idle)
+       (should-not emagent-chat--spinner-timer)
+       (puthash :permission-busy nil emagent-acp--session)
+       (emagent-chat--spinner-ensure-running)
+       (should emagent-chat--spinner-timer)
+       (emagent-chat--spinner-stop)))))
+
+(ert-deftest emagent-chat-test-spinner-only-when-active ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (setq emagent-acp--session (make-hash-table :test 'eq))
+     (puthash :busy t emagent-acp--session)
+     (setq emagent-chat--spinner-timer nil)
+     (with-temp-buffer
+       (pop-to-buffer (current-buffer))
+       (with-current-buffer buffer
+         (emagent-chat--mode-line-recompute)
+         (should (string-match-p "^Thinking$" (substring-no-properties emagent-chat--mode-line-head)))
+         (should-not (string-match-p "●\\|○" emagent-chat--mode-line-head))
+         (should-not (emagent-chat--spinner-animate-p buffer)))
+       (pop-to-buffer buffer)
+       (with-current-buffer buffer
+         (emagent-chat--mode-line-recompute)
+         (should (string-match-p "●\\|○" emagent-chat--mode-line-head))
+         (should (emagent-chat--spinner-animate-p buffer))
+         (emagent-chat--spinner-ensure-running)
+         (should emagent-chat--spinner-timer)
+         (emagent-chat--spinner-stop))))))
+
+(ert-deftest emagent-chat-test-spinner-refresh-without-cache ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (setq emagent-acp--session (make-hash-table :test 'eq))
+     (puthash :busy t emagent-acp--session)
+     (with-current-buffer buffer
+       (setq emagent-chat--mode-line-head nil
+             emagent-chat--mode-line-tail nil
+             emagent-chat--mode-line-cache nil
+             emagent-chat--spinner-frame 0)
+       (pop-to-buffer buffer)
+       (should (emagent-chat--spinner-refresh-buffer buffer))
+       (should (string-match-p "Thinking ●" emagent-chat--mode-line-head))
+       (setq emagent-chat--spinner-frame 1)
+       (should (emagent-chat--spinner-refresh-buffer buffer))
+       (should (string-match-p "Thinking ○●○" emagent-chat--mode-line-head))))))
+
+(ert-deftest emagent-chat-test-restore-window-views-keeps-point ()
+  (with-temp-buffer
+    (insert "line1\nline2\n")
+    (let ((saved-point 6)
+          (win (selected-window)))
+      (goto-char saved-point)
+      (emagent-chat--restore-window-views
+       `((:window ,win :start 1 :at-bottom t)))
+      (should (= saved-point (point))))))
+
+(ert-deftest emagent-chat-test-show-tool-call-no-open-response ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (emagent-chat--user-zone-start))
+       (let ((pos (point)))
+         (emagent-chat-show-tool-call "id1" "Read")
+         (should (= pos (point))))))))
+
+;;;; Tool calls during thinking
+
+(ert-deftest emagent-chat-test-tool-call-during-reasoning-no-executing ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "thinking...")
+          (emagent-chat-show-tool-call "id1" "read_file")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "Thinking" text))
+            (should (string-match-p "→ read_file" text))
+            (should-not (string-match-p "Executing" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-call-before-thought-on-new-line ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-show-tool-call "id1" "Read: /some/file.txt")
+          (emagent-chat-append-thought "Test 123")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "→ Read: =/some/file.txt=\nTest 123" text))
+            (should-not (string-match-p "/some/file.txtTest" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-call-after-close-thought-no-executing ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "thinking...")
+          (emagent-chat-append-assistant "Hi")
+          (emagent-chat-show-tool-call "id2" "grep")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "Thinking" text))
+            (should (string-match-p "→ grep" text))
+            (should-not (string-match-p "Executing" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-call-line-recorded-for-update ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-show-tool-call "id1" "Edit File")
+          (should (gethash "id1" emagent-chat--tool-call-lines))
+          (emagent-chat-show-tool-call "id1" "Edit File: foo.el")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (= 1 (length (remove nil (mapcar (lambda (line)
+                                                       (when (string-match-p "→ Edit File" line)
+                                                         line))
+                                                     (split-string text "\n"))))))
+            (should (string-match-p "→ Edit File: foo.el" text))
+            (should-not (string-match-p "→ Edit File\n→ Edit File: foo.el" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-call-update-then-thought-on-new-line ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-show-tool-call "id1" "Read")
+          (emagent-chat-show-tool-call "id1" "Read: /some/file.txt")
+          (emagent-chat-append-thought "more thinking")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "→ Read: =/some/file.txt=\nmore thinking" text))
+            (should-not (string-match-p "/some/file.txtmore" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-call-before-thought-opens-reasoning ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-show-tool-call "id3" "list_files")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "Thinking" text))
+            (should (string-match-p "→ list_files" text))
+            (should-not (string-match-p "Executing" text)))))))))
+
+(ert-deftest emagent-chat-test-thought-after-fake-end-quote-appends-at-tail ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "before\n#+end_quote\nmiddle")
+          (setq emagent-chat--thought-marker nil)
+          (emagent-chat-append-thought " after")
+          (emagent-chat-show-tool-call "id1" "grep: pattern")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p
+                     "before\n,#\\+end_quote\nmiddle after\n→ grep: pattern"
+                     text))
+            (should-not (string-match-p "middle\n→ grep" text)))))))))
+
+(ert-deftest emagent-chat-test-escape-reasoning-text ()
+  (should (string= ",#+end_quote"
+                   (emagent-chat--escape-reasoning-text "#+end_quote")))
+  (should (string= ",* headline"
+                   (emagent-chat--escape-reasoning-text "* headline")))
+  (should (string= "plain\n,#+BEGIN_SRC elisp"
+                   (emagent-chat--escape-reasoning-text "plain\n#+BEGIN_SRC elisp"))))
+
+(ert-deftest emagent-chat-test-close-unclosed-code-fence ()
+  (let ((out (emagent-chat--convert-agent-markup "text\n```elisp\n(+ 1 2)\n")))
+    (should (string-match-p "#\\+BEGIN_SRC elisp" out))
+    (should (string-match-p "(\\+ 1 2)" out))
+    (should (string-match-p "#\\+END_SRC" out))
+    (should-not (string-match-p "```" out))))
+
+(ert-deftest emagent-chat-test-close-unclosed-org-src ()
+  (let ((out (emagent-chat--convert-agent-markup
+              "see:\n#+BEGIN_SRC shell\n#!/bin/sh\necho hi\n")))
+    (should (string-match-p "#\\+END_SRC" out))
+    (should-not (string-match-p "#\\+BEGIN_SRC shell\\n#!/bin/sh\\necho hi\\s-*\\'" out))))
+
+(ert-deftest emagent-chat-test-begin-response-wraps-headline ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (emagent-chat--begin-response (point))
+       (let ((text (substring-no-properties (buffer-string))))
+         (should (string-match-p (regexp-quote emagent-chat-response-headline) text))
+         (should (string-match-p (regexp-quote emagent-chat-response-begin) text)))))))
+
+(ert-deftest emagent-chat-test-stream-with-point-away-from-tail ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "line one")
+          (goto-char (point-min))
+          (emagent-chat-append-thought "\nline two")
+          (emagent-chat-show-tool-call "id1" "Read: foo.el")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "line one\nline two\n→ Read: foo.el" text)))))))))
+
+(ert-deftest emagent-chat-test-beginning-of-line-on-user-prompt ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (emagent-chat--sync-user-zone-marker)
+       (emagent-chat--insert-user-heading-stub)
+       (insert "hello")
+       (let ((input (emagent-chat--user-prompt-input-pos))
+             (bol (line-beginning-position)))
+         (end-of-line)
+         (emagent-chat-beginning-of-line)
+         (should (= (point) input))
+         (emagent-chat-beginning-of-line)
+         (should (= (point) bol))
+         (emagent-chat-beginning-of-line)
+         (should (= (point) bol)))))))
+
+(ert-deftest emagent-chat-test-history-prev-next-on-user-input ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (let ((prefix (emagent-chat--user-heading-prefix)))
+         (insert "\n" prefix "alpha\n\n" prefix "beta\n\n" prefix "current"))
+       (goto-char (point-max))
+       (should (string= "current" (emagent-chat--current-user-input)))
+       (call-interactively #'emagent-chat-history-previous-or-previous-line)
+       (should (string= "beta" (emagent-chat--current-user-input)))
+       (call-interactively #'emagent-chat-history-previous-or-previous-line)
+       (should (string= "alpha" (emagent-chat--current-user-input)))
+       (call-interactively #'emagent-chat-history-next-or-next-line)
+       (should (string= "beta" (emagent-chat--current-user-input)))
+       (call-interactively #'emagent-chat-history-next-or-next-line)
+       (should (string= "current" (emagent-chat--current-user-input)))))))
+
+(ert-deftest emagent-chat-test-history-only-after-user-prefix ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (let ((prefix (emagent-chat--user-heading-prefix)))
+         (insert "\n" prefix "alpha\n\n" prefix "current"))
+       (goto-char (point-max))
+       (let ((target (line-beginning-position)))
+         (beginning-of-line)
+         (call-interactively #'emagent-chat-history-previous-or-previous-line)
+         (should (< (point) target)))
+       (goto-char (point-max))
+       (should (string= "current" (emagent-chat--current-user-input)))))))
+
+(ert-deftest emagent-chat-test-org-verbatim-paths ()
+  (should (string= "Read: =/Users/etyurkin/foo.el="
+                   (emagent-chat--org-verbatim-paths "Read: /Users/etyurkin/foo.el")))
+  (should (string= "→ Read: =/tmp/x="
+                   (emagent-chat--format-tool-line "Read: /tmp/x"))))
+
+(ert-deftest emagent-chat-test-finish-moves-point-to-user-prompt ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "planning...")
+          (goto-char (point-min))
+          (emagent-chat-finish-assistant "Done.")
+          (should (>= (point) (emagent-chat--user-zone-start)))
+          (save-excursion
+            (beginning-of-line)
+            (should (looking-at (emagent-chat--user-heading-re))))))))))
+
+(ert-deftest emagent-chat-test-finish-keeps-tools-in-reasoning ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "planning...")
+          (emagent-chat-show-tool-call "id1" "grep: pattern")
+          (emagent-chat-show-tool-call "id1" "grep: foo")
+          (emagent-chat-finish-assistant "Done." "planning...")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "Thinking" text))
+            (should (string-match-p "planning..." text))
+            (should (string-match-p "→ grep: foo" text))
+            (should (string-match-p "Done\\." text))
+            (should-not (string-match-p "Executing" text)))))))))
+
+(ert-deftest emagent-chat-test-begin-response-opens-thinking-scaffold ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (emagent-chat--begin-response (point))
+       (let ((text (substring-no-properties (buffer-string))))
+         (should (and (string-match "#\\+begin_quote Thinking" text)
+                      (string-match "#\\+end_quote" text)))
+         (should emagent-chat--thought-open-p)
+         (should (markerp emagent-chat--thought-marker)))))))
+
+(ert-deftest emagent-chat-test-format-permission-line ()
+  (should (string= "? make test" (emagent-chat--format-permission-line "make test"))))
+
+(ert-deftest emagent-chat-test-reasoning-scaffold-repairs-missing-end-quote ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (save-excursion
+            (re-search-forward "^#\\+end_quote" nil t)
+            (delete-region (line-beginning-position) (min (1+ (line-end-position)) (point-max))))
+          (setq emagent-chat--thought-marker nil
+                emagent-chat--thought-open-p nil)
+          (emagent-chat-show-tool-call "id1" "Read: foo.el")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "#\\+begin_quote Thinking" text))
+            (should (string-match-p "→ Read: foo.el" text))
+            (should (and (string-match "→ Read: foo.el" text)
+                         (string-match "#\\+end_quote" text (match-end 0)))))))))))
+
+(ert-deftest emagent-chat-test-ensure-scaffold-after-close-reopens ()
+  "`ensure-reasoning-scaffold' reopens thought after close when end_quote exists."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-close-thought)
+          (should-not emagent-chat--thought-open-p)
+          ;; Without explicit begin-thought, ensure-scaffold should re-open it
+          (emagent-chat--ensure-reasoning-scaffold)
+          (should emagent-chat--thought-open-p)
+          (should (markerp emagent-chat--thought-marker))))))))
+
+(ert-deftest emagent-chat-test-permission-buttons-below-end-quote ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-show-tool-call "id1" "compile")
+          (let (layout args tool-call)
+            (setq args (make-hash-table :test 'equal))
+            (puthash "command" "make test" args)
+            (setq tool-call `((toolCallId . "tool_compile")
+                               (title . "compile")
+                               (arguments . ,args)))
+            (emagent-chat-permission-prompt
+             "make test"
+             '(("Allow once" . :allow-once))
+             (lambda (_choice)
+               (setq layout (substring-no-properties (buffer-string))))
+             tool-call)
+            (setq layout (substring-no-properties (buffer-string)))
+            (should (string-match-p "#\\+end_quote\n\n\\*\\* Allow execute" layout))
+            (should (string-match-p "#\\+BEGIN_SRC sh\nmake test\n#\\+END_SRC" layout))
+            (should (string-match-p "#\\+END_SRC\n\\[Allow once\\]" layout))
+            (should-not (string-match-p "\\? make test" layout))
+            (emagent-test--push-first-button buffer)
+            (let ((text (substring-no-properties (buffer-string))))
+              (should (string-match-p "#\\+end_quote" text))
+              (should-not (string-match-p "\\? make test" text))
+              (should-not (string-match-p "\\[Allow once\\]" text))))))))))
+
+(ert-deftest emagent-chat-test-permission-eval-content-block ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-show-tool-call "id1" "emagent-eval: eval")
+          (let ((args (make-hash-table :test 'equal))
+                layout)
+            (puthash "form" "(require 'emagent)" args)
+            (emagent-chat-permission-prompt
+             "emagent-eval: eval"
+             '(("Allow once" . :allow-once))
+             (lambda (_choice) nil)
+             `((toolCallId . "tool_eval")
+               (title . "emagent-eval: eval")
+               (arguments . ,args)))
+            (setq layout (substring-no-properties (buffer-string)))
+            (should (string-match-p "#\\+end_quote\n\n\\*\\* Allow eval" layout))
+            (should (string-match-p "#\\+BEGIN_SRC elisp\n(require 'emagent)\n#\\+END_SRC"
+                                    layout))
+            (should-not (string-match-p "\\? emagent-eval: eval" layout)))))))))
+
+(ert-deftest emagent-chat-test-permission-edit-content-block ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (let ((path (expand-file-name "target.py" dir)))
+            (write-region "before\n" nil path)
+            (goto-char (point-max))
+            (emagent-chat--begin-response (point))
+            (emagent-chat-show-tool-call "id1" "Edit File")
+            (let ((tool-call `((toolCallId . "tool_edit")
+                               (title . "Edit File")
+                               (rawInput . ((path . ,path)
+                                            (content . "after\n")))))
+                  layout)
+              (emagent-chat-permission-prompt
+               path
+               '(("Allow once" . :allow-once))
+               (lambda (_choice) nil)
+               tool-call)
+              (setq layout (substring-no-properties (buffer-string)))
+              (should (string-match-p "#\\+end_quote\n\n\\*\\* Allow edit: target.py"
+                                      layout))
+              (should (string-match-p "#\\+BEGIN_SRC diff" layout))
+              (should (string-match-p "after" layout))
+              (should-not (string-match-p "\\? " layout))))))))))
+
+(ert-deftest emagent-chat-test-buffer-display ()
+  (let ((disable-visual
+         (lambda ()
+           (when (derived-mode-p 'emagent-mode)
+             (visual-line-mode -1)
+             (setq-local truncate-lines t)))))
+    (unwind-protect
+        (progn
+          (add-hook 'org-mode-hook disable-visual 50)
+          (emagent-test--with-emagent-buffer
+           (lambda (buffer _dir)
+             (with-current-buffer buffer
+               (should (bound-and-true-p visual-line-mode))
+               (should-not truncate-lines)
+               (when (fboundp 'org-phscroll-mode)
+                 (should (bound-and-true-p org-phscroll-mode)))))))
+      (remove-hook 'org-mode-hook disable-visual 50))))
+
+(provide 'emagent-chat-test)
+
+;;; emagent-chat-test.el ends here
