@@ -37,6 +37,8 @@
 
 (declare-function emagent-chat-allowed-permissions "emagent-chat")
 (declare-function emagent-chat-project-directory "emagent-chat")
+(declare-function emagent-chat-show-tool-call "emagent-chat")
+(declare-function emagent-acp--chat-buffer "emagent-acp-usage")
 
 (defun emagent-acp--hydrate-session-permissions (state session-id)
   "Load ~/.emagent session permissions for SESSION-ID into STATE."
@@ -234,6 +236,57 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
                           (member fingerprint
                                   (emagent-permissions-project-fingerprints
                                    (emagent-chat-project-directory))))))))))
+
+(defun emagent-acp--permission-choice-label (choice)
+  "Return a short display label for permission CHOICE, or nil."
+  (pcase choice
+    (:allow-once "Once")
+    (:allow-session "Session")
+    (:allow-always "Always")
+    (:allow-all "All")
+    (:deny "Denied")
+    (_ nil)))
+
+(defun emagent-acp--permission-stored-auto-choice (state fingerprint chat-buffer)
+  "Return the stored user CHOICE that auto-approves FINGERPRINT, or nil."
+  (cond
+   ((map-elt state :session-auto-approve) :allow-all)
+   ((and fingerprint (member fingerprint (emagent-permissions-global-fingerprints)))
+    :allow-always)
+   ((and fingerprint
+         (member fingerprint (or (map-elt state :permission-auto-allow) nil)))
+    :allow-session)
+   ((and fingerprint
+         (member fingerprint
+                 (emagent-permissions-session-fingerprints
+                  (map-elt state :session-id))))
+    :allow-session)
+   ((and fingerprint chat-buffer (buffer-live-p chat-buffer)
+         (with-current-buffer chat-buffer
+           (or (member fingerprint (emagent-chat-allowed-permissions))
+               (member fingerprint
+                       (emagent-permissions-project-fingerprints
+                        (emagent-chat-project-directory))))))
+    :allow-session)
+   (t nil)))
+
+(defun emagent-acp--permission-decision-label (base-label choice)
+  "Return BASE-LABEL with permission CHOICE appended when known."
+  (if-let ((suffix (emagent-acp--permission-choice-label choice)))
+      (format "%s - %s" base-label suffix)
+    base-label))
+
+(defun emagent-acp--show-permission-decision (state tool-call choice)
+  "Update the permission tool-call line for TOOL-CALL with CHOICE."
+  (when (and tool-call choice)
+    (when-let* ((id (map-elt tool-call 'toolCallId))
+                (update (emagent-acp--tool-call-update-from-request tool-call))
+                (merged (emagent-acp--merged-tool-call-update state update))
+                (base (emagent-acp--tool-call-label merged))
+                (label (emagent-acp--permission-decision-label base choice))
+                (buf (emagent-acp--chat-buffer state)))
+      (with-current-buffer buf
+        (emagent-chat-show-tool-call id label)))))
 
 (defun emagent-acp--permission-gate-auto-approve-p (state tool-call validation fingerprint chat-buffer)
   "Return non-nil when emagent should approve without prompting."

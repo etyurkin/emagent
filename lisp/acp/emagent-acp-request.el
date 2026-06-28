@@ -49,6 +49,8 @@
 (declare-function emagent-acp--permission-auto-allowed-p "emagent-acp-permit")
 (declare-function emagent-acp--permission-apply-choice "emagent-acp-permit")
 (declare-function emagent-acp--permission-approved-choice-p "emagent-acp-permit")
+(declare-function emagent-acp--permission-stored-auto-choice "emagent-acp-permit")
+(declare-function emagent-acp--show-permission-decision "emagent-acp-permit")
 (declare-function emagent-acp--schedule-permission-drain "emagent-acp-permit")
 (declare-function emagent-chat-permission-prompt "emagent-chat-render" (question choices callback &optional tool-call))
 (declare-function emagent-tools--buttons-prompt "emagent-tools" (prompt choices chat-buffer callback &optional preamble))
@@ -150,15 +152,21 @@ non-blockingly and returns; ON-COMPLETE is called after the user responds."
       (cond
        ((and validation (eq (car validation) :deny))
         (emagent-log "permission denied by emagent gate: %s — %s" question (cdr validation))
+        (emagent-acp--show-permission-decision state tool-call :deny)
         (funcall respond :deny))
        ((emagent-acp--permission-gate-auto-approve-p state tool-call validation fingerprint buf)
-        (emagent-log "permission auto-approve: %s (fingerprint %s)" question (or fingerprint "none"))
-        (funcall respond :allow-once))
+        (let ((stored (emagent-acp--permission-stored-auto-choice state fingerprint buf)))
+          (emagent-log "permission auto-approve: %s (fingerprint %s)" question (or fingerprint "none"))
+          (when stored
+            (emagent-acp--show-permission-decision state tool-call stored))
+          (funcall respond :allow-once)))
        (t
         (emagent-acp--prepare-interactive-context state)
         (emagent-acp--clear-prompt-watchdog state)
         (let ((after-response
                (lambda (choice)
+                 (when choice
+                   (emagent-acp--show-permission-decision state tool-call choice))
                  (when (map-elt state :busy)
                    (emagent-acp--schedule-prompt-watchdog state))
                  (emagent-acp--refresh-mode-line state)

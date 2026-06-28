@@ -158,6 +158,46 @@
           (emagent-acp--hydrate-session-permissions fresh session-id)
           (should (map-elt fresh :session-auto-approve)))))))
 
+(ert-deftest emagent-acp-session-test-permission-decision-label ()
+  (should (string= "Allow web search? - Always"
+                   (emagent-acp--permission-decision-label "Allow web search?" :allow-always)))
+  (should (string= "Allow web search? - Session"
+                   (emagent-acp--permission-decision-label "Allow web search?" :allow-session)))
+  (should (string= "Allow web search? - Once"
+                   (emagent-acp--permission-decision-label "Allow web search?" :allow-once)))
+  (should (string= "Allow web search? - Denied"
+                   (emagent-acp--permission-decision-label "Allow web search?" :deny))))
+
+(ert-deftest emagent-acp-session-test-permission-stored-auto-choice ()
+  (emagent-test--with-mocks
+      (((symbol-function 'emagent-permissions-global-fingerprints)
+        (lambda () '("tool:Allow web search?")))
+       ((symbol-function 'emagent-permissions-session-fingerprints) (lambda (_) nil))
+       ((symbol-function 'emagent-chat-allowed-permissions) (lambda () nil))
+       ((symbol-function 'emagent-chat-project-directory) (lambda () nil))
+       ((symbol-function 'emagent-permissions-project-fingerprints) (lambda (_) nil)))
+    (let ((state (emagent-test--make-acp-state)))
+      (should (eq :allow-always
+                  (emagent-acp--permission-stored-auto-choice
+                   state "tool:Allow web search?" nil)))
+      (map-put! state :session-auto-approve t)
+      (should (eq :allow-all
+                  (emagent-acp--permission-stored-auto-choice
+                   state "tool:Allow web search?" nil))))))
+
+(ert-deftest emagent-acp-session-test-permission-auto-shows-stored-decision ()
+  (let* ((state (emagent-test--make-acp-state))
+         (tool-call '((toolCallId . "perm_web") (title . "Allow web search?")))
+         (shown nil))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-chat-show-tool-call)
+          (lambda (_id label) (setq shown label))))
+      (emagent-acp--show-permission-decision state tool-call :allow-always)
+      (should (string= "Allow web search? - Always" shown))
+      (setq shown nil)
+      (emagent-acp--show-permission-decision state tool-call :allow-once)
+      (should (string= "Allow web search? - Once" shown)))))
+
 (defun emagent-test--run-at-time-immediately (_time _repeat fn)
   "Test helper: invoke FN synchronously instead of scheduling."
   (funcall fn)
