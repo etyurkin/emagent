@@ -75,6 +75,7 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =C-c m=                               | Set ACP model                                    |
 | =C-c l=                               | Show emagent log (=*Emagent Log*=)                |
 | =C-c ?=                               | Command palette (transient menu)                 |
+| =C-p= / =C-n= on =* user>= line         | Navigate prompt history (previous / next)        |
 | =M-x emagent-chat-insert-last-response= | Insert last response into another buffer        |
 | =M-x emagent-chat-insert-src-block=   | Pick a src block from last response and insert  |
 | =TAB= on =/command= line              | Complete slash commands (skills / built-ins)     |
