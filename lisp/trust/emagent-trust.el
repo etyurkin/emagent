@@ -20,9 +20,9 @@
   :prefix "emagent-trust-")
 
 (defcustom emagent-trust-enabled t
-  "When non-nil, prompt for workspace trust before a new Claude/Cursor session.
+  "When non-nil, record workspace trust on disk before a new Claude/Cursor session.
 
-Remote `default-directory' values (Tramp) skip file writes and prompts."
+Remote `default-directory' values (Tramp) skip file writes."
   :type 'boolean
   :group 'emagent-trust)
 
@@ -142,13 +142,21 @@ Loads lazily so `require' is not recursive at top level."
     ('cursor (emagent-trust-cursor-trusted-p directory))
     (_ t)))
 
+(defun emagent-trust--record-trust-if-needed (provider directory)
+  "Write on-disk trust for PROVIDER at DIRECTORY when not already trusted."
+  (unless (emagent-trust--already-trusted-p provider directory)
+    (let ((dir (emagent-trust--normalize-dir directory)))
+      (condition-case err
+          (pcase provider
+            ('claude (emagent-trust-claude-record-trust dir))
+            ('cursor (emagent-trust-cursor-record-trust dir)))
+        (error (signal (car err) (cdr err)))))))
+
 (defun emagent-trust--configure (provider project-dir)
   "Handle trust setup for PROVIDER at PROJECT-DIR.
 
-For Cursor, writes =~/.cursor/projects/.../.workspace-trusted= when missing.
-For Claude, prompts y/n/q when the workspace is not yet trusted on disk.
-
-Signals `user-error' when the user chooses quit."
+When trust is missing on disk, writes Claude (~/.claude.json) or Cursor
+(~/.cursor/projects/.../.workspace-trusted) markers automatically."
   (emagent-trust--ensure-provider-features)
   (cond
    ((not (and emagent-trust-enabled (memq provider '(claude cursor))))
@@ -156,25 +164,9 @@ Signals `user-error' when the user chooses quit."
    ((emagent-trust--remote-p project-dir)
     (message "emagent: skipping workspace trust (remote directory)")
     nil)
-   ((eq provider 'cursor)
-    (unless (emagent-trust-cursor-trusted-p project-dir)
-      (let ((dir (emagent-trust--normalize-dir project-dir)))
-        (condition-case err
-            (emagent-trust-cursor-record-trust dir)
-          (error (signal (car err) (cdr err))))))
-    nil)
-   ((emagent-trust--already-trusted-p provider project-dir)
-    nil)
    (t
-    (let* ((dir (emagent-trust--normalize-dir project-dir))
-           (choice (emagent-trust--prompt-ynq dir "Claude Code")))
-      (pcase choice
-        ('q (user-error "emagent session cancelled"))
-        ('n nil)
-        ('y (condition-case err
-                (emagent-trust-claude-record-trust dir)
-              (error (signal (car err) (cdr err))))
-            nil))))))
+    (emagent-trust--record-trust-if-needed provider project-dir)
+    nil)))
 
 (provide 'emagent-trust)
 

@@ -79,6 +79,28 @@
   (let ((tf (emagent-trust-cursor--trust-file "/Users/foo/bar")))
     (should (string-match-p "projects/Users-foo-bar/\\.workspace-trusted\\'" tf))))
 
+(ert-deftest emagent-trust-test-configure-auto-records-claude ()
+  (let* ((dir (emagent-test--temp-directory))
+         (path (expand-file-name "claude.json" dir)))
+    (let ((emagent-trust-claude-json-file path))
+      (emagent-trust--configure 'claude dir)
+      (should (emagent-trust-claude-trusted-p dir)))))
+
+(ert-deftest emagent-trust-test-configure-auto-records-cursor ()
+  (let* ((dir (emagent-test--temp-directory))
+         (config (expand-file-name "cursor/" dir)))
+    (let ((emagent-trust-cursor-config-dir config))
+      (emagent-trust--configure 'cursor dir)
+      (should (emagent-trust-cursor-trusted-p dir)))))
+
+(ert-deftest emagent-trust-test-configure-skips-when-disabled ()
+  (let* ((dir (emagent-test--temp-directory))
+         (path (expand-file-name "claude.json" dir)))
+    (let ((emagent-trust-enabled nil)
+          (emagent-trust-claude-json-file path))
+      (emagent-trust--configure 'claude dir)
+      (should-not (file-exists-p path)))))
+
 (provide 'emagent-trust-test)
 
 ;;; emagent-trust-test.el ends here

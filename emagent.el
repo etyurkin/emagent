@@ -419,7 +419,7 @@ By default updates trust only for this buffer's agent.  With a prefix
 argument, updates *both* Claude (=~/.claude.json=) and Cursor
 (=~/.cursor/projects/...=).
 
-This command does not run the startup trust dialog.  For Claude, the
+This command does not re-run startup trust setup.  For Claude, the
 running agent does not reload ~/.claude.json on session/load; after recording
 trust use `emagent-trust-claude-reconnect' in this buffer (or clear
 #+EMAGENT_SESSION and toggle `emagent-mode') so a new session picks it up."

@@ -116,15 +116,13 @@ After you choose an agent, emagent checks whether that workspace is already
 trusted for Claude Code (=~/.claude.json=) or Cursor (=~/.cursor/projects/...=).
 For Claude, that means a =projects= entry with =hasTrustDialogAccepted= true
 for this directory or an ancestor; no entry, a missing flag, or JSON =false=
-counts as untrusted at that path (parents are still checked).  If Claude is
-not trusted, emagent asks =y= / =n= / =q=: =y= records trust on disk, =n=
-continues without recording, =q= cancels.  For Cursor, emagent writes
-=~/.cursor/projects/.../.workspace-trusted= automatically when it is missing
-(no prompt).  Set =emagent-trust-enabled= to =nil= to skip trust setup.
+counts as untrusted at that path (parents are still checked).  When trust is
+missing, emagent writes the provider marker automatically (Claude:
+=~/.claude.json=; Cursor: =~/.cursor/projects/.../.workspace-trusted=).
+Set =emagent-trust-enabled= to =nil= to skip trust setup.
 
 =emagent-mode= reconnects the saved ACP session only; it does *not* run the
-startup trust prompt again (trust is whatever is already in =~/.claude.json= /
-Cursor project files).  Use =M-x emagent-trust-workspace= to add or refresh trust
+startup trust setup again (trust is whatever is already on disk).  Use =M-x emagent-trust-workspace= to add or refresh trust
 without starting a new session (=C-u= writes both Claude and Cursor markers).
 
 *Claude:* updating =~/.claude.json= does *not* change an agent that is *resumed*
@@ -201,10 +199,10 @@ operations (=rm -rf=, =dd=, dangerous =eval=, etc.).  Set to =t= to skip
 prompts for anything that passes validation.  This does not replace Claude Code's
 own permission and trust layers inside the agent process.
 
-Workspace trust helpers are split across =emagent-trust.el= (shared JSON and the
-=y/n/q= prompt), =emagent-trust-claude.el= (=~/.claude.json= / =hasTrustDialogAccepted=),
-and =emagent-trust-cursor.el= (=~/.cursor/projects/.../.workspace-trusted= and
-extra =cursor-agent= flags).  Toggle with =emagent-trust-enabled=.
+Workspace trust helpers are split across =emagent-trust.el= (startup auto-trust),
+=emagent-trust-claude.el= (=~/.claude.json= / =hasTrustDialogAccepted=),
+and =emagent-trust-cursor.el= (=~/.cursor/projects/.../.workspace-trusted=).
+Toggle with =emagent-trust-enabled=.
 
 * Customization
 
