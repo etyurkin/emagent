@@ -229,6 +229,9 @@ extra =cursor-agent= flags).  Toggle with =emagent-trust-enabled=.
 | =emagent-acp-extra-mcp-config-file=          | ="~/.claude.json"= | Forward MCP servers from this file to the agent                |
 | =emagent-oauth-auto-browse-url=              | =nil=          | Auto-open OAuth authorize URLs in a browser                         |
 | =emagent-acp-watchdog-timeout=               | =300=          | Seconds of silence before aborting a stalled prompt                 |
+| =emagent-chat-inactive-bell=                 | =t=            | Ring bell when agent finishes while Emacs is not focused            |
+| =emagent-chat-inactive-bell-cooldown=        | =1.0=          | Minimum seconds between inactive bells                              |
+| =emagent-chat-inactive-osx-notification=     | =nil=          | Send macOS notification when agent finishes inactive                |
 
 Destructive MCP tool calls (=write_file=, =delete_file=, etc.) prompt before
 running using inline buttons in the chat buffer.  =write_file= shows a unified
