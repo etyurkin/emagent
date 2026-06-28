@@ -1,0 +1,54 @@
+;;; emagent-policy-rules-elisp.el --- Elisp policy rule table  -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2024-2026  Evgeniy Tyurkin
+
+;;; Commentary:
+
+;; Declarative elisp rules for `emagent-policy-check-elisp'.
+
+;;; Code:
+
+(defcustom emagent-policy-elisp-blocked-symbols
+  '(kill-emacs pause-emacs)
+  "Symbols hard-blocked in eval; cannot run under any circumstances."
+  :type '(repeat symbol)
+  :group 'emagent-policy)
+
+(defcustom emagent-policy-elisp-dangerous-symbols
+  '(delete-file delete-directory
+    rename-file rename-directory
+    copy-file copy-directory
+    write-region write-file
+    insert-file-contents
+    load load-file load-library
+    shell-command shell-command-to-string
+    call-process start-process start-file-process process-file
+    kill-buffer kill-buffer-and-save)
+  "Symbols in eval that require explicit user confirmation."
+  :type '(repeat symbol)
+  :group 'emagent-policy)
+
+(defcustom emagent-policy-extra-elisp-rules nil
+  "Extra elisp policy rules appended after built-in symbol rules."
+  :type '(repeat plist)
+  :group 'emagent-policy)
+
+(defun emagent-policy--builtin-elisp-rules ()
+  "Return symbol-based elisp rules from `emagent-policy-elisp-*-symbols'."
+  (list
+   `(:id elisp-blocked
+     :severity deny
+     :reason-kind blocked
+     :match ((any-symbol . ,emagent-policy-elisp-blocked-symbols)))
+   `(:id elisp-dangerous
+     :severity confirm
+     :reason-kind dangerous
+     :match ((any-symbol . ,emagent-policy-elisp-dangerous-symbols)))))
+
+(defun emagent-policy--all-elisp-rules ()
+  "Return built-in and user `emagent-policy-extra-elisp-rules'."
+  (append (emagent-policy--builtin-elisp-rules)
+          emagent-policy-extra-elisp-rules))
+
+(provide 'emagent-policy-rules-elisp)
+;;; emagent-policy-rules-elisp.el ends here
