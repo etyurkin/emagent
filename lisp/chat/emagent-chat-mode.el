@@ -29,6 +29,8 @@
 
 (defvar emagent--force-activation)
 
+(declare-function org-appear-mode "ext:org-appear")
+
 (defun emagent-chat--ensure-org-startup ()
   "Ensure the buffer requests Org block folding on startup."
   (unless (save-excursion
@@ -39,9 +41,15 @@
 
 (defun emagent-chat--disable-incompatible-org-minor-modes ()
   "Turn off org minor modes that break on emagent chat buffer content."
-  (when (fboundp 'org-appear-mode)
-    (org-appear-mode -1))
-  (setq-local org-element-use-cache nil))
+  (setq-local org-element-use-cache nil)
+  ;; Toggling org-appear off runs org-element parsing on the element at point.
+  ;; During desktop restore point can sit mid-buffer with the org cache in an
+  ;; inconsistent state, which signals \"Invalid search bound (wrong side of
+  ;; point)\".  Disabling org-appear must never abort emagent-mode setup.
+  (when (bound-and-true-p org-appear-mode)
+    (condition-case nil
+        (org-appear-mode -1)
+      (error nil))))
 
 (defun emagent-chat--setup-buffer-display ()
   "Configure prose wrapping and table scrolling for emagent buffers.
