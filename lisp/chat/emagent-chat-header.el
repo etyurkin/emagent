@@ -90,9 +90,9 @@
 (defun emagent-chat--canonical-model-id (model)
   "Return MODEL id in the form Cursor ACP expects (keep bracket suffixes)."
   (when model
-    (pcase model
-      ((pred (member _ '("auto" "default"))) "default[]")
-      (_ model))))
+    (if (member model '("auto" "default"))
+        "default[]"
+      model)))
 
 ;;;###autoload
 (defun emagent-chat--normalize-model-id (model)

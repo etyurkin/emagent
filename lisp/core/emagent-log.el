@@ -74,9 +74,7 @@ buffer-local counter instead of `count-lines' to avoid O(n) scanning."
 (defun emagent-log-truncate-line (string width &optional keep-tail)
   "Truncate STRING for logging to display WIDTH.
 
-Emacs 30 changed `truncate-string-to-width': the fourth argument is a
-padding character, and ellipsis is the fifth.  KEEP-TAIL non-nil keeps
-the end of STRING visible."
+KEEP-TAIL non-nil keeps the end of STRING visible."
   (setq string (string-trim string))
   (if (<= (string-width string) width)
       string
@@ -85,9 +83,7 @@ the end of STRING visible."
                (chars (max 1 (- width (string-width ellipsis)))))
           (concat ellipsis
                   (substring string (max 0 (- (length string) chars)))))
-      (if (>= emacs-major-version 30)
-          (truncate-string-to-width string width nil nil "…")
-        (truncate-string-to-width string width nil "…")))))
+      (truncate-string-to-width string width nil nil "…"))))
 
 (defun emagent-log (format-string &rest args)
   "Append a timestamped line to `emagent-log-buffer-name'."
