@@ -78,6 +78,15 @@
               (size (map-elt usage :context-size)))
     (cons used size)))
 
+(defun emagent-acp-context-usage-unavailable-p ()
+  "Return non-nil when a connected session cannot report context usage.
+Cursor does not expose context-window figures over ACP, so emagent has no data
+to compute a percentage and the mode line shows `ctx:n/a' instead."
+  (and emagent-acp--session
+       (or (map-elt emagent-acp--session :busy)
+           (map-elt emagent-acp--session :ready))
+       (eq (or (map-elt emagent-acp--session :provider) 'cursor) 'cursor)))
+
 (defun emagent-acp-external-tool-gate-reasons ()
   "Return external tool-gate reason symbols for the current session, or nil.
 See `emagent-acp-external-tool-gate-hints'."

@@ -490,7 +490,7 @@
           (emagent-chat-show-tool-call "id1" "Read: /some/file.txt")
           (emagent-chat-append-thought "Test 123")
           (let ((text (substring-no-properties (buffer-string))))
-            (should (string-match-p "→ Read: =/some/file.txt=\nTest 123" text))
+            (should (string-match-p "→ Read: =/some/file.txt=\n\nTest 123" text))
             (should-not (string-match-p "/some/file.txtTest" text)))))))))
 
 (ert-deftest emagent-chat-test-tool-call-after-close-thought-no-executing ()
@@ -530,6 +530,151 @@
             (should (string-match-p "→ Edit File: foo.el" text))
             (should-not (string-match-p "→ Edit File\n→ Edit File: foo.el" text)))))))))
 
+(ert-deftest emagent-chat-test-tool-call-multiline-renders-src-block ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-show-tool-call
+           "id-blk" "Shell: cd /tmp && run"
+           "sh" "cd /tmp && python3 - <<'PY'\nprint(1)\nPY")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "#\\+begin_src sh" text))
+            (should (string-match-p "python3 - <<'PY'" text))
+            (should (string-match-p "#\\+end_src" text))
+            ;; block-only: no → line, and no =verbatim= path mangling.
+            (should-not (string-match-p "→ Shell" text))
+            (should-not (string-match-p "=/tmp=" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-call-multiline-updates-in-place ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-show-tool-call "id-blk" "Shell: run"
+                                       "sh" "echo one\necho two")
+          (emagent-chat-show-tool-call "id-blk" "Shell: run"
+                                       "sh" "echo one\necho two\necho three")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "echo three" text))
+            ;; only one src block remains after the in-place update.
+            (should (= 1 (cl-count-if
+                          (lambda (line) (string-match-p "#\\+begin_src" line))
+                          (split-string text "\n")))))))))))
+
+(ert-deftest emagent-chat-test-tool-call-non-code-stays-arrow ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          ;; No CODE argument: a plain read/grep-style line stays compact.
+          (emagent-chat-show-tool-call "id-line" "Read: /some/file.txt")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "→ Read:" text))
+            (should-not (string-match-p "#\\+begin_src" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-call-singleline-command-renders-block ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          ;; A single long command (CODE provided) renders as a src block.
+          (emagent-chat-show-tool-call "id-c" "Shell: cargo" "sh"
+                                       "cargo add foo --dry-run")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "#\\+begin_src sh" text))
+            (should (string-match-p "cargo add foo --dry-run" text))
+            (should-not (string-match-p "→ Shell" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-call-multiline-decision-annotation ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-show-tool-call
+           "id-blk" "Shell: run (Allow: Always)"
+           "sh" "echo one\necho two")
+          (let ((text (substring-no-properties (buffer-string))))
+            ;; annotation rides as a leading comment inside the block, not on
+            ;; the command lines or dangling beneath the block.
+            (should (string-match-p "#\\+begin_src sh\n# (Allow: Always)" text))
+            (should-not (string-match-p "echo two (Allow: Always)" text))
+            (should-not (string-match-p "#\\+end_src\n(Allow: Always)" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-call-flushes-pending-reasoning ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat--insert-thought-now "first half")
+          ;; Buffered reasoning not yet flushed when the tool call arrives.
+          (setq emagent-chat--thought-pending " second half")
+          (emagent-chat-show-tool-call "id1" "grep: pattern")
+          (let ((text (substring-no-properties (buffer-string))))
+            ;; the sentence stays intact, with the tool line after it.
+            (should (string-match-p "first half second half\n\n→ grep: pattern" text))
+            (should-not (string-match-p "first half\n\n→ grep" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-line-separated-from-prose ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "planning the change")
+          (emagent-chat-show-tool-call "id-a" "Read: /a.el")
+          (emagent-chat-show-tool-call "id-b" "Read: /b.el")
+          (let ((text (substring-no-properties (buffer-string))))
+            ;; one blank line between prose and the first tool line,
+            (should (string-match-p "planning the change\n\n→ Read: =/a.el=" text))
+            ;; but consecutive distinct tool lines stay adjacent.
+            (should (string-match-p "→ Read: =/a.el=\n→ Read: =/b.el=" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-call-block-then-thought-separated ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-show-tool-call "id-blk" "Shell: run (Allow: Always)"
+                                       "sh" "echo one\necho two")
+          (emagent-chat-append-thought "resuming reasoning")
+          (let ((text (substring-no-properties (buffer-string))))
+            ;; prose never glues onto the block close or its decision comment.
+            (should (string-match-p "#\\+end_src\n\nresuming reasoning" text))
+            (should-not (string-match-p "#\\+end_srcresuming" text))
+            (should-not (string-match-p "Always)resuming" text)))))))))
+
 (ert-deftest emagent-chat-test-tool-call-update-then-thought-on-new-line ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
@@ -543,7 +688,8 @@
           (emagent-chat-show-tool-call "id1" "Read: /some/file.txt")
           (emagent-chat-append-thought "more thinking")
           (let ((text (substring-no-properties (buffer-string))))
-            (should (string-match-p "→ Read: =/some/file.txt=\nmore thinking" text))
+            ;; prose resumes one blank line below the tool line.
+            (should (string-match-p "→ Read: =/some/file.txt=\n\nmore thinking" text))
             (should-not (string-match-p "/some/file.txtmore" text)))))))))
 
 (ert-deftest emagent-chat-test-tool-call-before-thought-opens-reasoning ()
@@ -575,7 +721,7 @@
           (emagent-chat-show-tool-call "id1" "grep: pattern")
           (let ((text (substring-no-properties (buffer-string))))
             (should (string-match-p
-                     "before\n #\\+end_quote\nmiddle after\n→ grep: pattern"
+                     "before\n #\\+end_quote\nmiddle after\n\n→ grep: pattern"
                      text))
             (should-not (string-match-p "middle\n→ grep" text)))))))))
 
@@ -626,7 +772,7 @@
           (emagent-chat-append-thought "\nline two")
           (emagent-chat-show-tool-call "id1" "Read: foo.el")
           (let ((text (substring-no-properties (buffer-string))))
-            (should (string-match-p "line one\nline two\n→ Read: foo.el" text)))))))))
+            (should (string-match-p "line one\nline two\n\n→ Read: foo.el" text)))))))))
 
 (ert-deftest emagent-chat-test-beginning-of-line-on-user-prompt ()
   (emagent-test--with-emagent-buffer

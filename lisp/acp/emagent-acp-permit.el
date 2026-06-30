@@ -297,8 +297,9 @@ renders of the same line keep the decision suffix instead of dropping it."
                 (buf (emagent-acp--chat-buffer state)))
       (when-let ((decisions (map-elt state :tool-call-decisions)))
         (puthash id choice decisions))
-      (with-current-buffer buf
-        (emagent-chat-show-tool-call id label)))))
+      (let ((spec (emagent-acp--tool-call-block-spec merged)))
+        (with-current-buffer buf
+          (emagent-chat-show-tool-call id label (car spec) (cdr spec)))))))
 
 (defun emagent-acp--permission-gate-auto-approve-p (state tool-call validation fingerprint chat-buffer)
   "Return non-nil when emagent should approve without prompting."

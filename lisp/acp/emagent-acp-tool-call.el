@@ -31,6 +31,7 @@
 
 (declare-function emagent-chat-show-tool-call "emagent-chat")
 (declare-function emagent-acp--permission-decision-label "emagent-acp-permit")
+(declare-function emagent-acp--tool-call-eval-form "emagent-acp-permit")
 
 (defun emagent-acp--tool-call-emagent-tool-p (update)
   "Return non-nil when UPDATE names a tool from emagent's own MCP server.
@@ -116,8 +117,9 @@ because generic names like `grep' collide with agent-native tools."
       (unless completed
         (emagent-acp--notify-user state (format "emagent: tool %s" label)))
       (when-let ((buf (emagent-acp--chat-buffer state)))
-        (with-current-buffer buf
-          (emagent-chat-show-tool-call id display))))
+        (let ((spec (emagent-acp--tool-call-block-spec merged)))
+          (with-current-buffer buf
+            (emagent-chat-show-tool-call id display (car spec) (cdr spec))))))
     (if completed
         (progn
           (map-put! state :current-tool nil)
@@ -322,6 +324,58 @@ real parameters live in arguments; prefer arguments when both are present."
           (when (emagent-acp--human-tool-detail-p subtitle)
             subtitle))
         (emagent-acp--tool-call-content-detail (map-elt update 'content)))))
+
+(defun emagent-acp--tool-call-shell-command (update)
+  "Return an explicit shell command string from UPDATE, or nil.
+Unlike `emagent-acp--tool-call-command-text', this never falls back to the
+tool title/subtitle, so non-shell tools (grep, read) are not misread as
+commands."
+  (when-let* ((raw (emagent-acp--tool-call-input update))
+              (data (emagent-acp--tool-call-normalize-data raw)))
+    (cl-flet ((cmd (d) (or (emagent-acp--tool-call-value-string
+                            (emagent-acp--tool-call-data-get d 'command))
+                           (emagent-acp--tool-call-value-string
+                            (emagent-acp--tool-call-data-get d 'cmd)))))
+      (or (cmd data)
+          (when-let ((nested (emagent-acp--tool-call-nested-raw-input data)))
+            (cmd nested))))))
+
+(defconst emagent-acp--shell-tool-names
+  '("grep" "rg" "ripgrep" "ag" "cat" "ls" "find" "fd" "sed" "awk"
+    "head" "tail")
+  "CLI utility names that, when used as a structured tool title, render as a
+reconstructed `sh' command (e.g. grep PATTERN).  Kept deliberately narrow so
+structured file read/write/search tools are never mistaken for shell commands.")
+
+(defun emagent-acp--tool-call-cli-tool (update)
+  "Return the CLI command word (grep, cat, ...) named by UPDATE's title, or nil.
+Only a curated set of shell utilities is recognized, so structured
+read/write/search tools are not treated as shell commands."
+  (let* ((title (downcase (string-trim (or (map-elt update 'title) ""))))
+         (title (replace-regexp-in-string
+                 "\\`\\(?:mcp_[^_]+_\\|mcp:? *\\|emagent-\\)" "" title))
+         (word (car (split-string title "[^a-z0-9.+-]+" t))))
+    (and word (member word emagent-acp--shell-tool-names) word)))
+
+
+(defun emagent-acp--tool-call-block-spec (update)
+  "Return (LANG . CODE) when UPDATE should render as an Org src block, else nil.
+Explicit shell commands render as `sh' and eval forms as `elisp' (their detail
+is real code).  A structured CLI tool (grep, cat, ...) renders as `sh' with its
+detail reconstructed into a command line (e.g. grep PATTERN).  Any other tool
+renders as a block only when its detail spans multiple lines; single-line
+details such as file paths stay as compact arrow lines."
+  (let* ((command (emagent-acp--tool-call-shell-command update))
+         (form (unless command (emagent-acp--tool-call-eval-form update)))
+         (detail (unless (or command form)
+                   (emagent-acp--tool-call-detail update)))
+         (cli (and detail (emagent-acp--tool-call-cli-tool update))))
+    (cond
+     (command (cons "sh" command))
+     (form (cons "elisp" form))
+     (cli (cons "sh" (format "%s %s" cli detail)))
+     ((and detail (string-match-p "\n" detail)) (cons "text" detail))
+     (t nil))))
 
 (defconst emagent-acp--tool-call-weak-details
   '("tool" "Tool" "running" "pending")

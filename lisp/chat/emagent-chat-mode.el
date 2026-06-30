@@ -130,8 +130,7 @@ Run \\[emagent-mode] to reconnect a saved session."
   (add-hook 'completion-at-point-functions
             #'emagent-chat-slash-command-completion-at-point -90 t)
   (setq-local imenu-create-index-function #'emagent-chat--imenu-create-index)
-  (remove-hook 'font-lock-after-fontify-region-hook
-               #'emagent-chat--after-fontify-repair-tool-lines t)
+  (font-lock-add-keywords nil emagent-chat--tool-line-font-lock-keywords 'append)
   (setq-local bookmark-make-record-function #'emagent-chat--bookmark-make-record)
   (emagent-chat--setup-faces)
   (emagent-chat--mode-line-recompute)
@@ -250,12 +249,6 @@ executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'.
            t))
         (call-interactively 'emagent--transient-menu))
     (message "emagent: SPC=send, p=prompt, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
-
-(dolist (buffer (buffer-list))
-  (with-current-buffer buffer
-    (when (derived-mode-p 'emagent-mode)
-      (remove-hook 'font-lock-after-fontify-region-hook
-                   #'emagent-chat--after-fontify-repair-tool-lines t))))
 
 (unless (advice-member-p #'emagent-chat--suppress-inline-images-in-session-buffers
                           'org-display-inline-images)

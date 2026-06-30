@@ -159,7 +159,11 @@ Agent responses appear as Org subsections under the =* user>= heading:
 
 - =** Thinking= — streamed reasoning text and tool-use lines (=→ tool-name: path=).
   Only present when the model emits reasoning.  Folds automatically when the
-  response finishes.  With Cursor, file paths are read from =store.db=.
+  response finishes.  With Cursor, file paths are read from =store.db=.  Shell
+  commands, =eval= forms, and CLI tools (=grep=, =cat=, …) render as Org src
+  blocks (=sh= / =elisp=) instead of a =→= line, with any permission decision
+  shown as a leading comment inside the block (=# (Allow: Always)=).  Read,
+  write, and other file-path tools stay as compact =→= lines.
 - =** Response= — the final assistant answer (Markdown converted to Org).
 
 Sessions saved in the legacy =# --- emagent ---= / =# --- /emagent ---= format
@@ -183,7 +187,7 @@ Model IDs in the mode line are shown without technical parameters
 =auto= not =default[]=).
 
 Context window percentage (=ctx%=) is only available with Claude; cursor-agent
-does not expose token usage via ACP.
+does not expose token usage via ACP, so its mode line shows =ctx:n/a=.
 
 ** Claude (Agent SDK) notes
 

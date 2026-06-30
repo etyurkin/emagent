@@ -80,10 +80,10 @@ Thinking block."
           (cons content-start content-end))))))
 
 (defun emagent-chat--hide-reasoning-by-region (bounds)
-  "Hide Reasoning content between BOUNDS using `org-fold-region'."
+  "Hide Reasoning content between BOUNDS using `outline-flag-region'."
   (when bounds
     (ignore-errors
-      (org-fold-region (car bounds) (cdr bounds) t 'block))))
+      (outline-flag-region (car bounds) (cdr bounds) t))))
 
 (defun emagent-chat--hide-reasoning-at-point ()
   "Fold the `** Thinking' subsection at or near point.
@@ -101,11 +101,16 @@ so incomplete parses never break the buffer."
       (font-lock-ensure (save-excursion (goto-char (car bounds))
                                         (line-beginning-position))
                         (cdr bounds)))
+    ;; `(car bounds)' is the line-end-position of the `** Thinking' headline
+    ;; (i.e. the \n that ends it).  `beginning-of-line' from there lands on
+    ;; the `** Thinking' headline itself — exactly where `org-fold-hide-subtree'
+    ;; must be called.  We must NOT use `re-search-backward' here: with multiple
+    ;; exchanges each containing `** Thinking', a backward search would jump to
+    ;; the previous response's headline and fold the wrong block.
     (condition-case _
         (save-excursion
           (goto-char (car bounds))
           (beginning-of-line)
-          (re-search-backward emagent-chat--thinking-headline-re nil t)
           (require 'org-fold)
           (org-fold-hide-subtree))
       (error
@@ -273,20 +278,40 @@ the hide when the response is fully complete and the session is idle."
   (insert "\n")
   (setq emagent-chat--thought-marker (copy-marker (point) nil)))
 
+(defun emagent-chat--reasoning-after-tool-artifact-p ()
+  "Return non-nil when point follows a tool line or src block, modulo blanks."
+  (save-excursion
+    (skip-chars-backward " \t\n")
+    (beginning-of-line)
+    (looking-at-p "\\(?:→ \\|#\\+end_src\\)")))
+
+(defun emagent-chat--newlines-before-point ()
+  "Return the count of consecutive newlines immediately before point."
+  (save-excursion
+    (let ((n 0))
+      (while (eq (char-before) ?\n)
+        (setq n (1+ n))
+        (backward-char))
+      n)))
+
 (defun emagent-chat--insert-reasoning-text (text)
-  "Insert TEXT at `emagent-chat--thought-marker' in the open Thinking content."
+  "Insert TEXT at `emagent-chat--thought-marker' in the open Thinking content.
+Prose that resumes after a tool line or src block is separated from it by
+exactly one blank line, so the two never glue onto the same line."
   (let ((safe (emagent-chat--escape-reasoning-text text)))
-    ;; Drop a leading blank line right after the `** Thinking' headline.
-    (when (save-excursion
-            (beginning-of-line)
-            (and (looking-at "[ \t]*$")
-                 (progn (forward-line -1) t)
-                 (looking-at emagent-chat--thinking-headline-re)))
+    (cond
+     ;; Right after the `** Thinking' headline: drop any leading blank lines.
+     ((save-excursion
+        (beginning-of-line)
+        (and (looking-at "[ \t]*$")
+             (progn (forward-line -1) t)
+             (looking-at emagent-chat--thinking-headline-re)))
       (setq safe (replace-regexp-in-string "\\`[\n\r]+" "" safe)))
-    ;; When point sits at the end of a tool line, start reasoning on a new line.
-    (when (and (eolp)
-               (save-excursion (beginning-of-line) (looking-at "→ ")))
-      (setq safe (concat "\n" safe)))
+     ;; Resuming after a tool line/block: keep one blank line of separation.
+     ((emagent-chat--reasoning-after-tool-artifact-p)
+      (let ((have (emagent-chat--newlines-before-point)))
+        (setq safe (concat (make-string (max 0 (- 2 have)) ?\n)
+                           (replace-regexp-in-string "\\`[\n\r]+" "" safe))))))
     (insert safe)))
 
 (defun emagent-chat--org-verbatim-paths (text)
@@ -296,6 +321,35 @@ the hide when the response is fully complete and the session is idle."
 (defun emagent-chat--format-tool-line (label)
   "Return a Thinking-block tool line for LABEL, safe in org-mode."
   (format "→ %s" (emagent-chat--org-verbatim-paths label)))
+
+(defconst emagent-chat--tool-annotation-re
+  " ?\\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\|(Emacs)\\)\\'"
+  "Regexp matching a trailing decision / (Emacs) annotation on a tool label.")
+
+(defun emagent-chat--tool-label-annotation (label)
+  "Return the trailing decision/(Emacs) annotation in LABEL, or nil."
+  (when (and label (string-match emagent-chat--tool-annotation-re label))
+    (match-string 1 label)))
+
+(defun emagent-chat--src-comment-prefix (lang)
+  "Return the line-comment prefix used inside a src block of LANG."
+  (if (member lang '("elisp" "emacs-lisp" "lisp" "scheme" "clojure"))
+      ";; "
+    "# "))
+
+(defun emagent-chat--format-tool-block (code lang annotation)
+  "Return an Org src block for CODE in LANG.
+A decision / (Emacs) ANNOTATION is rendered as a leading comment line inside
+the block (using LANG's comment syntax) so it stays attached to the command
+without leaving a dangling line beneath the block."
+  (let* ((lang (or lang "text"))
+         (note (when (and annotation (not (string-empty-p annotation)))
+                 (concat (emagent-chat--src-comment-prefix lang)
+                         (string-trim annotation) "\n"))))
+    (format "#+begin_src %s\n%s%s\n#+end_src"
+            lang
+            (or note "")
+            (string-trim-right code))))
 
 (defun emagent-chat--format-permission-line (question)
   "Return a permission question line for QUESTION."
@@ -334,14 +388,15 @@ the hide when the response is fully complete and the session is idle."
             (remove-list-of-text-properties s e '(face))
             (put-text-property s e 'face 'emagent-tool-permission-decision)))))))
 
-(defun emagent-chat--after-fontify-repair-tool-lines (beg end)
-  "Repair org /italic/ on tool-call lines after each font-lock pass."
-  (when (emagent-chat--buffer-active-p)
-    (save-excursion
-      (goto-char beg)
-      (while (re-search-forward "^→ " end t)
-        (emagent-chat--repair-tool-line-faces (line-beginning-position)
-                                               (line-end-position))))))
+(defconst emagent-chat--tool-line-font-lock-keywords
+  `((,(concat "^→ .*?" emagent-chat--tool-decision-re)
+     1 'emagent-tool-permission-decision prepend))
+  "Font-lock keywords that re-apply the permission decision face.
+Org font-lock removes manually applied `face' properties on every
+fontification pass, so the grey decision suffix on a single-line tool call
+must be reapplied as a keyword rather than set once at insertion time.
+Block tool calls carry their decision as an in-block comment, which org
+fontifies with the comment face natively.")
 
 (defun emagent-chat--fontify-tool-line (start end)
   "Font-lock tool line START..END and repair org emphasis on paths."
@@ -349,14 +404,36 @@ the hide when the response is fully complete and the session is idle."
     (emagent-chat--maybe-font-lock-flush)
     (emagent-chat--repair-tool-line-faces start end)))
 
+(defun emagent-chat--fontify-tool-block (start end)
+  "Fontify an Org src-block tool display between START and END natively."
+  (when (and start end (<= start end))
+    (emagent-chat--maybe-font-lock-flush)
+    (ignore-errors
+      (font-lock-ensure start end))))
+
 (defun emagent-chat--ensure-reasoning-for-tool ()
   "Ensure the open response can accept tool annotations in Reasoning."
   (when (emagent-chat--open-response-p)
     (emagent-chat--ensure-reasoning-scaffold)))
 
-(defun emagent-chat--append-tool-line (label &optional id)
+(defun emagent-chat--separate-before-tool ()
+  "Ensure point starts a fresh line, with a blank line before tool prose.
+Consecutive tool lines/blocks and the `** Thinking' headline stay adjacent, so
+only prose gets the extra blank line of separation."
+  (unless (bolp) (insert "\n"))
+  (unless (or (bobp)
+              (save-excursion
+                (forward-line -1)
+                (or (looking-at-p "[ \t]*$")
+                    (looking-at-p "\\(?:→ \\|#\\+end_src\\)")
+                    (looking-at emagent-chat--thinking-headline-re))))
+    (insert "\n")))
+
+(defun emagent-chat--append-tool-line (label &optional id lang code)
   "Append tool LABEL to the open Reasoning block.
-When ID is non-nil, remember the line span for later in-place updates."
+When ID is non-nil, remember the span for later in-place updates.  When CODE
+is non-empty, render it as an Org src block in LANG instead of a single →
+line, with LABEL's trailing decision/(Emacs) annotation beneath."
   (when (and label (not (string-empty-p label))
                (emagent-chat--open-response-p))
     (emagent-chat--with-stable-view
@@ -364,51 +441,70 @@ When ID is non-nil, remember the line span for later in-place updates."
        (with-current-buffer (current-buffer)
          (let ((inhibit-read-only t))
            (emagent-chat--writable)
+           ;; Write any buffered reasoning first so the tool line lands after
+           ;; the prose received so far, never splitting a pending sentence.
+           (emagent-chat--flush-thought-pending)
            (emagent-chat--ensure-response-markers)
            (emagent-chat--ensure-reasoning-for-tool)
-           (unless (and id (emagent-chat--update-tool-call-line id label))
+           (unless (and id (emagent-chat--update-tool-call-line id label lang code))
              (when (and emagent-chat--thought-open-p
                         emagent-chat--thought-marker
                         (marker-position emagent-chat--thought-marker))
                (save-excursion
                  (goto-char emagent-chat--thought-marker)
-                 (unless (bolp) (insert "\n"))
-                 (let ((line-start (line-beginning-position)))
-                   (insert (emagent-chat--format-tool-line label))
+                 (emagent-chat--separate-before-tool)
+                 (let ((line-start (line-beginning-position))
+                       (blockp (and code (not (string-empty-p code)))))
+                   (insert (if blockp
+                               (emagent-chat--format-tool-block
+                                code lang (emagent-chat--tool-label-annotation label))
+                             (emagent-chat--format-tool-line label)))
                    (let ((line-end (line-end-position)))
                      (when id
                        (puthash id (cons (copy-marker line-start nil)
                                          (copy-marker line-end nil))
                                 emagent-chat--tool-call-lines))
-                     (emagent-chat--fontify-tool-line line-start line-end))
+                     (if blockp
+                         (emagent-chat--fontify-tool-block line-start line-end)
+                       (emagent-chat--fontify-tool-line line-start line-end)))
                    (emagent-chat--finish-tool-line-in-reasoning)))))))))))
 
-(defun emagent-chat--update-tool-call-line (id label)
-  "Replace the displayed tool-call line for ID with LABEL.
-Return non-nil when a line was updated."
+(defun emagent-chat--update-tool-call-line (id label &optional lang code)
+  "Replace the displayed tool-call span for ID with LABEL.
+When CODE is non-empty, render an Org src block in LANG instead of a line.
+Return non-nil when a span was updated."
   (let ((entry (gethash id emagent-chat--tool-call-lines)))
     (when (and entry
                (markerp (car entry)) (marker-position (car entry))
                (markerp (cdr entry)) (marker-position (cdr entry)))
       (let* ((start (car entry))
              (end (cdr entry))
-             (display (emagent-chat--format-tool-line label)))
+             (blockp (and code (not (string-empty-p code))))
+             (display (if blockp
+                          (emagent-chat--format-tool-block
+                           code lang (emagent-chat--tool-label-annotation label))
+                        (emagent-chat--format-tool-line label))))
         (unless (string= (buffer-substring-no-properties start end) display)
           (save-excursion
             (delete-region start end)
             (goto-char start)
             (insert display)
             (set-marker end (point))
-            (emagent-chat--fontify-tool-line (marker-position start)
-                                             (marker-position end))
+            (if blockp
+                (emagent-chat--fontify-tool-block (marker-position start)
+                                                  (marker-position end))
+              (emagent-chat--fontify-tool-line (marker-position start)
+                                               (marker-position end)))
             (when emagent-chat--thought-open-p
               (setq emagent-chat--thought-marker
                     (emagent-chat--reasoning-stream-marker)))))
         t))))
 
-(defun emagent-chat-show-tool-call (id label)
-  "Show or update a tool-call line for ACP toolCallId ID with LABEL."
-  (emagent-chat--append-tool-line label id))
+(defun emagent-chat-show-tool-call (id label &optional lang code)
+  "Show or update a tool-call display for ACP toolCallId ID with LABEL.
+When CODE is non-empty, render it as an Org src block in LANG instead of a
+single → line."
+  (emagent-chat--append-tool-line label id lang code))
 
 (defun emagent-chat-permission-prompt (question choices callback &optional tool-call)
   "Show permission UI at the end of the open `** Thinking' subsection.

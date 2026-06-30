@@ -213,7 +213,7 @@
          (shown nil))
     (emagent-test--with-mocks
         (((symbol-function 'emagent-chat-show-tool-call)
-          (lambda (_id label) (setq shown label))))
+          (lambda (_id label &rest _) (setq shown label))))
       (emagent-acp--show-permission-decision state tool-call :allow-always)
       (should (string= "Allow web search? (Allow: Always)" shown))
       (setq shown nil)
@@ -227,7 +227,7 @@
          (shown nil))
     (emagent-test--with-mocks
         (((symbol-function 'emagent-chat-show-tool-call)
-          (lambda (_id label) (setq shown label)))
+          (lambda (_id label &rest _) (setq shown label)))
          ((symbol-function 'emagent-acp--detect-external-refusal-in-text)
           (lambda (&rest _) nil))
          ((symbol-function 'emagent-acp--notify-user) (lambda (&rest _) nil))
@@ -250,7 +250,7 @@
          (shown nil))
     (emagent-test--with-mocks
         (((symbol-function 'emagent-chat-show-tool-call)
-          (lambda (_id label) (setq shown label)))
+          (lambda (_id label &rest _) (setq shown label)))
          ((symbol-function 'emagent-acp--detect-external-refusal-in-text)
           (lambda (&rest _) nil))
          ((symbol-function 'emagent-acp--notify-user) (lambda (&rest _) nil))
@@ -270,7 +270,7 @@
          (shown nil))
     (emagent-test--with-mocks
         (((symbol-function 'emagent-chat-show-tool-call)
-          (lambda (_id label) (setq shown label)))
+          (lambda (_id label &rest _) (setq shown label)))
          ((symbol-function 'emagent-acp--detect-external-refusal-in-text)
           (lambda (&rest _) nil))
          ((symbol-function 'emagent-acp--notify-user) (lambda (&rest _) nil))
@@ -606,6 +606,36 @@
     (should (string= "git_log: -5 --oneline"
                      (emagent-acp--tool-call-label update)))))
 
+(ert-deftest emagent-acp-session-test-tool-call-block-spec ()
+  ;; Explicit terminal command -> sh block carrying the command text.
+  (let ((update '((title . "Terminal")
+                  (rawInput . "{\"command\":\"cargo add foo\"}"))))
+    (should (equal '("sh" . "cargo add foo")
+                   (emagent-acp--tool-call-block-spec update))))
+  ;; A structured grep tool carries only a pattern; reconstruct a grep command
+  ;; line so it reads naturally and gets shell highlighting.
+  (let ((update '((title . "grep")
+                  (rawInput . "{\"pattern\":\"Edge \\\\{\"}"))))
+    (should (equal '("sh" . "grep Edge \\{")
+                   (emagent-acp--tool-call-block-spec update))))
+  ;; File read stays a compact arrow line (no block spec).
+  (let ((update '((title . "Read")
+                  (rawInput . "{\"path\":\"foo.el\"}"))))
+    (should-not (emagent-acp--tool-call-block-spec update)))
+  ;; A lone path is never a shell block, even with an execute kind.
+  (let ((update '((title . "Read") (kind . "execute")
+                  (rawInput . "{\"path\":\"/Users/me/dev/src/db/mod.rs\"}"))))
+    (should-not (emagent-acp--tool-call-block-spec update)))
+  ;; File write stays a compact arrow line too.
+  (let ((update '((title . "Edit File")
+                  (rawInput . (("edits" . (((path . "bar.el")))))))))
+    (should-not (emagent-acp--tool-call-block-spec update)))
+  ;; Multi-line detail on a non-shell tool -> text block.
+  (let ((update '((title . "custom-tool")
+                  (rawInput . "{\"description\":\"line one\\nline two\"}"))))
+    (should (equal '("text" . "line one\nline two")
+                   (emagent-acp--tool-call-block-spec update)))))
+
 (ert-deftest emagent-acp-session-test-cursor-tool-call-deferred-until-detail ()
   (let ((state (emagent-test--make-acp-state))
         (shown nil))
@@ -616,7 +646,7 @@
          ((symbol-function 'emagent-cursor-tool-call-from-store)
           (lambda (_sid _id) nil))
          ((symbol-function 'emagent-chat-show-tool-call)
-          (lambda (_id label) (setq shown label))))
+          (lambda (_id label &rest _) (setq shown label))))
       (emagent-acp--on-tool-call
        state '((toolCallId . "tool_x") (title . "Edit") (rawInput . ())))
       (should (null shown))
@@ -647,7 +677,7 @@
          ((symbol-function 'emagent-cursor-tool-call-from-store)
           (lambda (_sid _id) nil))
          ((symbol-function 'emagent-chat-show-tool-call)
-          (lambda (_id label) (setq shown label))))
+          (lambda (_id label &rest _) (setq shown label))))
       (emagent-acp--on-tool-call
        state '((toolCallId . "tool_z") (title . "Read File") (rawInput . ())))
       (should (null shown))
@@ -671,7 +701,7 @@
          ((symbol-function 'emagent-cursor-tool-call-from-store)
           (lambda (_sid _id) nil))
          ((symbol-function 'emagent-chat-show-tool-call)
-          (lambda (_id label) (setq shown label))))
+          (lambda (_id label &rest _) (setq shown label))))
       (emagent-acp--on-tool-call
        state '((toolCallId . "tool_w") (title . "Read File") (rawInput . ())))
       (should (null shown))

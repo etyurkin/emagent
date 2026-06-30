@@ -37,6 +37,7 @@
 (declare-function emagent-acp-agent-rss "emagent-acp")
 (declare-function emagent-acp-prompt-finishing-p "emagent-acp")
 (declare-function emagent-acp-context-usage "emagent-acp")
+(declare-function emagent-acp-context-usage-unavailable-p "emagent-acp")
 (declare-function doom-modeline-set-modeline "ext:doom-modeline")
 
 ;;; -------------------------------------------------------------------------
@@ -394,18 +395,23 @@ buffer."
 
 ;;;###autoload
 (defun emagent-chat--mode-line-context-usage ()
-  "Return a propertized context fill percentage string, or nil."
-  (when-let* ((pair (and (fboundp 'emagent-acp-context-usage)
-                         (emagent-acp-context-usage)))
-              (used (car pair))
-              (size (cdr pair))
-              ((and (numberp used) (numberp size) (> size 0))))
-    (let ((pct (* 100.0 (/ (float used) size))))
-      (propertize (format " ctx:%.0f%%" pct)
-                  'face (cond
-                         ((>= pct 80) 'error)
-                         ((>= pct 50) 'warning)
-                         (t           'success))))))
+  "Return a propertized context fill string, or nil.
+Shows a percentage when the provider reports context usage, `ctx:n/a' when a
+connected provider (cursor) cannot report it, and nil otherwise."
+  (if-let* ((pair (and (fboundp 'emagent-acp-context-usage)
+                       (emagent-acp-context-usage)))
+            (used (car pair))
+            (size (cdr pair))
+            ((and (numberp used) (numberp size) (> size 0))))
+      (let ((pct (* 100.0 (/ (float used) size))))
+        (propertize (format " ctx:%.0f%%" pct)
+                    'face (cond
+                           ((>= pct 80) 'error)
+                           ((>= pct 50) 'warning)
+                           (t           'success))))
+    (when (and (fboundp 'emagent-acp-context-usage-unavailable-p)
+               (emagent-acp-context-usage-unavailable-p))
+      (propertize " ctx:n/a" 'face 'shadow))))
 
 ;;;###autoload
 (defun emagent-mode-line ()
