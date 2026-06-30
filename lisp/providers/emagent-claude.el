@@ -1,7 +1,7 @@
 ;;; emagent-claude.el --- Claude (Agent SDK) ACP provider for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Version: 0.1.0
+;; Version: 1.0.0
 ;; Package-Requires: ((emacs "29.1"))
 
 ;;; Code:

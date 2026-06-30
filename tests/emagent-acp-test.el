@@ -20,7 +20,7 @@
 (ert-deftest emagent-acp-test-initialize-request ()
   (let ((req (emagent-acp-make-initialize-request
               :protocol-version 1
-              :client-info '((name . "emagent") (version . "0.1.0"))
+              :client-info '((name . "emagent") (version . "1.0.0"))
               :read-text-file-capability t
               :write-text-file-capability nil)))
     (should (equal (alist-get :method req) "initialize"))

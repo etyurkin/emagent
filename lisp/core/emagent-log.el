@@ -1,7 +1,7 @@
 ;;; emagent-log.el --- Emagent status log buffer -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Version: 0.1.0
+;; Version: 1.0.0
 ;; Package-Requires: ((emacs "29.1"))
 
 ;;; Commentary:

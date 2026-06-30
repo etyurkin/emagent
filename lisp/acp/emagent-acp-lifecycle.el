@@ -56,14 +56,14 @@ grants full plan access (including Auto model) to this ACP session."
                  :protocol-version 1
                  :client-info `((name . "emagent")
                                 (title . "Emacs Emagent")
-                                (version . "0.1.0"))
+                                (version . "1.0.0"))
                  :read-text-file-capability t
                  :write-text-file-capability t)
               (emagent-acp-make-initialize-request
                :protocol-version 1
                :client-info `((name . "emagent")
                               (title . "Emacs Emagent")
-                              (version . "0.1.0"))))
+                              (version . "1.0.0"))))
    :on-success (lambda (response)
                  (map-put! state :initialized t)
                  (map-put! state :mcp-http (emagent-acp--mcp-http-capable-p response))
