@@ -271,15 +271,23 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
    (t nil)))
 
 (defun emagent-acp--permission-decision-label (base-label choice)
-  "Return BASE-LABEL with permission CHOICE appended in parentheses when known."
+  "Return BASE-LABEL with permission CHOICE appended in parentheses when known.
+
+A scoped approval (`:allow-session' etc.) renders as `(Allow: Session)'; a
+generic approval (`:allow', used for policy/auto-trust) renders as `(Allow)';
+`:deny' renders as `(Denied)'."
   (pcase choice
+    ('nil base-label)
     (:deny (format "%s (Denied)" base-label))
     (_ (if-let ((suffix (emagent-acp--permission-choice-label choice)))
            (format "%s (Allow: %s)" base-label suffix)
-         base-label))))
+         (format "%s (Allow)" base-label)))))
 
 (defun emagent-acp--show-permission-decision (state tool-call choice)
-  "Update the permission tool-call line for TOOL-CALL with CHOICE."
+  "Update the permission tool-call line for TOOL-CALL with CHOICE.
+
+Records CHOICE in STATE's :tool-call-decisions table so later tool_call_update
+renders of the same line keep the decision suffix instead of dropping it."
   (when (and tool-call choice)
     (when-let* ((id (map-elt tool-call 'toolCallId))
                 (update (emagent-acp--tool-call-update-from-request tool-call))
@@ -287,6 +295,8 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
                 (base (emagent-acp--tool-call-label merged))
                 (label (emagent-acp--permission-decision-label base choice))
                 (buf (emagent-acp--chat-buffer state)))
+      (when-let ((decisions (map-elt state :tool-call-decisions)))
+        (puthash id choice decisions))
       (with-current-buffer buf
         (emagent-chat-show-tool-call id label)))))
 

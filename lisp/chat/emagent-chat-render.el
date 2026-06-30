@@ -370,8 +370,12 @@ the hide when the response is fully complete and the session is idle."
   (unless (bolp)
     (insert "\n")))
 
+(defconst emagent-chat--tool-decision-re
+  " \\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\)$"
+  "Regexp matching the permission decision suffix on a tool-call line.")
+
 (defun emagent-chat--repair-tool-line-faces (start end)
-  "Re-apply path faces after org font-lock on tool-call lines."
+  "Re-apply path and decision faces after org font-lock on tool-call lines."
   (when (and start end (< start end))
     (with-silent-modifications
       (save-excursion
@@ -381,7 +385,13 @@ the hide when the response is fully complete and the session is idle."
           (let ((s (match-beginning 0))
                 (e (match-end 0)))
             (remove-list-of-text-properties s e '(face))
-            (put-text-property s e 'face 'emagent-tool-detail)))))))
+            (put-text-property s e 'face 'emagent-tool-detail)))
+        (goto-char start)
+        (when (re-search-forward emagent-chat--tool-decision-re end t)
+          (let ((s (match-beginning 1))
+                (e (match-end 1)))
+            (remove-list-of-text-properties s e '(face))
+            (put-text-property s e 'face 'emagent-tool-permission-decision)))))))
 
 (defun emagent-chat--after-fontify-repair-tool-lines (beg end)
   "Repair org /italic/ on tool-call lines after each font-lock pass."

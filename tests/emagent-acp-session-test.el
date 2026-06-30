@@ -165,8 +165,30 @@
                    (emagent-acp--permission-decision-label "Allow web search?" :allow-session)))
   (should (string= "Allow web search? (Allow: Once)"
                    (emagent-acp--permission-decision-label "Allow web search?" :allow-once)))
+  (should (string= "Allow web search? (Allow)"
+                   (emagent-acp--permission-decision-label "Allow web search?" :allow)))
   (should (string= "Allow web search? (Denied)"
                    (emagent-acp--permission-decision-label "Allow web search?" :deny))))
+
+(ert-deftest emagent-acp-session-test-permission-auto-policy-shows-generic-allow ()
+  "Policy auto-approval with no stored choice still records a generic (Allow)."
+  (let* ((state (emagent-test--make-acp-state))
+         (request '((id . "req-edit")
+                    (params . ((title . "Edit File: foo.rs")
+                               (options . [((optionId . "allow_once")
+                                            (kind . "allow_once"))])
+                               (toolCall . ((toolCallId . "edit_x")
+                                            (kind . "edit")
+                                            (title . "Edit File: foo.rs")))))))
+         (decided nil))
+    (let ((emagent-acp-auto-approve-permissions t))
+      (emagent-test--with-mocks
+          (((symbol-function 'emagent-acp--show-permission-decision)
+            (lambda (_state _tool-call choice) (setq decided choice)))
+           ((symbol-function 'emagent-acp-send-response)
+            (cl-function (lambda (&rest _) nil))))
+        (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
+        (should (eq decided :allow))))))
 
 (ert-deftest emagent-acp-session-test-permission-stored-auto-choice ()
   (emagent-test--with-mocks
@@ -197,6 +219,29 @@
       (setq shown nil)
       (emagent-acp--show-permission-decision state tool-call :allow-once)
       (should (string= "Allow web search? (Allow: Once)" shown)))))
+
+(ert-deftest emagent-acp-session-test-permission-decision-persists-on-update ()
+  "A later tool_call_update keeps the recorded decision suffix."
+  (let* ((state (emagent-test--make-acp-state))
+         (tool-call '((toolCallId . "edit_1") (title . "Edit File: foo.rs")))
+         (shown nil))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-chat-show-tool-call)
+          (lambda (_id label) (setq shown label)))
+         ((symbol-function 'emagent-acp--detect-external-refusal-in-text)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--notify-user) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--schedule-prompt-watchdog)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--chat-buffer)
+          (lambda (_) (current-buffer))))
+      (emagent-acp--show-permission-decision state tool-call :allow-session)
+      (should (string= "Edit File: foo.rs (Allow: Session)" shown))
+      (setq shown nil)
+      (emagent-acp--emit-tool-call-display
+       state "edit_1" 'edit nil "Edit File: foo.rs" "completed")
+      (should (string= "Edit File: foo.rs (Allow: Session)" shown)))))
 
 (defun emagent-test--run-at-time-immediately (_time _repeat fn)
   "Test helper: invoke FN synchronously instead of scheduling."

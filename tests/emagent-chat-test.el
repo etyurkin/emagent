@@ -357,6 +357,18 @@
          (should emagent-chat--spinner-timer)
          (emagent-chat--spinner-stop))))))
 
+(ert-deftest emagent-chat-test-tool-line-decision-face ()
+  "The permission decision suffix on a tool line gets the grey decision face."
+  (dolist (case '(("→ ls ~/.cargo/registry (Allow: Session)" . "(Allow: Session)")
+                  ("→ rm -rf build (Denied)" . "(Denied)")))
+    (with-temp-buffer
+      (insert (car case))
+      (emagent-chat--repair-tool-line-faces (point-min) (point-max))
+      (goto-char (point-min))
+      (should (re-search-forward (regexp-quote (cdr case)) nil t))
+      (should (eq 'emagent-tool-permission-decision
+                  (get-text-property (match-beginning 0) 'face))))))
+
 (ert-deftest emagent-chat-test-spinner-animates-in-unselected-window ()
   "Spinner keeps animating while the buffer is shown in a non-selected window."
   (emagent-test--with-emagent-buffer

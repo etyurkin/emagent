@@ -30,6 +30,7 @@
 (require 'emagent-acp-provider)
 
 (declare-function emagent-chat-show-tool-call "emagent-chat")
+(declare-function emagent-acp--permission-decision-label "emagent-acp-permit")
 
 (defun emagent-acp--tool-call-elisp-prin1-p (value)
   "Return non-nil when VALUE looks like a printed Elisp object."
@@ -81,18 +82,23 @@
   "Push TOOL-CALL LABEL to the chat buffer and update session UI."
   (let* ((labels (map-elt state :tool-call-labels))
          (prev (and id labels (gethash id labels)))
+         (decision (and id (when-let ((d (map-elt state :tool-call-decisions)))
+                             (gethash id d))))
+         (display (if (and label (not (string-empty-p label)) decision)
+                      (emagent-acp--permission-decision-label label decision)
+                    label))
          (completed (member status '("completed" "failed")))
-         (label-changed (and label (not (string-empty-p label))
-                             (or (null prev) (not (string= prev label))))))
+         (label-changed (and display (not (string-empty-p display))
+                             (or (null prev) (not (string= prev display))))))
     (when label
       (emagent-acp--detect-external-refusal-in-text state label))
     (when label-changed
-      (when id (puthash id label labels))
+      (when id (puthash id display labels))
       (unless completed
         (emagent-acp--notify-user state (format "emagent: tool %s" label)))
       (when-let ((buf (emagent-acp--chat-buffer state)))
         (with-current-buffer buf
-          (emagent-chat-show-tool-call id label))))
+          (emagent-chat-show-tool-call id display))))
     (if completed
         (progn
           (map-put! state :current-tool nil)

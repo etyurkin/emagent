@@ -135,6 +135,7 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
       (clrhash (map-elt state :tool-call-titles))
       (clrhash (map-elt state :tool-call-inputs))
       (clrhash (map-elt state :tool-call-labels))
+      (clrhash (map-elt state :tool-call-decisions))
       (clrhash (map-elt state :tool-call-pending))
       (emagent-acp--provider-reset-tool-resolve state)
       (when-let ((timer (map-elt state :permission-drain-timer)))

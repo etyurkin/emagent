@@ -155,6 +155,7 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :tool-call-titles (make-hash-table :test 'equal) state)
     (puthash :tool-call-inputs (make-hash-table :test 'equal) state)
     (puthash :tool-call-labels (make-hash-table :test 'equal) state)
+    (puthash :tool-call-decisions (make-hash-table :test 'equal) state)
     (puthash :tool-call-pending (make-hash-table :test 'equal) state)
     (puthash :provider nil state)
     (puthash :tool-resolve-queue nil state)

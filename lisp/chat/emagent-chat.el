@@ -151,6 +151,12 @@ New choices persist under `emagent-permissions-directory'.")
   "Face for paths and commands on tool-call lines."
   :group 'emagent-chat)
 
+(defface emagent-tool-permission-decision
+  '((t (:inherit shadow :slant normal)))
+  "Face for the permission decision suffix on tool-call lines.
+Used for the trailing (Allow: Session) / (Denied) annotation."
+  :group 'emagent-chat)
+
 (defface emagent-permission-prompt
   '((t (:inherit font-lock-warning-face :weight bold)))
   "Face for the permission question line in the Thinking block."

@@ -157,8 +157,7 @@ non-blockingly and returns; ON-COMPLETE is called after the user responds."
        ((emagent-acp--permission-gate-auto-approve-p state tool-call validation fingerprint buf)
         (let ((stored (emagent-acp--permission-stored-auto-choice state fingerprint buf)))
           (emagent-log "permission auto-approve: %s (fingerprint %s)" question (or fingerprint "none"))
-          (when stored
-            (emagent-acp--show-permission-decision state tool-call stored))
+          (emagent-acp--show-permission-decision state tool-call (or stored :allow))
           (funcall respond :allow-once)))
        (t
         (emagent-acp--prepare-interactive-context state)
