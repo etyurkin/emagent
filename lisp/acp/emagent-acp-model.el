@@ -29,6 +29,9 @@
 (require 'emagent-log)
 (require 'emagent-acp-custom)
 
+(defvar emagent-model-history nil
+  "Minibuffer history for agent/model choices in `emagent-acp--read-labeled-choice'.")
+
 (declare-function emagent-acp--send-request "emagent-acp")
 (declare-function emagent-chat--canonical-model-id "emagent-chat-header")
 (declare-function emagent-chat--normalize-model-id "emagent-chat-header")
