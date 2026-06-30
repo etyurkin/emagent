@@ -27,71 +27,38 @@
 (require 'emagent-chat-render)
 (require 'emagent-chat-mode-line)
 
-(defun emagent-chat--clear-btw-indicator ()
-  "Remove the btw queued indicator line from the buffer, if present."
-  (let ((inhibit-read-only t))
-    (emagent-chat--writable)
-    (save-excursion
-      (goto-char (point-min))
-      (while (not (eobp))
-        (if (get-text-property (point) 'emagent-btw)
-            (delete-region (line-beginning-position)
-                           (min (1+ (line-end-position)) (point-max)))
-          (forward-line 1))))))
+(declare-function emagent-acp--finalize-in-flight-prompt "emagent-acp-send")
+(declare-function emagent-acp-busy-p "emagent-acp-usage")
+(declare-function emagent-chat--user-heading-at-point-p "emagent-chat-input")
 
 (defun emagent-chat--insert-user-heading-with-text (text)
   "Insert TEXT as a complete `* username> TEXT' heading and return point after it."
   (let ((inhibit-read-only t))
     (emagent-chat--writable)
     (goto-char (emagent-chat--user-zone-start))
-    (unless (bolp) (insert "\n"))
+    (if (emagent-chat--user-heading-at-point-p)
+        (delete-region (line-beginning-position) (line-end-position))
+      (unless (bolp) (insert "\n")))
     (insert (emagent-chat--user-heading-prefix) text)
     (unless (= (char-before) ?\n) (insert "\n"))
     (point)))
 
-(defun emagent-chat--flush-pending-prompt ()
-  "Send the pending btw prompt if one exists.  Called after agent finishes."
-  (when emagent-chat--pending-prompt
-    (let ((text emagent-chat--pending-prompt))
-      (setq emagent-chat--pending-prompt nil)
-      (emagent-chat--clear-btw-indicator)
-      (emagent-chat--refresh-mode-line)
-      (when emagent-chat--on-send
-        (emagent-log "btw send: %s" (emagent-log-truncate-line text 80))
-        (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
-          (emagent-chat--begin-response response-pos))
-        (funcall emagent-chat--on-send text)))))
-
 (defun emagent-btw (text)
-  "Queue TEXT to send after the current agent response finishes (C-c b).
+  "Send TEXT to the agent immediately as a btw side note (C-c b).
 
-When the agent is idle, sends immediately.  When busy, stores TEXT and
-shows a `# [btw]' indicator; it is removed and TEXT is sent automatically
-when the agent finishes."
+When the agent is still thinking, cancels the in-flight turn, keeps any
+partial response, and sends `btw, TEXT' as a new prompt."
   (interactive "sBTW: ")
   (when (string-empty-p (string-trim text))
     (user-error "BTW message is empty"))
   (let ((text (format "btw, %s" (string-trim text))))
-  (if (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
-      (progn
-        (setq emagent-chat--pending-prompt text)
-        (let ((inhibit-read-only t))
-          (emagent-chat--writable)
-          (emagent-chat--clear-btw-indicator)
-          (save-excursion
-            (goto-char (emagent-chat--user-zone-start))
-            (unless (bolp) (insert "\n"))
-            (insert (propertize (format "# [btw] %s\n" text)
-                                'face 'shadow
-                                'emagent-btw t))))
-        (emagent-chat--refresh-mode-line)
-        (message "emagent: btw queued — will send when agent finishes"))
-    ;; Agent is idle: send immediately.
+    (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
+      (emagent-acp--finalize-in-flight-prompt))
     (emagent-log "btw send: %s" (emagent-log-truncate-line text 80))
     (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
       (emagent-chat--begin-response response-pos))
     (when emagent-chat--on-send
-      (funcall emagent-chat--on-send text)))))
+      (funcall emagent-chat--on-send text))))
 
 (defun emagent-chat-send ()
   "Send region or line at point to the agent (C-c C-c).
@@ -99,10 +66,7 @@ when the agent finishes."
 With an active region, send the selection.  Otherwise send the current
 line (or nearest preceding sendable line in the user zone).  The text is
 formatted as a '* username> ' org heading in the buffer; the heading
-prefix is stripped before the text is sent to the agent.
-
-If the text starts with /btw, the remainder is queued and sent after
-the current agent response finishes.  An empty /btw opens a minibuffer."
+prefix is stripped before the text is sent to the agent."
   (interactive)
   (let* ((bounds (emagent-chat--send-bounds))
          (raw (string-trim (buffer-substring-no-properties
@@ -126,9 +90,7 @@ When the agent is busy, closes the response block with a stop notice and
 returns the session to idle.  When idle, falls through to `keyboard-quit'."
   (interactive)
   (if (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
-      (progn
-        (emagent-acp-interrupt)
-        (message "emagent: interrupted"))
+      (emagent-acp-interrupt)
     (keyboard-quit)))
 
 (defun emagent-chat-new-prompt ()

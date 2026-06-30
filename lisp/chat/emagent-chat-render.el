@@ -641,8 +641,7 @@ Keyboard shortcuts (via keymap text property on the buttons line):
         (emagent-chat--insert-response-end)
         (emagent-chat--reset-response-state)
         (emagent-chat--sync-user-zone-marker)
-        (emagent-chat--maybe-font-lock-flush)
-        (emagent-chat--flush-pending-prompt)))))
+        (emagent-chat--maybe-font-lock-flush)))))
 
 (defun emagent-chat--inject-reasoning-thought (thought-text)
   "Prepend THOUGHT-TEXT inside the open Reasoning block when it was not streamed."
@@ -724,8 +723,7 @@ THOUGHT-TEXT."
           (emagent-chat--sync-user-zone-marker)
           (emagent-chat--maybe-font-lock-flush)
           (when hide-at
-            (emagent-chat--hide-reasoning-deferred hide-at))
-          (emagent-chat--flush-pending-prompt)))))
+            (emagent-chat--hide-reasoning-deferred hide-at))))))
   ;; Insert stub after stable view is restored, so point ends up at the
   ;; user prompt heading rather than being restored to the entry position.
   (emagent-chat--insert-user-heading-stub))

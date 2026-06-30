@@ -162,36 +162,56 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
                (emagent-acp--abort-prompt state (format "prompt failed: %s" message))
                (emagent-acp--notify-user state (format "emagent: prompt failed: %s" message)))))))))))
 
-(defun emagent-acp-interrupt ()
-  "Interrupt the in-flight prompt and close the response block cleanly.
+(defun emagent-acp--finalize-in-flight-prompt (&optional stop-notice)
+  "Finalize the in-flight prompt and cancel it on the agent side.
 
-Appends a user-visible stop notice to whatever the agent has produced so far,
-then finalizes the response as if it completed normally.  The pending ACP
-request continues in the background but its result is ignored."
+When STOP-NOTICE is non-nil, append it to any partial assistant text
+before closing the response block.  Returns non-nil when a prompt was
+finalized."
   (let ((state emagent-acp--session))
     (unless (or (map-elt state :busy) (map-elt state :prompt-finishing))
-      (user-error "No active emagent prompt to interrupt"))
+      (cl-return-from emagent-acp--finalize-in-flight-prompt nil))
     (emagent-acp--clear-prompt-watchdog state)
     (emagent-acp--cancel-prompt-render state)
     (emagent-acp--flush-thought-buffer state)
-    (let* ((text (or (map-elt state :assistant-text) ""))
-           (notice "/Stopped — awaiting new instructions./")
-           (full (if (string-empty-p text)
-                     notice
-                   (concat text "\n\n" notice))))
-      (map-put! state :assistant-text full))
+    (when (and stop-notice (not (string-empty-p stop-notice)))
+      (let* ((text (or (map-elt state :assistant-text) ""))
+             (full (if (string-empty-p text)
+                       stop-notice
+                     (concat text "\n\n" stop-notice))))
+        (map-put! state :assistant-text full)))
     (map-put! state :prompt-generation (1+ (or (map-elt state :prompt-generation) 0)))
     (when-let ((client (map-elt state :client))
                (session-id (map-elt state :session-id)))
       (ignore-errors
         (emagent-acp-send-notification
          :client client
-         :notification (emagent-acp-make-session-cancel-notification :session-id session-id))))
+         :notification (emagent-acp-make-session-cancel-notification
+                        :session-id session-id))))
+    (when-let ((timer (map-elt state :permission-drain-timer)))
+      (cancel-timer timer)
+      (map-put! state :permission-drain-timer nil))
+    (map-put! state :permission-queue nil)
+    (map-put! state :permission-busy nil)
+    (map-put! state :deferred-complete-response nil)
     (map-put! state :busy nil)
     (map-put! state :prompt-finishing t)
     (map-put! state :prompt-finalized nil)
     (emagent-acp--render-prompt-response state)
-    (emagent-acp--refresh-mode-line state)))
+    (emagent-acp--refresh-mode-line state)
+    t))
+
+(defun emagent-acp-interrupt ()
+  "Interrupt the in-flight prompt and close the response block cleanly.
+
+Appends a user-visible stop notice to whatever the agent has produced so far,
+then finalizes the response as if it completed normally.  The pending ACP
+request continues in the background but its result is ignored."
+  (interactive)
+  (if (emagent-acp--finalize-in-flight-prompt
+       "/Stopped — awaiting new instructions./")
+      (message "emagent: interrupted")
+    (user-error "No active emagent prompt to interrupt")))
 
 (defun emagent-acp-shutdown-buffer ()
   "Shut down the ACP session for the current buffer."

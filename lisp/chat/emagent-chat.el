@@ -112,9 +112,6 @@ agent is thinking."
 (defvar-local emagent-chat--on-send nil
   "Function called with user input when sending.")
 
-(defvar-local emagent-chat--pending-prompt nil
-  "Text queued via /btw to send after the current agent response finishes.")
-
 (defvar-local emagent-chat--on-attach nil
   "Function called with attachment text.")
 
@@ -250,7 +247,7 @@ Only used when terminal-notifier is installed."
 # C-c C-c send (on a src block: execute with org-babel instead)
 # C-c u   insert a new '* username>' prompt heading
 # C-c a   attach buffer context to the next send
-# C-c b   queue a follow-up message (btw) for after agent finishes
+# C-c b   send a btw side note while the agent is thinking
 # C-c d   pick project files to attach
 # C-c e   attach compilation/flymake errors to the next send
 # C-y     paste text normally; if clipboard has image, inserts [[file:...]] link

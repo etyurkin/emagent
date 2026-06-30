@@ -343,9 +343,7 @@ When nil, the spinner inherits the mode-line height."
                                             (t             'success)))))
          (tail (concat (when model-str (concat sep model-str))
                        (when context   (concat sep (string-trim-left context)))
-                       (when rss-str   (concat sep rss-str))
-                       (when emagent-chat--pending-prompt
-                         (concat sep (propertize "⏳btw" 'face 'warning))))))
+                       (when rss-str   (concat sep rss-str)))))
     (cons head tail)))
 
 ;;; -------------------------------------------------------------------------

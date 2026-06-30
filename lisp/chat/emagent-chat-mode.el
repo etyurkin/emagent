@@ -218,7 +218,7 @@ executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'.
                ("g" "Interrupt agent (C-g C-g)" emagent-chat-interrupt)]
               ["Attach"
                ("a" "Attach buffer context" emagent-chat-attach-buffer)
-               ("b" "Queue btw message for after agent" emagent-btw)
+               ("b" "Send btw side note to agent" emagent-btw)
                ("d" "Attach project files" emagent-chat-attach-files)
                ("e" "Attach error context" emagent-chat-attach-error-context)
                ("i" "Attach image" emagent-chat-attach-image)]

@@ -806,6 +806,52 @@
                  (should (bound-and-true-p org-phscroll-mode)))))))
       (remove-hook 'org-mode-hook disable-visual 50))))
 
+(ert-deftest emagent-chat-test-insert-user-heading-replaces-stub ()
+  (with-temp-buffer
+    (insert (format "%sfirst\n\n# --- emagent ---\n# --- /emagent ---\n%s\n"
+                    (emagent-chat--user-heading-prefix)
+                    (emagent-chat--user-heading-prefix)))
+    (emagent-chat--sync-user-zone-marker)
+    (emagent-chat--insert-user-heading-with-text "btw, hello")
+    (should (string-match-p (concat (regexp-quote (emagent-chat--user-heading-prefix))
+                                    "btw, hello")
+                            (buffer-string)))
+    (should (= 2 (how-many (emagent-chat--user-heading-re)
+                           (point-min) (point-max))))))
+
+(ert-deftest emagent-chat-test-btw-finalizes-when-busy ()
+  (with-temp-buffer
+    (setq emagent-acp--session (emagent-test--make-acp-state nil (current-buffer)))
+    (puthash :busy t emagent-acp--session)
+    (puthash :ready t emagent-acp--session)
+    (let ((sent nil)
+          (finalized nil))
+      (emagent-test--with-mocks
+          (((symbol-function 'emagent-acp--finalize-in-flight-prompt)
+            (lambda (&optional _notice) (setq finalized t) t))
+           ((symbol-function 'emagent-chat--begin-response) (lambda (&optional _at) nil)))
+        (setq emagent-chat--on-send (lambda (text) (setq sent text)))
+        (let ((inhibit-message t))
+          (emagent-btw "check tests"))
+        (should finalized)
+        (should (string= sent "btw, check tests"))))))
+
+(ert-deftest emagent-chat-test-btw-sends-immediately-when-idle ()
+  (with-temp-buffer
+    (setq emagent-acp--session (emagent-test--make-acp-state nil (current-buffer)))
+    (puthash :busy nil emagent-acp--session)
+    (let ((sent nil)
+          (finalized nil))
+      (emagent-test--with-mocks
+          (((symbol-function 'emagent-acp--finalize-in-flight-prompt)
+            (lambda (&optional _notice) (setq finalized t) t))
+           ((symbol-function 'emagent-chat--begin-response) (lambda (&optional _at) nil)))
+        (setq emagent-chat--on-send (lambda (text) (setq sent text)))
+        (let ((inhibit-message t))
+          (emagent-btw "note"))
+        (should-not finalized)
+        (should (string= sent "btw, note"))))))
+
 (provide 'emagent-chat-test)
 
 ;;; emagent-chat-test.el ends here

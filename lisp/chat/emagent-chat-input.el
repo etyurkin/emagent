@@ -235,6 +235,10 @@ Deletes from the first `emagent-chat-response-headline' or
           (skip-chars-forward " \t\n")
           (delete-region start (point)))))))
 
+(defun emagent-chat--user-heading-at-point-p ()
+  "Return non-nil when point is on a `* user>' heading line."
+  (looking-at (emagent-chat--user-heading-re)))
+
 (defun emagent-chat--user-heading-follows-p ()
   "Return non-nil when a '* user>' heading immediately follows point."
   (save-excursion

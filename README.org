@@ -68,7 +68,7 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =C-c u=                               | Insert a new =* user>= prompt heading             |
 | =C-c p=                               | Change project directory (moves session, reconnects) |
 | =C-c a=                               | Attach current buffer summary to next prompt     |
-| =C-c b=                               | Queue a follow-up ("btw") for after agent finishes |
+| =C-c b=                               | Send a btw side note while the agent is thinking     |
 | =C-c d=                               | Pick project files to attach to next prompt      |
 | =C-c e=                               | Attach compilation/flymake errors to next prompt |
 | =C-c i=                               | Attach image file (or clipboard image)           |
@@ -153,12 +153,13 @@ delimiters.  TAB on the opening delimiter folds the entire block.
   lines (=→ tool-name: path=).  With Cursor, paths are read from =store.db=
   (one lookup at a time per session).  Folds when the response finishes.
 
-** Queued follow-ups (/btw/)
+** Side notes while the agent is thinking (/btw/)
 
-Press =C-c b= while the agent is running to queue a follow-up message.  A
-minibuffer opens — type your note, press Enter.  The text is stored and sent
-automatically as =btw, <your message>= when the agent finishes.  A =# [btw]=
-indicator appears in the buffer and the mode line shows =⏳btw=.
+Press =C-c b= while the agent is running to send a quick side note.  A
+minibuffer opens — type your message, press Enter.  Emagent cancels the
+in-flight turn (keeping any partial response), then sends =btw, <your
+message>= as a new prompt — the same pattern Cursor and Claude use for
+mid-turn steering.
 
 ** Cursor notes
 
