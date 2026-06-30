@@ -884,6 +884,49 @@
         (should-not finalized)
         (should (string= sent "btw, note"))))))
 
+(ert-deftest emagent-chat-test-interrupt-keeps-streamed-thinking ()
+  "Interrupting mid-thought keeps the streamed reasoning text and stop notice."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (setq emagent-acp--session (emagent-test--make-acp-state nil buffer))
+       (puthash :busy t emagent-acp--session)
+       (puthash :ready t emagent-acp--session)
+       (puthash :prompt-generation 0 emagent-acp--session)
+       (puthash :cb-finish #'emagent-chat-finish-assistant emagent-acp--session)
+       (goto-char (point-max))
+       (emagent-chat--begin-response (point))
+       (emagent-chat-begin-thought)
+       (emagent-chat-append-thought "weighing options")
+       (puthash :assistant-text "partial answer" emagent-acp--session)
+       (let ((inhibit-message t))
+         (emagent-acp-interrupt))
+       (let ((text (substring-no-properties (buffer-string))))
+         (should (string-match-p "weighing options" text))
+         (should (string-match-p "partial answer" text))
+         (should (string-match-p "Stopped" text)))))))
+
+(ert-deftest emagent-chat-test-interrupt-keeps-unstreamed-thinking ()
+  "Interrupting keeps reasoning that lived only in state thought-text."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (setq emagent-acp--session (emagent-test--make-acp-state nil buffer))
+       (puthash :busy t emagent-acp--session)
+       (puthash :ready t emagent-acp--session)
+       (puthash :prompt-generation 0 emagent-acp--session)
+       (puthash :cb-finish #'emagent-chat-finish-assistant emagent-acp--session)
+       (goto-char (point-max))
+       (emagent-chat--begin-response (point))
+       (puthash :thought-text "internal reasoning" emagent-acp--session)
+       (puthash :assistant-text "partial answer" emagent-acp--session)
+       (let ((inhibit-message t))
+         (emagent-acp-interrupt))
+       (let ((text (substring-no-properties (buffer-string))))
+         (should (string-match-p "internal reasoning" text))
+         (should (string-match-p "partial answer" text))
+         (should (string-match-p "Stopped" text)))))))
+
 (provide 'emagent-chat-test)
 
 ;;; emagent-chat-test.el ends here

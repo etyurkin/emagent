@@ -81,7 +81,7 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =TAB= on =/command= line              | Complete slash commands (skills / built-ins)     |
 | =TAB= on =# --- emagent ---=           | Fold / unfold the response block                 |
 | =TAB= elsewhere                       | =org-cycle= (headlines, Thinking, etc.)           |
-| =C-g C-g=                             | Interrupt agent response                         |
+| =ESC ESC=                             | Interrupt agent response                         |
 | =C-x k=                               | Kill buffer and disconnect agent                 |
 
 ** Project directory and agent

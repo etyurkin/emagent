@@ -66,7 +66,7 @@
 (define-key emagent-mode-map (kbd "C-y")     #'emagent-chat-yank)
 (define-key emagent-mode-map (kbd "TAB")     #'emagent-chat-tab)
 (define-key emagent-mode-map (kbd "<backtab>") #'org-shifttab)
-(define-key emagent-mode-map (kbd "C-g C-g") #'emagent-chat-interrupt)
+(define-key emagent-mode-map (kbd "ESC ESC") #'emagent-chat-interrupt)
 (define-key emagent-mode-map (kbd "C-c u")   #'emagent-chat-new-prompt)
 (define-key emagent-mode-map (kbd "C-c ?")   #'emagent-dispatch)
 (define-key emagent-mode-map (kbd "C-a")     #'emagent-chat-beginning-of-line)
@@ -262,7 +262,7 @@ Only used when terminal-notifier is installed."
 # C-c m   set ACP model
 # C-c p   change project directory (moves session, reconnects)
 # C-c ?   command palette (transient menu)
-# C-g C-g interrupt agent response
+# ESC ESC interrupt agent response
 # C-x k   kill buffer and disconnect agent
 # M-x emagent-mode to reconnect a saved session
 
@@ -620,8 +620,12 @@ ignored so chat rendering never stalls on OS notifications."
         (set-buffer-modified-p was-modified)))))
 
 (defun emagent-chat--maybe-force-mode-line-update ()
-  "Refresh this buffer's mode line only when it is in the selected window."
-  (when (emagent-chat--buffer-active-p)
+  "Refresh this buffer's mode line in every window that displays it.
+
+Updates whenever the buffer is shown in a visible window, not only the selected
+one, so the thinking spinner keeps animating in a side-by-side emagent window
+after focus moves elsewhere."
+  (when (emagent-chat--buffer-displayed-p)
     (force-mode-line-update)))
 
 (defun emagent-chat--window-configuration-change (&optional _frames)

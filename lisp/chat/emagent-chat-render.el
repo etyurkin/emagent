@@ -99,6 +99,15 @@
 Prefer Org block folding when the parser accepts the block; fall back to
 folding the inner region only so incomplete parses never break the buffer."
   (when-let ((bounds (emagent-chat--reasoning-block-bounds)))
+    ;; Fontify the block synchronously before folding.  jit-lock skips text
+    ;; that is already invisible, so folding an unfontified block (as happens
+    ;; on interrupt, where finalize and fold run back-to-back with no
+    ;; intervening redisplay) leaves the collapsed Thinking line unrendered
+    ;; until a manual fold/unfold of the surrounding response block.
+    (ignore-errors
+      (font-lock-ensure (save-excursion (goto-char (car bounds))
+                                        (line-beginning-position))
+                        (cdr bounds)))
     (condition-case _
         (progn
           (when (fboundp 'org-element-cache-reset)

@@ -218,7 +218,7 @@ executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'.
               ["Send & navigate"
                ("SPC" "Send / execute src block" emagent-chat-send-or-babel)
                ("u" "New prompt heading" emagent-chat-new-prompt)
-               ("g" "Interrupt agent (C-g C-g)" emagent-chat-interrupt)]
+               ("g" "Interrupt agent (ESC ESC)" emagent-chat-interrupt)]
               ["Attach"
                ("a" "Attach buffer context" emagent-chat-attach-buffer)
                ("b" "Send btw side note to agent" emagent-btw)

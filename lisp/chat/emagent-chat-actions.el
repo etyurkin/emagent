@@ -84,7 +84,7 @@ prefix is stripped before the text is sent to the agent."
 (declare-function emagent-acp-interrupt "emagent-acp")
 
 (defun emagent-chat-interrupt ()
-  "Interrupt the running agent response (C-g C-g).
+  "Interrupt the running agent response (ESC ESC).
 
 When the agent is busy, closes the response block with a stop notice and
 returns the session to idle.  When idle, falls through to `keyboard-quit'."
