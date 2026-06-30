@@ -301,6 +301,15 @@
 
 (defalias 'emagent-chat--buffer-visible-p 'emagent-chat--buffer-active-p)
 
+(defun emagent-chat--buffer-displayed-p (&optional buffer)
+  "Return non-nil when BUFFER is shown in a window on a visible frame.
+
+Unlike `emagent-chat--buffer-active-p', this is true even when the buffer is
+not in the selected window (e.g. side-by-side with another buffer, or while
+Emacs itself is unfocused).  It is nil only when no visible frame displays the
+buffer (every window hidden or the frame iconified)."
+  (and (get-buffer-window-list (or buffer (current-buffer)) nil 'visible) t))
+
 (defun emagent-chat--maybe-font-lock-flush ()
   "Run org font-lock when active; defer otherwise."
   (if (emagent-chat--buffer-active-p)

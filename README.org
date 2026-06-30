@@ -136,9 +136,17 @@ the buffer after =emagent-trust-workspace= if the session was already connected.
 ** Saved sessions
 
 Save the buffer to a =.org= file (=C-x C-s=).  Each buffer begins with
-=# -*- mode: emagent -*-=, so Emacs activates =emagent-mode= and reconnects
-automatically the next time the file is opened.  The persisted agent, session
-id, model, and project directory are all restored from the =#+EMAGENT_*= header.
+=# -*- mode: emagent -*-=, so Emacs recognizes it as an emagent session the next
+time the file is opened.  The persisted agent, session id, model, and project
+directory are all restored from the =#+EMAGENT_*= header.
+
+*Deferred activation:* opening a saved session — via =find-file=, desktop
+restore, or the mode cookie — does *not* immediately start =emagent-mode= or
+connect an agent.  The buffer stays in plain =org-mode= until you first switch
+to it; activation (and any agent connection) happens on first display.  This
+means restoring many saved sessions at startup spawns nothing until each one is
+actually visited.  Set =emagent-activate-on-display= to =nil= to activate
+session files eagerly on open instead.
 
 *Note:* the agent can only resume a session that has at least one completed
 exchange.  A buffer saved before any prompt was sent will reconnect but start a

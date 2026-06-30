@@ -67,6 +67,61 @@
         (should (hash-table-p client))
         (should (string= "cursor-agent" (map-elt client :command)))))))
 
+(ert-deftest emagent-core-test-defer-session-until-displayed ()
+  "A session file opened off-screen stays in `org-mode' until first displayed."
+  (emagent-test--with-temp-project
+   (lambda (dir)
+     (let* ((file (expand-file-name "session.org" dir))
+            (emagent--pending-buffers nil)
+            (emagent-activate-on-display t)
+            buf)
+       (unwind-protect
+           (progn
+             (write-region
+              (format "# -*- mode: emagent -*-\n#+EMAGENT_PROJECT: %s\n" dir)
+              nil file)
+             ;; `find-file-noselect' does not display the buffer, so the cookie
+             ;; must defer instead of activating `emagent-mode'.
+             (setq buf (find-file-noselect file))
+             (with-current-buffer buf
+               (should (derived-mode-p 'org-mode))
+               (should-not (derived-mode-p 'emagent-mode))
+               (should emagent--session-pending)
+               (should (memq buf emagent--pending-buffers)))
+             ;; Pretend the buffer is now shown in a window.
+             (emagent-test--with-mocks
+                 (((symbol-function 'emagent-chat--buffer-displayed-p)
+                   (lambda (&optional _b) t)))
+               (emagent--activate-displayed-pending))
+             (with-current-buffer buf
+               (should (derived-mode-p 'emagent-mode))
+               (should-not emagent--session-pending)
+               (should-not (memq buf emagent--pending-buffers))))
+         (when (buffer-live-p buf) (kill-buffer buf))
+         (when (file-exists-p file) (delete-file file)))))))
+
+(ert-deftest emagent-core-test-explicit-open-activates-immediately ()
+  "Explicit activation bypasses the display-deferral advice."
+  (emagent-test--with-temp-project
+   (lambda (dir)
+     (let* ((file (expand-file-name "session.org" dir))
+            (emagent--pending-buffers nil)
+            (emagent-activate-on-display t)
+            buf)
+       (unwind-protect
+           (progn
+             (write-region
+              (format "# -*- mode: emagent -*-\n#+EMAGENT_PROJECT: %s\n" dir)
+              nil file)
+             (setq buf (find-file-noselect file))
+             (with-current-buffer buf
+               (should emagent--session-pending)
+               (let ((emagent--force-activation t))
+                 (emagent-mode))
+               (should (derived-mode-p 'emagent-mode))))
+         (when (buffer-live-p buf) (kill-buffer buf))
+         (when (file-exists-p file) (delete-file file)))))))
+
 (provide 'emagent-core-test)
 
 ;;; emagent-core-test.el ends here

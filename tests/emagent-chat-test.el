@@ -357,6 +357,26 @@
          (should emagent-chat--spinner-timer)
          (emagent-chat--spinner-stop))))))
 
+(ert-deftest emagent-chat-test-spinner-animates-in-unselected-window ()
+  "Spinner keeps animating while the buffer is shown in a non-selected window."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (setq emagent-acp--session (make-hash-table :test 'eq))
+     (puthash :busy t emagent-acp--session)
+     (setq emagent-chat--spinner-timer nil)
+     (let ((other (get-buffer-create "*emagent-other-window*")))
+       (unwind-protect
+           (progn
+             (delete-other-windows)
+             (switch-to-buffer other)
+             (set-window-buffer (split-window) buffer)
+             ;; `buffer' is displayed but not in the selected window.
+             (should-not (emagent-chat--buffer-active-p buffer))
+             (should (emagent-chat--buffer-displayed-p buffer))
+             (should (emagent-chat--spinner-animate-p buffer)))
+         (delete-other-windows)
+         (when (buffer-live-p other) (kill-buffer other)))))))
+
 (ert-deftest emagent-chat-test-spinner-refresh-without-cache ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)

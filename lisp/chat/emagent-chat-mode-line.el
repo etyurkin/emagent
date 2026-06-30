@@ -188,10 +188,15 @@ When nil, the spinner inherits the mode-line height."
                  (emagent-acp-waiting-permission-p)))))
 
 (defun emagent-chat--spinner-animate-p (&optional buffer)
-  "Return non-nil when BUFFER is active and should animate the spinner."
+  "Return non-nil when BUFFER is displayed and should animate the spinner.
+
+The spinner keeps animating whenever the buffer is shown in any visible
+window, including an unselected window (two emagent buffers side by side) or
+while Emacs is unfocused.  It stops only when no visible frame displays the
+buffer."
   (with-current-buffer (or buffer (current-buffer))
     (and (emagent-chat--spinner-active-p)
-         (emagent-chat--buffer-active-p (current-buffer)))))
+         (emagent-chat--buffer-displayed-p (current-buffer)))))
 
 (defun emagent-chat--any-spinner-active-p ()
   "Return non-nil when any active emagent buffer needs spinner animation."
@@ -202,6 +207,7 @@ When nil, the spinner inherits the mode-line height."
                                (emagent-chat--spinner-animate-p buf))))))
 
 (declare-function emagent-chat--buffer-active-p "emagent-chat")
+(declare-function emagent-chat--buffer-displayed-p "emagent-chat")
 (declare-function emagent-chat--maybe-force-mode-line-update "emagent-chat")
 
 (defun emagent-chat--spinner-stop ()
@@ -383,7 +389,7 @@ When nil, the spinner inherits the mode-line height."
   (when (derived-mode-p 'emagent-mode)
     (emagent-chat--mode-line-recompute)
     (emagent-chat--maybe-force-mode-line-update)
-    (when (emagent-chat--buffer-active-p)
+    (when (emagent-chat--buffer-displayed-p)
       (redisplay t))))
 
 ;;;###autoload

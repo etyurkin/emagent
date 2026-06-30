@@ -73,6 +73,7 @@
 (declare-function emagent-chat-finish-assistant "emagent-chat")
 (declare-function emagent-chat-fail-assistant "emagent-chat")
 (declare-function emagent-chat-set-slash-commands "emagent-chat")
+(declare-function emagent-chat--buffer-displayed-p "emagent-chat")
 (declare-function emagent-acp--model-entries-from-response "emagent-acp-model")
 
 ;; Optional integrations — loaded only when the dependency is present.
@@ -188,15 +189,44 @@ happens on first send via `emagent--send-prompt'."
              (or (looking-at-p "# -*- mode: emagent -*-")
                  (re-search-forward "^#\\+EMAGENT_SESSION:[ \t]*\\S-" limit t)))))))
 
-(defvar emagent--activating-session-mode nil
-  "Non-nil while auto-promoting an org session buffer to `emagent-mode'.")
+(defcustom emagent-activate-on-display t
+  "When non-nil, defer emagent session activation until the buffer is shown.
 
-(defun emagent--maybe-enable-session-mode ()
-  "Switch restored emagent session org buffers to `emagent-mode'."
-  (when (and (not emagent--activating-session-mode)
-             (not (derived-mode-p 'emagent-mode))
-             (emagent--session-buffer-p))
-    (let ((emagent--activating-session-mode t))
+Restored session org files (opened via `find-file', desktop, or the
+`# -*- mode: emagent -*-' file cookie) stay in plain `org-mode' until the user
+first switches to them.  Activation — and therefore any agent connection — only
+happens on first display, so restoring many saved sessions at startup spawns
+nothing until each one is actually visited.
+
+When nil, session files activate `emagent-mode' immediately on open."
+  :type 'boolean
+  :group 'emagent)
+
+(defvar emagent--force-activation nil
+  "Non-nil to fully activate `emagent-mode' even for an undisplayed buffer.
+Bound around explicit, user-initiated activation so the deferral advice does
+not intercept it.")
+
+(defvar emagent--pending-buffers nil
+  "Session buffers awaiting first-display activation of `emagent-mode'.")
+
+(defvar-local emagent--session-pending nil
+  "Non-nil when this buffer is a session deferred until first display.")
+
+(defun emagent--mark-session-pending ()
+  "Leave the current buffer in `org-mode' and queue activation on first display."
+  (unless (derived-mode-p 'org-mode)
+    (org-mode))
+  (setq-local emagent--session-pending t)
+  (cl-pushnew (current-buffer) emagent--pending-buffers)
+  (emagent-log "session deferred until displayed: %s" (buffer-name)))
+
+(defun emagent--activate-session-now ()
+  "Activate `emagent-mode' in the current buffer immediately."
+  (setq emagent--pending-buffers (delq (current-buffer) emagent--pending-buffers))
+  (kill-local-variable 'emagent--session-pending)
+  (unless (derived-mode-p 'emagent-mode)
+    (let ((emagent--force-activation t))
       (condition-case err
           (emagent-mode)
         (error
@@ -204,20 +234,59 @@ happens on first send via `emagent--send-prompt'."
                       (or (buffer-name) "<dead-buffer>")
                       (error-message-string err)))))))
 
-(add-hook 'find-file-hook #'emagent--maybe-enable-session-mode)
-(add-hook 'after-change-major-mode-hook #'emagent--maybe-enable-session-mode)
-(with-eval-after-load 'desktop
-  (add-hook 'desktop-after-read-hook
-            (lambda ()
-              (dolist (buffer (buffer-list))
-                (with-current-buffer buffer
-                  (emagent--maybe-enable-session-mode))))))
+(defun emagent-mode--maybe-defer (orig-fn &rest args)
+  "Defer ORIG-FN (`emagent-mode') for undisplayed session files on load.
 
-(add-hook 'find-file-hook #'emagent--maybe-enable-session-mode)
+When `emagent-activate-on-display' is on and `emagent-mode' is triggered for a
+file-visiting buffer that is not yet displayed (e.g. the `mode: emagent' cookie
+during `find-file' or desktop restore), keep the buffer in `org-mode' and mark
+it pending instead.  Explicit activation (`emagent--force-activation') and
+already-displayed buffers run normally."
+  (if (and emagent-activate-on-display
+           (not emagent--force-activation)
+           buffer-file-name
+           (not (emagent-chat--buffer-displayed-p)))
+      (emagent--mark-session-pending)
+    (apply orig-fn args)))
 
-(dolist (buffer (buffer-list))
-  (with-current-buffer buffer
-    (emagent--maybe-enable-session-mode)))
+(advice-add 'emagent-mode :around #'emagent-mode--maybe-defer)
+
+(defun emagent--maybe-register-session ()
+  "On opening a session file, mark it pending or activate it now.
+
+Used for session files without the `mode: emagent' cookie (only the
+`#+EMAGENT_SESSION' property), which `set-auto-mode' opens in `org-mode'."
+  (when (and (not (derived-mode-p 'emagent-mode))
+             (not emagent--session-pending)
+             (emagent--session-buffer-p))
+    (if (and emagent-activate-on-display
+             (not (emagent-chat--buffer-displayed-p)))
+        (emagent--mark-session-pending)
+      (emagent--activate-session-now))))
+
+(defun emagent--activate-displayed-pending (&rest _)
+  "Activate any pending session buffers that have become displayed."
+  (dolist (buf (copy-sequence emagent--pending-buffers))
+    (if (buffer-live-p buf)
+        (when (emagent-chat--buffer-displayed-p buf)
+          (with-current-buffer buf
+            (emagent--activate-session-now)))
+      (setq emagent--pending-buffers (delq buf emagent--pending-buffers)))))
+
+(add-hook 'find-file-hook #'emagent--maybe-register-session)
+(add-hook 'window-buffer-change-functions #'emagent--activate-displayed-pending)
+
+;; When emagent loads after session org files were already opened, register
+;; them: activate the ones currently displayed, defer the rest.
+(dolist (buf (buffer-list))
+  (with-current-buffer buf
+    (when (and (not (derived-mode-p 'emagent-mode))
+               (not emagent--session-pending)
+               (emagent--session-buffer-p))
+      (if (and emagent-activate-on-display
+               (not (emagent-chat--buffer-displayed-p)))
+          (emagent--mark-session-pending)
+        (emagent--activate-session-now)))))
 
 (add-hook 'emagent-mode-hook #'emagent--on-mode-enable)
 

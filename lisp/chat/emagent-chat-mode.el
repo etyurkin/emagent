@@ -27,6 +27,8 @@
 (require 'emagent-chat-mode-line)
 (require 'emagent-chat-actions)
 
+(defvar emagent--force-activation)
+
 (defun emagent-chat--ensure-org-startup ()
   "Ensure the buffer requests Org block folding on startup."
   (unless (save-excursion
@@ -178,7 +180,8 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
          (buffer (get-buffer-create buffer-name)))
     (with-current-buffer buffer
       (unless (eq major-mode 'emagent-mode)
-        (emagent-mode))
+        (let ((emagent--force-activation t))
+          (emagent-mode)))
       (rename-buffer buffer-name t)
       (setq emagent-chat-slug slug
             emagent-chat-session-id (or emagent-chat-session-id
