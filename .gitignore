@@ -4,3 +4,5 @@
 .eln-cache/
 .beacon/
 .claude/
+.elpaca-ci/
+.elpaca-vendor/
