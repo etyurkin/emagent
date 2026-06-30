@@ -243,6 +243,46 @@
        state "edit_1" 'edit nil "Edit File: foo.rs" "completed")
       (should (string= "Edit File: foo.rs (Allow: Session)" shown)))))
 
+(ert-deftest emagent-acp-session-test-emagent-tool-tagged-emacs ()
+  "Tools from emagent's own MCP server render with an (Emacs) tag."
+  (let* ((state (emagent-test--make-acp-state))
+         (merged '((toolCallId . "rf1") (title . "mcp_emagent_read_file")))
+         (shown nil))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-chat-show-tool-call)
+          (lambda (_id label) (setq shown label)))
+         ((symbol-function 'emagent-acp--detect-external-refusal-in-text)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--notify-user) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--schedule-prompt-watchdog)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--chat-buffer)
+          (lambda (_) (current-buffer))))
+      (emagent-acp--emit-tool-call-display
+       state "rf1" 'read merged "read_file: foo.el" "completed")
+      (should (string= "read_file: foo.el (Emacs)" shown)))))
+
+(ert-deftest emagent-acp-session-test-agent-tool-not-tagged-emacs ()
+  "Native agent tools (no emagent MCP origin) get no (Emacs) tag."
+  (let* ((state (emagent-test--make-acp-state))
+         (merged '((toolCallId . "g1") (title . "Grep")))
+         (shown nil))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-chat-show-tool-call)
+          (lambda (_id label) (setq shown label)))
+         ((symbol-function 'emagent-acp--detect-external-refusal-in-text)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--notify-user) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--schedule-prompt-watchdog)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--chat-buffer)
+          (lambda (_) (current-buffer))))
+      (emagent-acp--emit-tool-call-display
+       state "g1" 'search merged "Grep: pattern" "completed")
+      (should (string= "Grep: pattern" shown)))))
+
 (defun emagent-test--run-at-time-immediately (_time _repeat fn)
   "Test helper: invoke FN synchronously instead of scheduling."
   (funcall fn)

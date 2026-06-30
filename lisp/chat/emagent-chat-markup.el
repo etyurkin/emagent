@@ -182,20 +182,32 @@
     result))
 
 (defun emagent-chat--escape-reasoning-line (line)
-  "Escape LINE so Org will not parse it as structure inside a quote block."
-  (cond
-   ((string-match-p "^#\\+" line)
-    (concat "," line))
-   ((string-match-p "^\\*" line)
-    (concat "," line))
-   (t line)))
+  "Escape LINE so Org will not parse it as a headline or keyword.
+
+Reasoning is rendered as the body of the `** Thinking' subsection (not inside
+a block), so a leading `*' or `#' must be neutralized with a leading space."
+  (if (string-match-p "\\`[ \t]*[*#]" line)
+      (concat " " line)
+    line))
 
 ;;;###autoload
 (defun emagent-chat--escape-reasoning-text (text)
-  "Escape agent reasoning TEXT before inserting it into a quote block."
+  "Escape agent reasoning TEXT before inserting it under `** Thinking'."
   (if (string-empty-p (or text ""))
       ""
     (mapconcat #'emagent-chat--escape-reasoning-line (split-string text "\n") "\n")))
+
+;;;###autoload
+(defun emagent-chat--demote-response-headings (text)
+  "Demote every Org headline in TEXT to level >= 3.
+
+The assistant answer is rendered under the level-2 `** Response' subsection, so
+its own headings must nest beneath it rather than starting new turns."
+  (replace-regexp-in-string
+   "^\\*+ "
+   (lambda (m)
+     (if (< (1- (length m)) 3) "*** " m))
+   text))
 
 (defun emagent-chat--convert-code-fences (text)
   "Convert markdown ``` fences in TEXT to org src blocks."

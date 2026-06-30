@@ -19,7 +19,7 @@
        (let ((text (substring-no-properties (buffer-string))))
          (should (string-match-p "hello" text))
          (should (string-match-p "Hello" text))
-         (should (string-match-p emagent-chat-response-end text))
+         (should (string-match-p "^\\*\\* Response" text))
          (should-not (string-match-p emagent-chat--progress-line text)))))))
 
 (ert-deftest emagent-chat-integration-test-fail-assistant ()
@@ -32,7 +32,7 @@
          (emagent-chat-fail-assistant "agent died"))
        (let ((text (substring-no-properties (buffer-string))))
          (should (string-match-p "\\*Error:\\* agent died" text))
-         (should (string-match-p emagent-chat-response-end text)))))))
+         (should (string-match-p "^\\*\\* Response" text)))))))
 
 (ert-deftest emagent-chat-integration-test-acp-chunk-to-buffer ()
   (emagent-test--with-emagent-buffer

@@ -231,20 +231,29 @@ invocation to its own in-Emacs MCP session."
   "Return UPDATE alist with KEY bound to VALUE, replacing any prior binding."
   (cons (cons key value) (assoc-delete-all key update)))
 
+(defun emagent-cursor--emagent-store-tool-p (store-name)
+  "Return non-nil when Cursor store toolName STORE-NAME is an emagent MCP tool."
+  (and (stringp store-name)
+       (string-match-p "\\`mcp_emagent_" store-name)))
+
 (defun emagent-cursor-enrich-tool-call-update (session-id update)
   "Fill empty rawInput in UPDATE from Cursor store.db when available."
   (let ((raw (or (map-elt update 'rawInput) (map-elt update 'arguments))))
     (if (emagent-cursor--tool-call-raw-empty-p raw)
         (or (when-let* ((id (map-elt update 'toolCallId))
                         (entry (emagent-cursor-tool-call-from-store session-id id)))
-              (emagent-cursor--update-put
-               (emagent-cursor--update-put
-                (emagent-cursor--update-put
-                 (assoc-delete-all 'rawInput (assoc-delete-all 'arguments update))
-                 'rawInput (or (cdr entry) '()))
-                'title (emagent-cursor--enriched-tool-title
-                         (map-elt update 'title) (car entry)))
-               'subtitle nil))
+              (let ((enriched
+                     (emagent-cursor--update-put
+                      (emagent-cursor--update-put
+                       (emagent-cursor--update-put
+                        (assoc-delete-all 'rawInput (assoc-delete-all 'arguments update))
+                        'rawInput (or (cdr entry) '()))
+                       'title (emagent-cursor--enriched-tool-title
+                               (map-elt update 'title) (car entry)))
+                      'subtitle nil)))
+                (if (emagent-cursor--emagent-store-tool-p (car entry))
+                    (emagent-cursor--update-put enriched 'emagent-tool t)
+                  enriched)))
             update)
       update)))
 

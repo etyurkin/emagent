@@ -37,6 +37,7 @@
 (declare-function emagent-chat--refresh-mode-line-on-focus "emagent-chat-mode-line")
 
 (declare-function emagent-set-model "emagent-acp")
+(declare-function emagent-reset-permissions "emagent-acp")
 (declare-function emagent-set-project-directory "emagent" (new-dir))
 (declare-function emagent-trust-workspace "emagent" (&optional arg))
 (declare-function emagent-trust-claude-reconnect "emagent" ())
@@ -179,39 +180,35 @@ Used for the trailing (Allow: Session) / (Denied) annotation."
 
 (defconst emagent-chat-default-slug "emagent")
 
-(defconst emagent-chat-response-headline "** emagent"
-  "Org headline wrapping each agent response under the user prompt.")
+(defconst emagent-chat-thinking-headline "** Thinking"
+  "Org subsection headline holding streamed reasoning and tool lines.")
 
-(defconst emagent-chat-response-begin "# --- emagent ---")
-(defconst emagent-chat-response-end "# --- /emagent ---")
+(defconst emagent-chat-response-headline "** Response"
+  "Org subsection headline holding the finalized assistant answer.")
 
 (defconst emagent-chat--progress-line "/emagent is thinking…/\n"
   "Placeholder body line shown until a prompt finishes rendering.")
 
+(defconst emagent-chat--thinking-headline-re
+  "^\\*\\* Thinking[ \t]*$"
+  "Regexp matching the Thinking subsection headline.")
+
 (defconst emagent-chat--response-headline-re
-  (concat "^" (regexp-quote emagent-chat-response-headline) "\\s-*$")
-  "Regexp matching the emagent response wrapper headline.")
+  "^\\*\\* Response[ \t]*$"
+  "Regexp matching the Response subsection headline.")
 
-(defconst emagent-chat--response-begin-re
-  "^# --- emagent ---\\s-*$"
-  "Regexp matching emagent response begin delimiter lines.")
+(defconst emagent-chat--subsection-headline-re
+  "^\\*\\* \\(?:Thinking\\|Response\\|Request permissions\\)\\(?:[ \t]\\|$\\)"
+  "Regexp matching any emagent response subsection headline.")
 
-(defconst emagent-chat--response-end-re
-  "^# --- /emagent ---\\s-*$"
-  "Regexp matching emagent response end delimiter lines.")
-
-(defconst emagent-chat--thinking-block-label "Thinking"
-  "Org quote-block title for streamed agent thought and tool lines.")
-
-(defconst emagent-chat--reasoning-begin-re
-  "^#\\+begin_quote \\(?:Thinking\\|Reasoning\\)\\s-*$"
-  "Regexp matching the Thinking quote block opener (Reasoning is legacy).")
+(defconst emagent-chat--reasoning-begin-re emagent-chat--thinking-headline-re
+  "Regexp matching the Thinking subsection opener.")
 
 (defcustom emagent-chat-fold-reasoning-on-done t
-  "When non-nil, hide Thinking quote blocks once the agent finishes.
+  "When non-nil, fold the Thinking subsection once the agent finishes.
 
-Uses Org block folding (`org-fold-hide-block-toggle'), like #+STARTUP:
-hideblocks / `org-cycle-hide-block-startup'."
+Hides the body of the `** Thinking' Org subsection (`org-fold-hide-subtree'),
+leaving its headline visible as a collapsed summary."
   :type 'boolean
   :group 'emagent-chat)
 
@@ -272,110 +269,46 @@ Only used when terminal-notifier is installed."
   "Org scratch buffers for emagent."
   :group 'tools)
 
-(defun emagent-chat--on-response-begin-p ()
-  "Return non-nil when point is on an emagent response begin delimiter line."
-  (save-excursion
-    (beginning-of-line)
-    (looking-at emagent-chat--response-begin-re)))
+(defun emagent-chat--open-response-p ()
+  "Return non-nil when an emagent response is in flight.
 
-(defun emagent-chat--find-response-begin-backward ()
-  "Return point at an emagent response begin delimiter at or before point."
-  (let ((zone-start (emagent-chat--metadata-end)))
-    (save-excursion
-      (or (and (emagent-chat--on-response-begin-p)
-               (>= (line-beginning-position) zone-start)
-               (line-beginning-position))
-          (and (re-search-backward emagent-chat--response-begin-re nil t)
-               (>= (match-beginning 0) zone-start)
-               (match-beginning 0))))))
+A response is open from `emagent-chat--begin-response' until it is
+finalized or failed; openness is tracked by the live body-start marker."
+  (and emagent-chat--response-body-start
+       (marker-buffer emagent-chat--response-body-start)
+       (marker-position emagent-chat--response-body-start)
+       t))
+
+(defun emagent-chat--open-response-begin ()
+  "Return the buffer position where the in-flight response begins, or nil."
+  (when (emagent-chat--open-response-p)
+    (marker-position emagent-chat--response-body-start)))
 
 (defun emagent-chat--find-open-response-begin ()
-  "Return point at the newest emagent response begin that has no end delimiter."
-  (let ((zone-start (emagent-chat--metadata-end))
-        (found nil))
-    (save-excursion
-      (goto-char (point-max))
-      (while (and (not found)
-                  (re-search-backward emagent-chat--response-begin-re nil t))
-        (when (>= (match-beginning 0) zone-start)
-          (let ((beg (match-beginning 0)))
-            (save-excursion
-              (goto-char beg)
-              (forward-line 1)
-              (unless (re-search-forward emagent-chat--response-end-re (point-max) t)
-                (setq found beg)))))))
-    found))
-
-(defun emagent-chat--open-response-p ()
-  "Return non-nil when an emagent response block is open before point-max."
-  (and (emagent-chat--find-open-response-begin) t))
-
-(defun emagent-chat--find-response-end-forward (limit)
-  "Return point at the end of an emagent response delimiter after point."
-  (and (re-search-forward emagent-chat--response-end-re limit t)
-       (match-end 0)))
-
-(defun emagent-chat--response-fold-bounds ()
-  "Return (BODY-START . BODY-END) for a closed emagent response at point."
-  (save-excursion
-    (when-let ((begin (emagent-chat--find-response-begin-backward)))
-      (goto-char begin)
-      (let ((body-start (line-end-position)))
-        (when-let ((end-line (emagent-chat--find-response-end-forward nil)))
-          (cons body-start (save-excursion
-                             (goto-char end-line)
-                             (line-beginning-position))))))))
+  "Return the start of the in-flight response (the `** Thinking' line), or nil."
+  (emagent-chat--open-response-begin))
 
 (defun emagent-chat--open-response-body-bounds ()
-  "Return (BEG . END) for the open emagent response body before point-max.
+  "Return (BEG . END) for the open response body.
 
-BEG is the first line after the begin delimiter; END is `point-max' when the
-response is still open, otherwise nil."
-  (when-let ((begin (emagent-chat--find-open-response-begin)))
-    (save-excursion
-      (goto-char begin)
-      (forward-line 1)
-      (cons (point) (point-max)))))
+BEG is the `** Thinking' headline; END is `point-max' while the response is
+still streaming.  Returns nil when no response is open."
+  (when-let ((begin (emagent-chat--open-response-begin)))
+    (cons begin (point-max))))
 
 (defun emagent-chat--finish-body-bounds ()
-  "Return (BEG . END) for the emagent response body to replace on finalize.
+  "Return (BEG . END) for the open response body to finalize, or nil."
+  (emagent-chat--open-response-body-bounds))
 
-Uses the open response when present; otherwise the in-flight body marker or
-the newest begin delimiter through `point-max'."
-  (or (emagent-chat--open-response-body-bounds)
-      (when (and emagent-chat--response-body-start
-                 (marker-position emagent-chat--response-body-start))
-        (cons (marker-position emagent-chat--response-body-start) (point-max)))
-      (save-excursion
-        (goto-char (point-max))
-        (when (emagent-chat--find-response-begin-backward)
-          (let ((begin (match-beginning 0)))
-            (when (>= begin (emagent-chat--metadata-end))
-              (goto-char begin)
-              (forward-line 1)
-              (cons (point) (point-max))))))))
-
-(defun emagent-chat-cycle-response (&optional force)
-  "Fold or unfold the emagent response body at point."
+(defun emagent-chat-cycle-response (&optional _force)
+  "Fold or unfold the Org subtree at point (responses are native headlines)."
   (interactive)
-  (when-let* ((bounds (emagent-chat--response-fold-bounds))
-              (start (car bounds))
-              (end (cdr bounds)))
-    (org-fold-region
-     start end
-     (pcase force
-       ('show nil)
-       ('hide t)
-       (_ (if (org-fold-folded-p start 'block) nil t)))
-     'block)))
+  (org-cycle))
 
 (defun emagent-chat-cycle-or-org-cycle ()
-  "Fold the emagent response on its begin line, otherwise run `org-cycle'."
+  "Cycle visibility with `org-cycle' (responses fold as native Org subtrees)."
   (interactive)
-  (if (and (emagent-chat--on-response-begin-p)
-           (emagent-chat--response-fold-bounds))
-      (emagent-chat-cycle-response)
-    (org-cycle)))
+  (org-cycle))
 
 (defun emagent-chat--sanitize-slug (name)
   "Return a filesystem-safe slug for NAME."

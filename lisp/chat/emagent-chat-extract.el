@@ -38,8 +38,7 @@
 (declare-function emagent-chat-open "emagent-chat")
 
 (defvar emagent-chat-provider)
-(defvar emagent-chat--response-begin-re)
-(defvar emagent-chat--response-end-re)
+(defvar emagent-chat--response-headline-re)
 
 ;;; -------------------------------------------------------------------------
 ;;; Imenu
@@ -52,7 +51,9 @@
       (goto-char (point-min))
       (while (re-search-forward "^\\*+ \\(.*\\)$" nil t)
         (let ((heading (match-string 1)))
-          (unless (string-match-p "\\`emagent>\\|\\`\\(?:[/#]\\)" heading)
+          (unless (string-match-p
+                   "\\`emagent>\\|\\`\\(?:[/#]\\)\\|\\`\\(?:Thinking\\|Response\\|Request permissions\\)\\'"
+                   heading)
             (push (cons heading (match-beginning 0)) index))))
       (nreverse index))))
 
@@ -99,15 +100,17 @@
 
 ;;;###autoload
 (defun emagent-chat--last-response-bounds ()
-  "Return (BEG . END) for the last completed response body, or nil."
+  "Return (BEG . END) for the last completed `** Response' body, or nil."
   (save-excursion
     (goto-char (point-max))
-    (when (re-search-backward emagent-chat--response-end-re nil t)
-      (let ((end (match-beginning 0)))
-        (when (re-search-backward emagent-chat--response-begin-re nil t)
-          (forward-line 1)
-          (skip-chars-forward "\n")
-          (cons (point) end))))))
+    (when (re-search-backward emagent-chat--response-headline-re nil t)
+      (forward-line 1)
+      (skip-chars-forward "\n")
+      (let ((beg (point))
+            (end (if (re-search-forward "^\\* " nil t)
+                     (line-beginning-position)
+                   (point-max))))
+        (cons beg end)))))
 
 ;;;###autoload
 (defun emagent-chat--collect-src-blocks (beg end)

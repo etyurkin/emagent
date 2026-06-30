@@ -22,6 +22,8 @@
 (require 'org)
 (require 'map)
 (require 'emagent-log)
+(require 'emagent-chat-markup)
+(require 'emagent-chat-migrate)
 (require 'emagent-chat-header)
 (require 'emagent-context)
 (require 'emagent-chat-mode-line)
@@ -30,6 +32,7 @@
 (defvar emagent--force-activation)
 
 (declare-function org-appear-mode "ext:org-appear")
+
 
 (defun emagent-chat--ensure-org-startup ()
   "Ensure the buffer requests Org block folding on startup."
@@ -91,12 +94,13 @@ Derived from `org-mode'.  Type naturally, then \\[emagent-chat-send] to send
 the line at point.  Select a region first to send multiline text.
 On a slash-command line (plugin skills such as /workflow:dev), \\[emagent-chat-tab]
 completes available commands.  Agent responses are inserted between
-# --- emagent --- delimiter lines (TAB on that line folds the response).
+`** Thinking' / `** Response' subsections (TAB folds them as Org headlines).
 
 Run \\[emagent-mode] to reconnect a saved session."
   (require 'emagent)
   (setq-local buffer-read-only nil)
   (emagent-chat--writable)
+  (emagent-chat--maybe-migrate-legacy-format)
   (setq emagent-chat-project-directory
         (or emagent-chat-project-directory (emagent-chat--read-project-property))
         emagent-chat-session-id (or emagent-chat-session-id
@@ -239,6 +243,7 @@ executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'.
               ["Session"
                ("m" "Set model" emagent-set-model)
                ("p" "Change project directory" emagent-set-project-directory)
+               ("P" "Reset permissions" emagent-reset-permissions)
                ("t" "Trust workspace on disk" emagent-trust-workspace)
                ("R" "Claude: new session (trust)" emagent-trust-claude-reconnect)
                ("l" "View log" emagent-log-view)])

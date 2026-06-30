@@ -215,5 +215,27 @@ Layout:
                 (fingerprints . ,(vconcat (emagent-permissions--fingerprints data)))
                 (tools . ,(vconcat (mapcar #'symbol-name (delete-dups merged))))))))))
 
+(defun emagent-permissions-reset-global ()
+  "Clear all globally allowed permission fingerprints."
+  (let ((path (emagent-permissions--global-file)))
+    (emagent-permissions--write-json path '((fingerprints . [])))))
+
+(defun emagent-permissions-reset-session (session-id)
+  "Clear all permissions stored for SESSION-ID."
+  (when (and session-id (not (string-empty-p session-id)))
+    (let ((path (emagent-permissions--session-file session-id)))
+      (emagent-permissions--write-json
+       path `((sessionId . ,session-id)
+               (fingerprints . [])
+               (autoApprove . :json-false))))))
+
+(defun emagent-permissions-reset-project (directory)
+  "Clear all permissions stored for DIRECTORY."
+  (when-let ((path (emagent-permissions--project-file directory)))
+    (emagent-permissions--write-json
+     path `((directory . ,(emagent-trust--normalize-dir directory))
+             (fingerprints . [])
+             (tools . [])))))
+
 (provide 'emagent-permissions)
 ;;; emagent-permissions.el ends here

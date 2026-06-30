@@ -72,6 +72,41 @@
     (should (string-match-p "summary text" (buffer-string)))
     (should-not (string-match-p "first" (buffer-string)))))
 
+(ert-deftest emagent-chat-test-migrate-legacy-response-block ()
+  (with-temp-buffer
+    (insert (format "%srequest\n\n# --- emagent ---\n#+begin_quote Thinking\n,* heading\n,#+end_quote\n#+end_quote\n\n## Result title\nbody\n# --- /emagent ---\n"
+                    (emagent-chat--user-heading-prefix)))
+    (let ((count (emagent-chat--migrate-legacy-response-delimiters))
+          (text nil))
+      (setq text (buffer-string))
+      (should (= 1 count))
+      (should-not (string-match-p "# --- emagent ---" text))
+      (should (string-match-p "^\\*\\* Thinking$" text))
+      (should (string-match-p "^\\*\\* Response$" text))
+      (should (string-match-p "^ \\* heading$" text))
+      (should (string-match-p "^ #\\+end_quote$" text))
+      (should (string-match-p "^## Result title$" text)))))
+
+(ert-deftest emagent-chat-test-migrate-legacy-response-idempotent ()
+  (with-temp-buffer
+    (insert (format "%srequest\n\n# --- emagent ---\nreply\n# --- /emagent ---\n"
+                    (emagent-chat--user-heading-prefix)))
+    (emagent-chat--maybe-migrate-legacy-format)
+    (let ((once (buffer-string)))
+      (emagent-chat--maybe-migrate-legacy-format)
+      (should (string= once (buffer-string))))))
+
+(ert-deftest emagent-chat-test-mode-activation-migrates-legacy-format ()
+  (with-temp-buffer
+    (insert "# -*- mode: emagent -*-\n#+EMAGENT_PROJECT: /tmp\n\n")
+    (insert (format "%srequest\n\n# --- emagent ---\nreply\n# --- /emagent ---\n"
+                    (emagent-chat--user-heading-prefix)))
+    (let ((emagent--force-activation t))
+      (emagent-mode))
+    (let ((text (buffer-string)))
+      (should-not (string-match-p "# --- emagent ---" text))
+      (should (string-match-p "^\\*\\* Response$" text)))))
+
 (ert-deftest emagent-chat-test-bare-slash-command-p ()
   (should (emagent-chat--bare-slash-command-p "/compress"))
   (should (emagent-chat--bare-slash-command-p "/plan refactor auth"))
@@ -540,16 +575,16 @@
           (emagent-chat-show-tool-call "id1" "grep: pattern")
           (let ((text (substring-no-properties (buffer-string))))
             (should (string-match-p
-                     "before\n,#\\+end_quote\nmiddle after\n→ grep: pattern"
+                     "before\n #\\+end_quote\nmiddle after\n→ grep: pattern"
                      text))
             (should-not (string-match-p "middle\n→ grep" text)))))))))
 
 (ert-deftest emagent-chat-test-escape-reasoning-text ()
-  (should (string= ",#+end_quote"
+  (should (string= " #+end_quote"
                    (emagent-chat--escape-reasoning-text "#+end_quote")))
-  (should (string= ",* headline"
+  (should (string= " * headline"
                    (emagent-chat--escape-reasoning-text "* headline")))
-  (should (string= "plain\n,#+BEGIN_SRC elisp"
+  (should (string= "plain\n #+BEGIN_SRC elisp"
                    (emagent-chat--escape-reasoning-text "plain\n#+BEGIN_SRC elisp"))))
 
 (ert-deftest emagent-chat-test-close-unclosed-code-fence ()
@@ -565,15 +600,17 @@
     (should (string-match-p "#\\+END_SRC" out))
     (should-not (string-match-p "#\\+BEGIN_SRC shell\\n#!/bin/sh\\necho hi\\s-*\\'" out))))
 
-(ert-deftest emagent-chat-test-begin-response-wraps-headline ()
+(ert-deftest emagent-chat-test-begin-response-no-eager-thinking ()
+  "`begin-response' opens a response without inserting an empty Thinking block."
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
      (with-current-buffer buffer
        (goto-char (point-max))
        (emagent-chat--begin-response (point))
+       (should (emagent-chat--open-response-p))
        (let ((text (substring-no-properties (buffer-string))))
-         (should (string-match-p (regexp-quote emagent-chat-response-headline) text))
-         (should (string-match-p (regexp-quote emagent-chat-response-begin) text)))))))
+         (should-not (string-match-p (regexp-quote emagent-chat-thinking-headline)
+                                     text)))))))
 
 (ert-deftest emagent-chat-test-stream-with-point-away-from-tail ()
   (emagent-test--with-emagent-buffer
@@ -664,6 +701,23 @@
             (beginning-of-line)
             (should (looking-at (emagent-chat--user-heading-re))))))))))
 
+(ert-deftest emagent-chat-test-finish-no-thinking-inserts-result ()
+  "finish-assistant with no reasoning still renders the answer under ** Response."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-finish-assistant "Hello world.")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "^\\*\\* Response$" text))
+            (should (string-match-p "Hello world\\." text))
+            (should-not (string-match-p "^\\*\\* Thinking" text))
+            (should-not (string-match-p (regexp-quote (emagent-chat--user-heading-prefix))
+                                        (match-string 0 text))))))))))
+
 (ert-deftest emagent-chat-test-finish-keeps-tools-in-reasoning ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
@@ -684,22 +738,8 @@
             (should (string-match-p "Done\\." text))
             (should-not (string-match-p "Executing" text)))))))))
 
-(ert-deftest emagent-chat-test-begin-response-opens-thinking-scaffold ()
-  (emagent-test--with-emagent-buffer
-   (lambda (buffer _dir)
-     (with-current-buffer buffer
-       (goto-char (point-max))
-       (emagent-chat--begin-response (point))
-       (let ((text (substring-no-properties (buffer-string))))
-         (should (and (string-match "#\\+begin_quote Thinking" text)
-                      (string-match "#\\+end_quote" text)))
-         (should emagent-chat--thought-open-p)
-         (should (markerp emagent-chat--thought-marker)))))))
-
-(ert-deftest emagent-chat-test-format-permission-line ()
-  (should (string= "? make test" (emagent-chat--format-permission-line "make test"))))
-
-(ert-deftest emagent-chat-test-reasoning-scaffold-repairs-missing-end-quote ()
+(ert-deftest emagent-chat-test-thinking-created-lazily ()
+  "The `** Thinking' subsection appears only once reasoning is streamed."
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
      (emagent-test--with-busy-session
@@ -707,17 +747,34 @@
         (with-current-buffer buffer
           (goto-char (point-max))
           (emagent-chat--begin-response (point))
-          (save-excursion
-            (re-search-forward "^#\\+end_quote" nil t)
-            (delete-region (line-beginning-position) (min (1+ (line-end-position)) (point-max))))
+          (should-not emagent-chat--thought-open-p)
+          (should-not (string-match-p "^\\*\\* Thinking"
+                                      (substring-no-properties (buffer-string))))
+          (emagent-chat-append-thought "reasoning...")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match "^\\*\\* Thinking" text))
+            (should-not (string-match "#\\+begin_quote" text))
+            (should emagent-chat--thought-open-p)
+            (should (markerp emagent-chat--thought-marker))
+            (should (string-match-p "reasoning\\.\\.\\." text)))))))))
+
+(ert-deftest emagent-chat-test-format-permission-line ()
+  (should (string= "? make test" (emagent-chat--format-permission-line "make test"))))
+
+(ert-deftest emagent-chat-test-reasoning-scaffold-repairs-missing-markers ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
           (setq emagent-chat--thought-marker nil
                 emagent-chat--thought-open-p nil)
           (emagent-chat-show-tool-call "id1" "Read: foo.el")
           (let ((text (substring-no-properties (buffer-string))))
-            (should (string-match-p "#\\+begin_quote Thinking" text))
-            (should (string-match-p "→ Read: foo.el" text))
-            (should (and (string-match "→ Read: foo.el" text)
-                         (string-match "#\\+end_quote" text (match-end 0)))))))))))
+            (should (string-match-p "^\\*\\* Thinking" text))
+            (should (string-match-p "→ Read: foo.el" text)))))))))
 
 (ert-deftest emagent-chat-test-ensure-scaffold-after-close-reopens ()
   "`ensure-reasoning-scaffold' reopens thought after close when end_quote exists."
@@ -757,13 +814,13 @@
                (setq layout (substring-no-properties (buffer-string))))
              tool-call)
             (setq layout (substring-no-properties (buffer-string)))
-            (should (string-match-p "#\\+end_quote\n\n\\*\\* Allow execute" layout))
+            (should (string-match-p "^\\*\\* Allow execute" layout))
             (should (string-match-p "#\\+BEGIN_SRC sh\nmake test\n#\\+END_SRC" layout))
             (should (string-match-p "#\\+END_SRC\n\\[Allow once\\]" layout))
             (should-not (string-match-p "\\? make test" layout))
             (emagent-test--push-first-button buffer)
             (let ((text (substring-no-properties (buffer-string))))
-              (should (string-match-p "#\\+end_quote" text))
+              (should (string-match-p "^\\*\\* Thinking" text))
               (should-not (string-match-p "\\? make test" text))
               (should-not (string-match-p "\\[Allow once\\]" text))))))))))
 
@@ -787,7 +844,7 @@
                (title . "emagent-eval: eval")
                (arguments . ,args)))
             (setq layout (substring-no-properties (buffer-string)))
-            (should (string-match-p "#\\+end_quote\n\n\\*\\* Allow eval" layout))
+            (should (string-match-p "^\\*\\* Allow eval" layout))
             (should (string-match-p "#\\+BEGIN_SRC elisp\n(require 'emagent)\n#\\+END_SRC"
                                     layout))
             (should-not (string-match-p "\\? emagent-eval: eval" layout)))))))))
@@ -814,7 +871,7 @@
                (lambda (_choice) nil)
                tool-call)
               (setq layout (substring-no-properties (buffer-string)))
-              (should (string-match-p "#\\+end_quote\n\n\\*\\* Allow edit: target.py"
+              (should (string-match-p "^\\*\\* Allow edit: target.py"
                                       layout))
               (should (string-match-p "#\\+BEGIN_SRC diff" layout))
               (should (string-match-p "after" layout))

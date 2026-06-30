@@ -28,17 +28,23 @@
 (require 'emagent-tools)
 
 (defun emagent-chat--begin-response (&optional at)
-  "Insert a new emagent response block at AT or point."
+  "Open a new emagent response at AT or point.
+
+Set up the response body markers but do not insert a `** Thinking'
+subsection yet.  Thinking is created lazily, only when reasoning or a tool
+line actually arrives, so responses without reasoning never show an empty
+Thinking block."
   (let ((inhibit-read-only t))
     (emagent-chat--writable)
     (goto-char (or at (point)))
     (unless (bolp)
       (insert "\n"))
-    (insert (format "\n%s\n%s\n"
-                    emagent-chat-response-headline
-                    emagent-chat-response-begin))
-    (setq emagent-chat--response-body-start (point-marker))
-    (emagent-chat--insert-reasoning-scaffold)))
+    (insert "\n")
+    (setq emagent-chat--response-body-start (copy-marker (point) nil)
+          emagent-chat--assistant-marker (copy-marker (point) nil)
+          emagent-chat--thought-marker nil
+          emagent-chat--thought-open-p nil
+          emagent-chat--reasoning-streamed-p nil)))
 
 (defun emagent-chat-insert-system (message)
   "Append system MESSAGE to `emagent-log-buffer-name'."
@@ -51,39 +57,25 @@
 
 (declare-function emagent-chat--notify-inactive-update "emagent-chat")
 
-(defun emagent-chat--goto-active-response-point ()
-  "Go to the insertion point for the in-flight response."
-  (if (and emagent-chat--assistant-marker
-           (marker-position emagent-chat--assistant-marker))
-      (goto-char emagent-chat--assistant-marker)
-    (if (emagent-chat--open-response-p)
-        (goto-char (point-max))
-      (error "No open emagent response"))))
-
 (defun emagent-chat--format-thought-block (text)
-  "Return org markup for agent reasoning TEXT, or \"\" when empty."
+  "Return `** Thinking' subsection markup for reasoning TEXT, or \"\" when empty."
   (let ((trimmed (string-trim (or text ""))))
     (if (string-empty-p trimmed)
         ""
-      (format "#+begin_quote %s\n%s\n#+end_quote\n\n"
-              emagent-chat--thinking-block-label
+      (format "%s\n%s\n\n"
+              emagent-chat-thinking-headline
               (emagent-chat--escape-reasoning-text trimmed)))))
 
 (defun emagent-chat--reasoning-block-bounds ()
-  "Return (CONTENT-START . CONTENT-END) for a closed Reasoning block at point."
+  "Return (CONTENT-START . CONTENT-END) for the `** Thinking' subsection at point."
   (save-excursion
-    (unless (looking-at emagent-chat--reasoning-begin-re)
-      (re-search-backward emagent-chat--reasoning-begin-re nil t))
+    (unless (looking-at emagent-chat--thinking-headline-re)
+      (re-search-backward emagent-chat--thinking-headline-re nil t))
     (beginning-of-line)
-    (let ((content-start (line-end-position))
-          (limit (save-excursion
-                   (forward-line 1)
-                   (or (and (re-search-forward emagent-chat--reasoning-begin-re
-                                               (point-max) t)
-                            (match-beginning 0))
-                       (point-max)))))
-      (when-let ((content-end (emagent-chat--last-reasoning-end-quote-pos
-                                content-start limit)))
+    (when (looking-at emagent-chat--thinking-headline-re)
+      (let ((content-start (line-end-position))
+            (content-end (emagent-chat--thinking-content-end
+                          (line-end-position) (point-max))))
         (when (> content-end content-start)
           (cons content-start content-end))))))
 
@@ -94,33 +86,28 @@
       (org-fold-region (car bounds) (cdr bounds) t 'block))))
 
 (defun emagent-chat--hide-reasoning-at-point ()
-  "Hide Reasoning quote content at or near point.
+  "Fold the `** Thinking' subsection at or near point.
 
-Prefer Org block folding when the parser accepts the block; fall back to
-folding the inner region only so incomplete parses never break the buffer."
+Hides the subsection body with `org-fold-hide-subtree', leaving its headline
+visible as a collapsed summary.  Falls back to folding the inner region only
+so incomplete parses never break the buffer."
   (when-let ((bounds (emagent-chat--reasoning-block-bounds)))
-    ;; Fontify the block synchronously before folding.  jit-lock skips text
-    ;; that is already invisible, so folding an unfontified block (as happens
-    ;; on interrupt, where finalize and fold run back-to-back with no
+    ;; Fontify the body synchronously before folding.  jit-lock skips text
+    ;; that is already invisible, so folding an unfontified subsection (as
+    ;; happens on interrupt, where finalize and fold run back-to-back with no
     ;; intervening redisplay) leaves the collapsed Thinking line unrendered
-    ;; until a manual fold/unfold of the surrounding response block.
+    ;; until a manual fold/unfold.
     (ignore-errors
       (font-lock-ensure (save-excursion (goto-char (car bounds))
                                         (line-beginning-position))
                         (cdr bounds)))
     (condition-case _
-        (progn
-          (when (fboundp 'org-element-cache-reset)
-            (org-element-cache-reset))
-          (save-excursion
-            (goto-char (car bounds))
-            (beginning-of-line)
-            (let ((element (org-element-at-point)))
-              (if (eq (org-element-type element) 'quote-block)
-                  (progn
-                    (require 'org-fold)
-                    (org-fold-hide-block-toggle 'hide nil element))
-                (emagent-chat--hide-reasoning-by-region bounds)))))
+        (save-excursion
+          (goto-char (car bounds))
+          (beginning-of-line)
+          (re-search-backward emagent-chat--thinking-headline-re nil t)
+          (require 'org-fold)
+          (org-fold-hide-subtree))
       (error
        (emagent-chat--hide-reasoning-by-region bounds)))))
 
@@ -162,39 +149,15 @@ the hide when the response is fully complete and the session is idle."
    ((and emagent-chat--assistant-marker
          (marker-position emagent-chat--assistant-marker))
     (goto-char emagent-chat--assistant-marker))
-   ((save-excursion
-      (and (emagent-chat--find-response-begin-backward)
-           (not (re-search-forward emagent-chat--response-end-re (point-max) t))))
-    (goto-char (point-max)))
    (t
     (goto-char (point-max)))))
 
-(defun emagent-chat--response-end-present-p ()
-  "Return non-nil when an end delimiter sits on the current line."
-  (looking-at (concat (regexp-quote emagent-chat-response-end) "\\s-*")))
-
-(defun emagent-chat--split-glued-response-end ()
-  "Move a glued # --- /emagent --- delimiter onto its own line."
-  (save-excursion
-    (goto-char (point-min))
-    (while (re-search-forward
-            (concat "\\([^\n]\\)" (regexp-quote emagent-chat-response-end))
-            nil t)
-      (replace-match (concat "\\1\n" emagent-chat-response-end) t))))
-
-(defun emagent-chat--insert-response-end ()
-  "Insert a response end delimiter at the open response tail."
-  (when (emagent-chat--open-response-p)
-    (emagent-chat--split-glued-response-end)
-    (goto-char (point-max))
-    (unless (save-excursion
-              (goto-char (point-max))
-              (skip-chars-backward "\n")
-              (beginning-of-line)
-              (emagent-chat--response-end-present-p))
-      (unless (bolp)
-        (insert "\n"))
-      (insert (format "%s\n\n" emagent-chat-response-end)))))
+(defun emagent-chat--finish-response-spacing ()
+  "Ensure a trailing blank line after a finalized response body."
+  (goto-char (point-max))
+  (unless (bolp) (insert "\n"))
+  (unless (save-excursion (forward-line -1) (looking-at-p "[ \t]*$"))
+    (insert "\n")))
 
 (defun emagent-chat--reset-response-state ()
   (emagent-chat--cancel-thought-flush)
@@ -263,12 +226,8 @@ the hide when the response is fully complete and the session is idle."
             emagent-chat--assistant-marker (copy-marker (cdr bounds) nil)))))
 
 (defun emagent-chat--fail-response-p ()
-  "Return non-nil when an emagent response can be closed with an error."
-  (or (and emagent-chat--response-body-start
-           (marker-position emagent-chat--response-body-start))
-      (save-excursion
-        (and (emagent-chat--find-response-begin-backward)
-             (not (re-search-forward emagent-chat--response-end-re (point-max) t))))))
+  "Return non-nil when an emagent response is open and can be closed with error."
+  (emagent-chat--open-response-p))
 
 (defun emagent-chat-begin-thought ()
   "Resume or open the Thinking block in the in-flight emagent response."
@@ -291,33 +250,17 @@ the hide when the response is fully complete and the session is idle."
       (emagent-chat--schedule-thought-flush))))
 
 (defun emagent-chat-close-thought ()
-  "Close and hide the open Reasoning block, if any."
+  "Close the open `** Thinking' subsection, if any, and schedule folding."
   (emagent-chat--flush-thought-pending)
   (emagent-chat--with-stable-view
     (lambda ()
       (with-current-buffer (current-buffer)
         (when emagent-chat--thought-open-p
           (let ((inhibit-read-only t)
-                (hide-at nil))
+                (hide-at (emagent-chat--open-reasoning-begin)))
             (emagent-chat--writable)
-            (emagent-chat--ensure-reasoning-end-quote)
-            (when (and emagent-chat--thought-marker
-                       (marker-position emagent-chat--thought-marker))
-              (save-excursion
-                (goto-char emagent-chat--thought-marker)
-                (unless (bolp)
-                  (insert "\n"))))
-            (when-let ((beg (emagent-chat--open-reasoning-begin))
-                       (bounds (emagent-chat--open-response-body-bounds))
-                       (end-quote (emagent-chat--last-reasoning-end-quote-pos
-                                    (save-excursion (goto-char beg) (line-end-position))
-                                    (cdr bounds))))
-              (setq hide-at beg)
-              (save-excursion
-                (goto-char end-quote)
-                (goto-char (line-end-position))
-                (skip-chars-forward "\n")
-                (setq emagent-chat--assistant-marker (point-marker))))
+            (when-let ((tail (emagent-chat--reasoning-block-tail)))
+              (setq emagent-chat--assistant-marker (copy-marker tail nil)))
             (setq emagent-chat--thought-open-p nil
                   emagent-chat--thought-marker nil)
             (emagent-chat--maybe-font-lock-flush)
@@ -325,37 +268,26 @@ the hide when the response is fully complete and the session is idle."
               (emagent-chat--hide-reasoning-deferred hide-at))))))))
 
 (defun emagent-chat--finish-tool-line-in-reasoning ()
-  "Leave `emagent-chat--thought-marker' ready for streamed reasoning text."
-  (let ((end (line-end-position)))
-    (if (save-excursion
-          (goto-char end)
-          (and (not (eobp))
-               (looking-at "\n")
-               (progn (forward-line 1) t)
-               (looking-at "#\\+end_quote")))
-        (setq emagent-chat--thought-marker (copy-marker end nil))
-      (goto-char end)
-      (unless (bolp) (insert "\n"))
-      (setq emagent-chat--thought-marker (point-marker)))))
+  "Leave `emagent-chat--thought-marker' on a fresh line after a tool line."
+  (goto-char (line-end-position))
+  (insert "\n")
+  (setq emagent-chat--thought-marker (copy-marker (point) nil)))
 
 (defun emagent-chat--insert-reasoning-text (text)
-  "Insert TEXT at `emagent-chat--thought-marker' before the Reasoning tail."
+  "Insert TEXT at `emagent-chat--thought-marker' in the open Thinking content."
   (let ((safe (emagent-chat--escape-reasoning-text text)))
+    ;; Drop a leading blank line right after the `** Thinking' headline.
     (when (save-excursion
             (beginning-of-line)
             (and (looking-at "[ \t]*$")
                  (progn (forward-line -1) t)
-                 (looking-at emagent-chat--reasoning-begin-re)))
+                 (looking-at emagent-chat--thinking-headline-re)))
       (setq safe (replace-regexp-in-string "\\`[\n\r]+" "" safe)))
-    (if (and (eolp)
-             (save-excursion
-               (forward-line 1)
-               (looking-at "#\\+end_quote"))
-             (save-excursion
-               (beginning-of-line)
-               (looking-at "→ ")))
-        (insert "\n" safe)
-      (insert safe))))
+    ;; When point sits at the end of a tool line, start reasoning on a new line.
+    (when (and (eolp)
+               (save-excursion (beginning-of-line) (looking-at "→ ")))
+      (setq safe (concat "\n" safe)))
+    (insert safe)))
 
 (defun emagent-chat--org-verbatim-paths (text)
   "Wrap absolute paths in org =verbatim= so /Users/ is not parsed as /italic/."
@@ -479,11 +411,11 @@ Return non-nil when a line was updated."
   (emagent-chat--append-tool-line label id))
 
 (defun emagent-chat-permission-prompt (question choices callback &optional tool-call)
-  "Show permission UI after the open Thinking block.
+  "Show permission UI at the end of the open `** Thinking' subsection.
 
-When TOOL-CALL carries a shell command or edit payload, inserts an org
-subsection with that content outside `#+end_quote', then CHOICES as buttons.
-Otherwise inserts a ? question line before the buttons.
+When TOOL-CALL carries a shell command or edit payload, inserts that content,
+then CHOICES as buttons.  Otherwise inserts a ? question line before the
+buttons.
 
 CHOICES is a list of (LABEL . VALUE) pairs.  Non-blocking: inserts the dialog
 and returns immediately.  CALLBACK is called with the chosen VALUE when a
@@ -522,7 +454,6 @@ Keyboard shortcuts (via keymap text property on the buttons line):
             (emagent-chat--writable)
             (emagent-chat--ensure-response-markers)
             (emagent-chat--ensure-reasoning-scaffold)
-            (emagent-chat--ensure-reasoning-end-quote)
             (if-let ((insert-at (emagent-chat--reasoning-block-tail)))
                 (progn
                   (goto-char insert-at)
@@ -624,8 +555,35 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                 (goto-char (marker-position buttons-beg))
                 (recenter -3)))))))))
 
+(defun emagent-chat--response-body-bounds ()
+  "Return (CONTENT-START . END) for the `** Response' body, or nil."
+  (when-let ((bounds (emagent-chat--open-response-body-bounds)))
+    (save-excursion
+      (goto-char (car bounds))
+      (when (re-search-forward emagent-chat--response-headline-re (cdr bounds) t)
+        (forward-line 1)
+        (cons (point) (cdr bounds))))))
+
+(defun emagent-chat--ensure-response-headline ()
+  "Ensure the open response has a `** Response' headline; return its content start."
+  (or (car (emagent-chat--response-body-bounds))
+      (let ((tail (emagent-chat--reasoning-block-tail)))
+        (if tail
+            ;; A `** Thinking' subsection exists: place Response after its content.
+            (progn
+              (goto-char tail)
+              (skip-chars-backward "\n" (or (emagent-chat--open-response-begin)
+                                            (point-min)))
+              (insert "\n\n" emagent-chat-response-headline "\n")
+              (point))
+          ;; No reasoning was rendered: place Response at the response body start.
+          (when-let ((beg (emagent-chat--open-response-begin)))
+            (goto-char beg)
+            (insert emagent-chat-response-headline "\n")
+            (point))))))
+
 (defun emagent-chat-append-assistant (text)
-  "Append TEXT to the current emagent response section."
+  "Append streamed assistant TEXT under the `** Response' subsection."
   (when (not (string-empty-p text))
     (emagent-chat--with-stable-view
       (lambda ()
@@ -633,39 +591,53 @@ Keyboard shortcuts (via keymap text property on the buttons line):
           (when (emagent-chat--open-response-p)
             (let ((inhibit-read-only t))
               (emagent-chat--writable)
-              (emagent-chat--ensure-reasoning-end-quote)
               (emagent-chat-close-thought)
-              (save-excursion
-                (emagent-chat--goto-active-response-point)
-                (let ((trimmed
-                       (if (save-excursion
-                             (skip-chars-backward "\n\r \t")
-                             (beginning-of-line)
-                             (looking-at "#\\+end_quote"))
-                           (replace-regexp-in-string "\\`[\n\r]+" "" text)
-                         text)))
-                  (unless (string-empty-p trimmed)
-                    (insert trimmed)
+              (let* ((existing (emagent-chat--response-body-bounds))
+                     (insert-at
+                      (cond
+                       ((and existing
+                             emagent-chat--assistant-marker
+                             (marker-position emagent-chat--assistant-marker)
+                             (>= (marker-position emagent-chat--assistant-marker)
+                                 (car existing)))
+                        (marker-position emagent-chat--assistant-marker))
+                       (existing (cdr existing))
+                       (t (emagent-chat--ensure-response-headline)))))
+                (when insert-at
+                  (save-excursion
+                    (goto-char insert-at)
+                    (insert text)
                     (setq emagent-chat--assistant-marker (point-marker)))))
               (emagent-chat--maybe-font-lock-flush))))))))
 
 (defun emagent-chat-fail-assistant (message)
-  "Close the in-flight emagent response with error MESSAGE."
-  (with-current-buffer (current-buffer)
-    (let ((inhibit-read-only t))
-      (emagent-chat--writable)
-      (when (emagent-chat--fail-response-p)
-        (emagent-chat--goto-response-insertion-point)
-        (insert (format "\n\n*Error:* %s\n" message))
-        (emagent-chat--insert-response-end)
-        (emagent-chat--reset-response-state)
-        (emagent-chat--sync-user-zone-marker)
-        (emagent-chat--maybe-font-lock-flush)))))
+  "Close the in-flight emagent response with error MESSAGE under `** Response'."
+  (emagent-chat--with-stable-view
+    (lambda ()
+      (with-current-buffer (current-buffer)
+        (let ((inhibit-read-only t))
+          (emagent-chat--writable)
+          (when (emagent-chat--fail-response-p)
+            (emagent-chat-close-thought)
+            (emagent-chat--ensure-response-headline)
+            (goto-char (point-max))
+            (unless (bolp) (insert "\n"))
+            (insert (format "\n*Error:* %s\n" message))
+            (emagent-chat--finish-response-spacing)
+            (emagent-chat--reset-response-state)
+            (emagent-chat--sync-user-zone-marker)
+            (emagent-chat--maybe-font-lock-flush))))))
+  (emagent-chat--insert-user-heading-stub))
 
 (defun emagent-chat--inject-reasoning-thought (thought-text)
-  "Prepend THOUGHT-TEXT inside the open Reasoning block when it was not streamed."
+  "Insert THOUGHT-TEXT under `** Thinking' when reasoning was not streamed.
+
+Create the `** Thinking' subsection on demand, since responses no longer
+open one eagerly."
   (let ((trimmed (string-trim (or thought-text ""))))
     (when (not (string-empty-p trimmed))
+      (unless (emagent-chat--open-reasoning-begin)
+        (emagent-chat--insert-reasoning-scaffold))
       (when-let ((beg (emagent-chat--open-reasoning-begin)))
         (save-excursion
           (goto-char beg)
@@ -674,75 +646,65 @@ Keyboard shortcuts (via keymap text property on the buttons line):
           (unless (bolp) (insert "\n")))))))
 
 (defun emagent-chat--finalize-streamed-assistant (converted)
-  "Insert CONVERTED assistant text after the streamed Reasoning block."
-  (when-let* ((bounds (emagent-chat--open-response-body-bounds))
-              (body-end (cdr bounds))
-              (insert-at (or (and emagent-chat--assistant-marker
-                                   (marker-position emagent-chat--assistant-marker))
-                             (emagent-chat--reasoning-block-tail)
-                             (car bounds))))
-    (when (< insert-at body-end)
-      (delete-region insert-at body-end))
-    (goto-char insert-at)
-    (let ((start (point)))
-      (insert converted)
-      (when (string-match-p "|" converted)
-        (ignore-errors
-          (emagent-chat--maybe-align-org-tables-in-region start (point))))
-      (setq emagent-chat--assistant-marker (point-marker)))))
+  "Replace the `** Response' body with CONVERTED assistant text."
+  (when-let ((content-start (or (car (emagent-chat--response-body-bounds))
+                                (emagent-chat--ensure-response-headline))))
+    (let ((body-end (cdr (emagent-chat--open-response-body-bounds))))
+      (when (and body-end (< content-start body-end))
+        (delete-region content-start body-end))
+      (goto-char content-start)
+      (let ((start (point)))
+        (insert converted)
+        (when (string-match-p "|" converted)
+          (ignore-errors
+            (emagent-chat--maybe-align-org-tables-in-region start (point))))
+        (setq emagent-chat--assistant-marker (point-marker))))))
+
+(defun emagent-chat--remove-empty-thinking ()
+  "Remove the open `** Thinking' headline when its content is blank.
+
+Scoped to the in-flight response so it never deletes a `** Thinking'
+subsection that belongs to an earlier response."
+  (when-let ((beg (emagent-chat--open-reasoning-begin)))
+    (let ((content-start (save-excursion (goto-char beg) (line-end-position)))
+          (content-end (emagent-chat--reasoning-block-tail)))
+      (when (and content-end
+                 (string-empty-p
+                  (string-trim
+                   (buffer-substring-no-properties content-start content-end))))
+        (save-excursion
+          (goto-char beg)
+          (delete-region (line-beginning-position) content-end))
+        t))))
 
 (defun emagent-chat-finish-assistant (text &optional thought-text)
   "Finalize the latest emagent response.
 
-When reasoning and tool lines were streamed live, keep that block and only
-render the assistant body.  Otherwise build the Reasoning block from
-THOUGHT-TEXT."
+Render the assistant answer under `** Response'.  When reasoning was streamed
+keep its `** Thinking' subsection; otherwise build one from THOUGHT-TEXT.
+A response without any reasoning has no `** Thinking' subsection at all."
   (emagent-chat--with-stable-view
     (lambda ()
       (with-current-buffer (current-buffer)
         (let ((inhibit-read-only t)
-              (converted (emagent-chat--convert-agent-markup text))
-              (rendered nil)
+              (converted (emagent-chat--demote-response-headings
+                          (emagent-chat--convert-agent-markup text)))
               (hide-at nil))
           (emagent-chat--writable)
-          (if-let ((reasoning-beg (emagent-chat--open-reasoning-begin)))
-              (progn
-                (setq hide-at reasoning-beg)
-                (emagent-chat--ensure-reasoning-end-quote)
-                (unless emagent-chat--reasoning-streamed-p
-                  (emagent-chat--inject-reasoning-thought thought-text))
-                (emagent-chat-close-thought)
-                (emagent-chat--finalize-streamed-assistant converted)
-                (setq rendered t))
-            (progn
-              (emagent-chat-close-thought)
-              (when-let* ((bounds (emagent-chat--finish-body-bounds))
-                          (body-beg (car bounds))
-                          (body-end (cdr bounds))
-                          (thought (emagent-chat--format-thought-block thought-text))
-                          ((<= body-beg body-end)))
-                (delete-region body-beg body-end)
-                (goto-char body-beg)
-                (let ((insert-start (point)))
-                  (insert thought converted)
-                  (setq rendered t)
-                  (when (not (string-empty-p thought))
-                    (setq hide-at insert-start))
-                  (when (string-match-p "|" converted)
-                    (ignore-errors
-                      (emagent-chat--maybe-align-org-tables-in-region
-                       (+ insert-start (length thought)) (point))))
-                  (setq emagent-chat--assistant-marker (point-marker))))))
-          (when rendered
-            (emagent-chat--insert-response-end))
-          (when (and (not rendered) (emagent-chat--open-response-p))
+          (when (emagent-chat--open-response-p)
+            (unless emagent-chat--reasoning-streamed-p
+              (emagent-chat--inject-reasoning-thought thought-text))
+            (setq hide-at (emagent-chat--open-reasoning-begin))
             (emagent-chat-close-thought)
-            (emagent-chat--insert-response-end))
-          (emagent-chat--reset-response-state)
-          (emagent-chat--sync-user-zone-marker)
-          (emagent-chat--maybe-font-lock-flush)
-          (when hide-at
-            (emagent-chat--hide-reasoning-deferred hide-at))))))
+            (when (emagent-chat--remove-empty-thinking)
+              (setq hide-at nil))
+            (emagent-chat--finalize-streamed-assistant converted)
+            (emagent-chat--finish-response-spacing)
+            (emagent-chat--reset-response-state)
+            (emagent-chat--sync-user-zone-marker)
+            (emagent-chat--maybe-font-lock-flush)
+            (when hide-at
+              (emagent-chat--hide-reasoning-deferred hide-at)))))))
   ;; Insert stub after stable view is restored, so point ends up at the
   ;; user prompt heading rather than being restored to the entry position.
   (emagent-chat--insert-user-heading-stub))

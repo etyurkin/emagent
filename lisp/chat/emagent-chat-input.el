@@ -213,27 +213,21 @@ Returns the buffer position after the formatted heading."
     (point)))
 
 (defun emagent-chat--delete-following-response (pos)
-  "Delete the response block after POS, stopping before the next user heading.
+  "Delete the response subsections after POS, before the next user heading.
 
-Deletes from the first `emagent-chat-response-headline' or
-`# --- emagent ---' after POS up to (but not including) the next
-`* user>' heading, whether bare or with content."
+Deletes from the first `** Thinking'/`** Response' subsection headline after POS
+up to (but not including) the next `* user>' heading."
   (save-excursion
     (goto-char pos)
-    (skip-chars-forward " \t\n")
-    (unless (or (looking-at emagent-chat--response-headline-re)
-                (looking-at emagent-chat--response-begin-re))
-      (or (re-search-forward emagent-chat--response-headline-re nil t)
-          (re-search-forward emagent-chat--response-begin-re nil t)))
-    (when (or (looking-at emagent-chat--response-headline-re)
-              (looking-at emagent-chat--response-begin-re))
-      (let ((start (line-beginning-position))
-            (inhibit-read-only t))
-        (emagent-chat--writable)
-        (when (re-search-forward emagent-chat--response-end-re nil t)
-          (forward-line 1)
-          (skip-chars-forward " \t\n")
-          (delete-region start (point)))))))
+    (let ((limit (save-excursion
+                   (if (re-search-forward "^\\* " nil t)
+                       (line-beginning-position)
+                     (point-max)))))
+      (when (re-search-forward emagent-chat--subsection-headline-re limit t)
+        (let ((start (line-beginning-position))
+              (inhibit-read-only t))
+          (emagent-chat--writable)
+          (delete-region start limit))))))
 
 (defun emagent-chat--user-heading-at-point-p ()
   "Return non-nil when point is on a `* user>' heading line."
@@ -261,9 +255,7 @@ Deletes from the first `emagent-chat-response-headline' or
       (and (not (string-match-p "^#\\+" line))
            (not (string-match-p "^# " line))
            (not (string-match-p "^\\* Emagent\\b" line))
-           (not (string-match-p emagent-chat--response-headline-re line))
-           (not (string-match-p emagent-chat--response-begin-re line))
-           (not (string-match-p emagent-chat--response-end-re line))
+           (not (string-match-p emagent-chat--subsection-headline-re line))
            (not (string-match-p "^#\\+BEGIN_SRC" line))
            (not (string-match-p "^#\\+END_SRC" line))
            ;; Bare stub "* user> " with no text after it is not sendable
@@ -285,22 +277,19 @@ Deletes from the first `emagent-chat-response-headline' or
   (point))
 
 (defun emagent-chat--after-last-response ()
-  "Return the position after the last closed emagent response."
+  "Return the position where the trailing user zone begins.
+
+That is the `* user>' heading after the last `** Thinking'/`** Response'
+subsection, or the start of the conversation when no response exists yet."
   (save-excursion
-    (goto-char (point-min))
-    (if (re-search-forward emagent-chat--response-end-re nil t)
+    (goto-char (point-max))
+    (if (re-search-backward emagent-chat--subsection-headline-re nil t)
         (progn
-          (while (re-search-forward emagent-chat--response-end-re nil t)
-            nil)
-          (goto-char (match-end 0))
-          (skip-chars-forward "\n")
-          (line-beginning-position))
-      (if (re-search-forward "^\\* Emagent\\b" nil t)
-          (progn
-            (goto-char (point-max))
-            (skip-chars-forward "\n")
-            (point))
-        (emagent-chat--skip-header)))))
+          (goto-char (match-beginning 0))
+          (if (re-search-forward "^\\* " nil t)
+              (line-beginning-position)
+            (point-max)))
+      (emagent-chat--skip-header))))
 
 (defun emagent-chat--sync-user-zone-marker ()
   "Update the user-zone marker from the buffer, without insertion-type."
@@ -347,9 +336,7 @@ response delimiter."
                         (forward-line 1)
                         (if (re-search-forward
                              (concat "^\\* \\|"
-                                     emagent-chat--response-headline-re
-                                     "\\|"
-                                     emagent-chat--response-begin-re)
+                                     emagent-chat--subsection-headline-re)
                              (point-max) t)
                             (match-beginning 0)
                           (point-max)))))

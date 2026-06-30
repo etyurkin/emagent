@@ -40,7 +40,8 @@ to be on Emacs's own =exec-path= (e.g. =cursor-agent=, =claude-agent-acp=).
   :ensure (:host github :repo "etyurkin/emagent" :depth 1
            :files (:defaults ("lisp" . ("lisp/*/*.el"))))
   :commands (emagent emagent-cursor-start emagent-claude-start emagent-trust-workspace
-                     emagent-trust-claude-reconnect emagent-mode emagent-set-model)
+                     emagent-trust-claude-reconnect emagent-mode emagent-set-model
+                     emagent-reset-permissions)
   :custom (emagent-default-provider (if (equal (getenv "EMAGENT_AGENT") "claude")
                                        'claude
                                      'cursor)))
@@ -64,6 +65,7 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =M-x emagent-mode=                    | Reconnect a saved buffer (agent + session)       |
 | =M-x emagent-set-model=               | Change ACP model mid-session                     |
 | =M-x emagent-set-project-directory=   | Change project directory (moves session, reconnects) |
+| =M-x emagent-reset-permissions=       | Reset stored permissions (project, session, or global) |
 | =C-c C-c=                             | Send =* user>= block; execute src block when inside one |
 | =C-c u=                               | Insert a new =* user>= prompt heading             |
 | =C-c p=                               | Change project directory (moves session, reconnects) |
@@ -79,8 +81,7 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =M-x emagent-chat-insert-last-response= | Insert last response into another buffer        |
 | =M-x emagent-chat-insert-src-block=   | Pick a src block from last response and insert  |
 | =TAB= on =/command= line              | Complete slash commands (skills / built-ins)     |
-| =TAB= on =# --- emagent ---=           | Fold / unfold the response block                 |
-| =TAB= elsewhere                       | =org-cycle= (headlines, Thinking, etc.)           |
+| =TAB= elsewhere                       | =org-cycle= (headlines, =** Thinking=, =** Response=, etc.) |
 | =ESC ESC=                             | Interrupt agent response                         |
 | =C-x k=                               | Kill buffer and disconnect agent                 |
 
@@ -154,12 +155,16 @@ fresh session — the agent has nothing stored yet to resume.
 
 ** Response blocks
 
-Agent responses appear between =# --- emagent ---= / =# --- /emagent ---=
-delimiters.  TAB on the opening delimiter folds the entire block.
+Agent responses appear as Org subsections under the =* user>= heading:
 
-- *Thinking* (=#+begin_quote Thinking=) — streamed thought text and tool-use
-  lines (=→ tool-name: path=).  With Cursor, paths are read from =store.db=
-  (one lookup at a time per session).  Folds when the response finishes.
+- =** Thinking= — streamed reasoning text and tool-use lines (=→ tool-name: path=).
+  Only present when the model emits reasoning.  Folds automatically when the
+  response finishes.  With Cursor, file paths are read from =store.db=.
+- =** Response= — the final assistant answer (Markdown converted to Org).
+
+Sessions saved in the legacy =# --- emagent ---= / =# --- /emagent ---= format
+are automatically migrated to the headline structure the first time they are
+opened in emagent-mode.
 
 ** Side notes while the agent is thinking (/btw/)
 
@@ -201,6 +206,12 @@ passes through the emagent gate even after you choose /Allow always/.
 
 Permission choices: =y= / =RET= (once), =s= (session), =w= (always, saved to
 =#+EMAGENT_ALLOWED_PERMISSIONS=), =a= (allow all for session), =n= (deny).
+
+To undo an accidentally-granted permission, use =M-x emagent-reset-permissions=
+(also in the =C-c ?= palette under Session).  A minibuffer menu offers:
+=project: all= (clears fingerprints and allowed tools for this project directory),
+=project: session= (clears fingerprints and auto-approve for the current session),
+and =global: all= (clears all globally approved fingerprints).
 
 Set =emagent-acp-auto-approve-permissions= to ='safe= to auto-approve reads,
 writes, and harmless shell commands while still prompting for destructive

@@ -26,71 +26,43 @@
 (require 'emagent-chat-markup)
 
 (defun emagent-chat--open-reasoning-begin ()
-  "Return point at the last Reasoning opener in the open response body."
+  "Return point at the `** Thinking' headline in the open response body."
   (when-let ((bounds (emagent-chat--open-response-body-bounds)))
     (save-excursion
       (goto-char (car bounds))
-      (let (last)
-        (while (re-search-forward emagent-chat--reasoning-begin-re (cdr bounds) t)
-          (setq last (match-beginning 0)))
-        last))))
+      (when (re-search-forward emagent-chat--thinking-headline-re (cdr bounds) t)
+        (match-beginning 0)))))
 
-(defun emagent-chat--last-reasoning-end-quote-pos (begin limit)
-  "Return buffer position of the last #+end_quote line after BEGIN before LIMIT."
+(defun emagent-chat--thinking-content-end (begin limit)
+  "Return where the Thinking content ends after BEGIN, before LIMIT.
+
+That is the start of the `** Response' headline when present, otherwise LIMIT."
   (save-excursion
     (goto-char begin)
-    (let (last)
-      (while (re-search-forward "^#\\+end_quote\\s-*$" limit t)
-        (setq last (match-beginning 0)))
-      last)))
+    (if (re-search-forward emagent-chat--response-headline-re limit t)
+        (match-beginning 0)
+      limit)))
 
 (defun emagent-chat--insert-reasoning-scaffold ()
-  "Insert an empty Thinking block at `emagent-chat--response-body-start'."
+  "Insert an empty `** Thinking' subsection at the response body start."
   (when (and emagent-chat--response-body-start
              (marker-position emagent-chat--response-body-start))
     (goto-char emagent-chat--response-body-start)
-    (insert (format "#+begin_quote %s\n" emagent-chat--thinking-block-label))
-    (setq emagent-chat--thought-marker (point-marker))
-    (insert "\n#+end_quote\n\n")
-    (setq emagent-chat--thought-open-p t
+    (insert emagent-chat-thinking-headline "\n")
+    (setq emagent-chat--thought-marker (point-marker)
+          emagent-chat--thought-open-p t
           emagent-chat--assistant-marker (point-marker))
     (emagent-chat--maybe-font-lock-flush)))
 
-(defun emagent-chat--ensure-reasoning-end-quote ()
-  "Insert #+end_quote when the open Thinking block has no closing line."
-  (when-let* ((beg (emagent-chat--open-reasoning-begin))
-              (bounds (emagent-chat--open-response-body-bounds))
-              (limit (cdr bounds))
-              (search-from (save-excursion (goto-char beg) (line-end-position))))
-    (unless (emagent-chat--last-reasoning-end-quote-pos search-from limit)
-      (let ((insert-at (or (and emagent-chat--thought-marker
-                                (marker-position emagent-chat--thought-marker))
-                           (save-excursion
-                             (goto-char beg)
-                             (forward-line 1)
-                             (point)))))
-        (save-excursion
-          (goto-char insert-at)
-          (unless (bolp) (insert "\n"))
-          (insert "#+end_quote\n\n")
-          (setq emagent-chat--assistant-marker (point-marker)))
-        (emagent-chat--maybe-font-lock-flush)
-        t))))
-
 (defun emagent-chat--ensure-reasoning-scaffold ()
-  "Ensure the open response has a Thinking block with #+end_quote present."
+  "Ensure the open response has a `** Thinking' subsection ready to stream."
   (when (emagent-chat--open-response-p)
     (cond
      (emagent-chat--thought-open-p
-      (emagent-chat--ensure-reasoning-end-quote)
       (emagent-chat--sync-thought-marker))
-     ((emagent-chat--reasoning-stream-marker)
-      (setq emagent-chat--thought-marker (emagent-chat--reasoning-stream-marker)
-            emagent-chat--thought-open-p t))
      ((not (emagent-chat--open-reasoning-begin))
       (emagent-chat--insert-reasoning-scaffold))
      (t
-      (emagent-chat--ensure-reasoning-end-quote)
       (let ((stream (emagent-chat--reasoning-stream-marker)))
         (setq emagent-chat--thought-marker stream
               emagent-chat--thought-open-p t)
@@ -98,38 +70,28 @@
           (emagent-log "emagent: cannot find reasoning stream marker after ensure")))))))
 
 (defun emagent-chat--reasoning-stream-marker ()
-  "Return insert marker before the closing #+end_quote in the open Reasoning block.
+  "Return the insert marker at the end of the open Thinking content.
 
-Uses the last #+end_quote after the Reasoning opener so streamed text that
-contains a literal #+end_quote line cannot steal the insertion point."
-  (when-let* ((bounds (emagent-chat--open-response-body-bounds))
-              (beg (emagent-chat--open-reasoning-begin))
-              (end-quote (emagent-chat--last-reasoning-end-quote-pos
-                           (save-excursion (goto-char beg) (line-end-position))
-                           (cdr bounds))))
+Streamed reasoning is inserted here, before any `** Response' headline."
+  (when-let ((tail (emagent-chat--reasoning-block-tail)))
     (save-excursion
-      (goto-char end-quote)
-      (beginning-of-line)
-      (when (and (> (point) (point-min))
-                 (= (char-before) ?\n))
-        (backward-char 1))
+      (goto-char tail)
+      (skip-chars-backward "\n" (or (emagent-chat--open-response-begin) (point-min)))
       (point-marker))))
 
 (defun emagent-chat--reasoning-block-tail ()
-  "Return point after the last Reasoning block in the open response, or nil."
+  "Return point at the end of the open Thinking content, or nil.
+
+This is the start of the `** Response' headline when present, otherwise the
+end of the open response body."
   (when-let* ((bounds (emagent-chat--open-response-body-bounds))
-              (beg (emagent-chat--open-reasoning-begin))
-              (end-quote (emagent-chat--last-reasoning-end-quote-pos
-                           (save-excursion (goto-char beg) (line-end-position))
-                           (cdr bounds))))
-    (save-excursion
-      (goto-char end-quote)
-      (goto-char (line-end-position))
-      (skip-chars-forward "\n")
-      (point))))
+              (beg (emagent-chat--open-reasoning-begin)))
+    (emagent-chat--thinking-content-end
+     (save-excursion (goto-char beg) (line-end-position))
+     (cdr bounds))))
 
 (defun emagent-chat--sync-thought-marker ()
-  "Realign `emagent-chat--thought-marker' before the true Reasoning tail."
+  "Realign `emagent-chat--thought-marker' to the true Thinking tail."
   (when emagent-chat--thought-open-p
     (when-let ((stream (emagent-chat--reasoning-stream-marker)))
       (let ((cur (and emagent-chat--thought-marker
@@ -137,16 +99,8 @@ contains a literal #+end_quote line cannot steal the insertion point."
         (when (or (not cur) (< cur (marker-position stream)))
           (setq emagent-chat--thought-marker stream))))))
 
-(defun emagent-chat--can-resume-reasoning-p ()
-  "Return non-nil when streaming can continue in an existing Reasoning block."
-  (when-let* ((tail (emagent-chat--reasoning-block-tail))
-              (bounds (emagent-chat--open-response-body-bounds))
-              ((>= tail (car bounds))))
-    (string-empty-p
-     (string-trim (buffer-substring-no-properties tail (cdr bounds))))))
-
 (defun emagent-chat--ensure-thought-stream ()
-  "Open or resume the streaming Reasoning block in the in-flight response."
+  "Open or resume the streaming Thinking subsection in the in-flight response."
   (emagent-chat--ensure-reasoning-scaffold))
 
 (provide 'emagent-chat-reasoning)

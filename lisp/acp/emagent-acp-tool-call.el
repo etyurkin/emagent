@@ -32,6 +32,22 @@
 (declare-function emagent-chat-show-tool-call "emagent-chat")
 (declare-function emagent-acp--permission-decision-label "emagent-acp-permit")
 
+(defun emagent-acp--tool-call-emagent-tool-p (update)
+  "Return non-nil when UPDATE names a tool from emagent's own MCP server.
+
+Such tools run inside Emacs and never reach the ACP permission path, so their
+Thinking lines are tagged (Emacs) instead of carrying an (Allow) decision.
+
+Detection relies on the emagent MCP namespace (e.g. `mcp_emagent_read_file'):
+an explicit `emagent-tool' flag set by provider enrichment, or the word
+`emagent' surviving in the title.  Bare tool names are deliberately not matched
+because generic names like `grep' collide with agent-native tools."
+  (or (map-elt update 'emagent-tool)
+      (let ((title (downcase (string-trim (or (map-elt update 'title) "")))))
+        (and (not (string-empty-p title))
+             (string-match-p "\\bemagent\\b" title)
+             t))))
+
 (defun emagent-acp--tool-call-elisp-prin1-p (value)
   "Return non-nil when VALUE looks like a printed Elisp object."
   (and (stringp value)
@@ -78,15 +94,18 @@
   (when-let ((update (emagent-acp--tool-call-update-from-request tool-call)))
     (emagent-acp--on-tool-call state update)))
 
-(defun emagent-acp--emit-tool-call-display (state id kind _merged label status)
+(defun emagent-acp--emit-tool-call-display (state id kind merged label status)
   "Push TOOL-CALL LABEL to the chat buffer and update session UI."
   (let* ((labels (map-elt state :tool-call-labels))
          (prev (and id labels (gethash id labels)))
          (decision (and id (when-let ((d (map-elt state :tool-call-decisions)))
                              (gethash id d))))
-         (display (if (and label (not (string-empty-p label)) decision)
-                      (emagent-acp--permission-decision-label label decision)
-                    label))
+         (display (cond
+                   ((or (null label) (string-empty-p label)) label)
+                   (decision (emagent-acp--permission-decision-label label decision))
+                   ((emagent-acp--tool-call-emagent-tool-p merged)
+                    (format "%s (Emacs)" label))
+                   (t label)))
          (completed (member status '("completed" "failed")))
          (label-changed (and display (not (string-empty-p display))
                              (or (null prev) (not (string= prev display))))))

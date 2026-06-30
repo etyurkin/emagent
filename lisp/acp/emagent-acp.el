@@ -86,6 +86,45 @@
 
 
 (declare-function emagent-acp--read-labeled-choice "emagent-acp-model")
+(declare-function emagent-chat-session-id "emagent-chat")
+(declare-function emagent-chat-project-directory "emagent-chat")
+(declare-function emagent-permissions-reset-global "emagent-permissions")
+(declare-function emagent-permissions-reset-session "emagent-permissions")
+(declare-function emagent-permissions-reset-project "emagent-permissions")
+
+(defun emagent-reset-permissions ()
+  "Reset stored emagent permissions via a minibuffer menu.
+
+Choices:
+  project: all      — clears fingerprints and allowed tools for the current
+                      project directory
+  project: session  — clears fingerprints and auto-approve for the current
+                      ACP session
+  global: all       — clears all globally approved fingerprints"
+  (interactive)
+  (unless (derived-mode-p 'emagent-mode)
+    (user-error "Not in an emagent buffer"))
+  (let* ((session-id (emagent-chat-session-id))
+         (project-dir (emagent-chat-project-directory))
+         (choices
+          (delq nil
+                (list
+                 (when project-dir  "project: all")
+                 (when session-id   "project: session")
+                 "global: all")))
+         (choice (completing-read "Reset permissions: " choices nil t)))
+    (pcase choice
+      ("project: all"
+       (unless project-dir (user-error "No project directory for this buffer"))
+       (emagent-permissions-reset-project project-dir)
+       (message "emagent: cleared project permissions for %s" project-dir))
+      ("project: session"
+       (unless session-id (user-error "No active session for this buffer"))
+       (emagent-permissions-reset-session session-id)
+       (message "emagent: cleared session permissions for session %s" session-id))
+      ("global: all"
+       (emagent-permissions-reset-global)
+       (message "emagent: cleared all global permissions")))))
 
 (defun emagent-set-model ()
   "Set the ACP model for the current emagent session."
