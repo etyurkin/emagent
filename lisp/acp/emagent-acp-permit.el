@@ -271,10 +271,12 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
    (t nil)))
 
 (defun emagent-acp--permission-decision-label (base-label choice)
-  "Return BASE-LABEL with permission CHOICE appended when known."
-  (if-let ((suffix (emagent-acp--permission-choice-label choice)))
-      (format "%s - %s" base-label suffix)
-    base-label))
+  "Return BASE-LABEL with permission CHOICE appended in parentheses when known."
+  (pcase choice
+    (:deny (format "%s (Denied)" base-label))
+    (_ (if-let ((suffix (emagent-acp--permission-choice-label choice)))
+           (format "%s (Allow: %s)" base-label suffix)
+         base-label))))
 
 (defun emagent-acp--show-permission-decision (state tool-call choice)
   "Update the permission tool-call line for TOOL-CALL with CHOICE."
