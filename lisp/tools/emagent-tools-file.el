@@ -23,9 +23,11 @@
 (require 'emagent-elisp)
 
 (defvar auto-insert)
+(defvar emagent-tools-show-written-buffer)
 
 (declare-function emagent-tools--root-directory "emagent-tools")
 (declare-function emagent-tools--buffer-mode "emagent-tools")
+(declare-function emagent-struct-write-required-p "emagent-struct")
 (declare-function magit-toplevel "magit-git")
 
 (defconst emagent-tools--icloud-dir
@@ -130,17 +132,42 @@ Each call is recorded as a single undoable change in the target buffer."
        (display-buffer buffer)))
     resolved))
 
+(defun emagent-tools--unified-diff (old new label)
+  "Return a unified diff string between OLD and NEW content for LABEL."
+  (if (string= old new)
+      ""
+    (let ((old-file (make-temp-file "emagent-old"))
+          (new-file (make-temp-file "emagent-new")))
+      (unwind-protect
+          (progn
+            (write-region old nil old-file nil 'silent)
+            (write-region new nil new-file nil 'silent)
+            (with-temp-buffer
+              (call-process "diff" nil t nil "-u"
+                            "--label" (concat "a/" label)
+                            "--label" (concat "b/" label)
+                            old-file new-file)
+              (buffer-string)))
+        (ignore-errors (delete-file old-file))
+        (ignore-errors (delete-file new-file))))))
+
 (defun emagent-tool-write-file (path content)
   "Write CONTENT to PATH through Emacs after user confirmation."
   (when (emagent-struct-write-required-p path)
-    (user-error "Refusing write_file on %s: lisp-sitter is installed — use structural_* tools"
-                (emagent-tools--root-directory path)))
-  (let ((resolved (emagent-tools--root-directory path)))
+    (user-error
+     "Refusing write_file on %s: lisp-sitter is installed — use structural_* tools"
+     (emagent-tools--root-directory path)))
+  (let* ((resolved (emagent-tools--root-directory path))
+         (label (file-name-nondirectory resolved))
+         (old (emagent-tools--read-elisp-file-content path)))
     (when (emagent-tools--protected-fs-path-p path)
       (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
                   resolved))
     (emagent-tools--write-file-content path content)
-    (format "Wrote %s" resolved)))
+    (let ((diff (emagent-tools--unified-diff old content label)))
+      (if (string-empty-p diff)
+          (format "Wrote %s (no changes)" resolved)
+        diff))))
 
 (provide 'emagent-tools-file)
 ;;; emagent-tools-file.el ends here
