@@ -2,10 +2,12 @@
 #+AUTHOR: Evgeniy Tyurkin
 #+OPTIONS: toc:t num:nil
 
-Emacs-native ACP chat assistant for Emacs internals, elisp, and org-mode work.
-
-Emagent opens an org-mode scratch buffer per project, sends prompts to an external
-ACP agent (Cursor or Claude).
+Emagent splits responsibilities the way a serious integration should:
+intelligence stays in an external ACP agent (Cursor or Claude), execution stays
+local in GNU Emacs.  An in-process MCP server exposes Emacs capabilities to the
+agent; an ACP permission gate validates shell, elisp, and python before
+anything runs; the org buffer is the durable transcript (folded thinking, tool
+audit trail, resumable session metadata).
 
 * Requirements
 
