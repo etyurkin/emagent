@@ -108,10 +108,12 @@ and causes the next reconnect to fail.
 directory interactively.
 
 If both =cursor-agent= and =claude-agent-acp= are installed, emagent prompts
-which to use (defaulting to =emagent-default-provider=).  The chosen provider,
-session, project, model, allowed tools, and allowed permission fingerprints are
-saved in the buffer header as =#+EMAGENT_*= properties (including
-=#+EMAGENT_ALLOWED_TOOLS= and =#+EMAGENT_ALLOWED_PERMISSIONS=).
+which to use (defaulting to =emagent-default-provider=).  Agent, session id,
+model, and project directory are saved in the buffer header as
+=#+EMAGENT_AGENT=, =#+EMAGENT_SESSION=, =#+EMAGENT_MODEL=, and
+=#+EMAGENT_PROJECT= so you can save the =.org= file and reconnect later.
+Permission fingerprints and MCP tool allowlists persist under =~/.emagent/=
+(see *Permission storage*); emagent does not write new ones into the org header.
 
 After you choose an agent, emagent checks whether that workspace is already
 trusted for Claude Code (=~/.claude.json=) or Cursor (=~/.cursor/projects/...=).
@@ -139,7 +141,9 @@ the buffer after =emagent-trust-workspace= if the session was already connected.
 Save the buffer to a =.org= file (=C-x C-s=).  Each buffer begins with
 =# -*- mode: emagent -*-=, so Emacs recognizes it as an emagent session the next
 time the file is opened.  The persisted agent, session id, model, and project
-directory are all restored from the =#+EMAGENT_*= header.
+directory are restored from =#+EMAGENT_AGENT=, =#+EMAGENT_SESSION=,
+=#+EMAGENT_MODEL=, and =#+EMAGENT_PROJECT=.  Permission allowlists reload from
+=~/.emagent/= for the matching project and session id.
 
 *Deferred activation:* opening a saved session — via =find-file=, desktop
 restore, or the mode cookie — does *not* immediately start =emagent-mode= or
@@ -165,10 +169,6 @@ Agent responses appear as Org subsections under the =* user>= heading:
   shown as a leading comment inside the block (=# (Allow: Always)=).  Read,
   write, and other file-path tools stay as compact =→= lines.
 - =** Response= — the final assistant answer (Markdown converted to Org).
-
-Sessions saved in the legacy =# --- emagent ---= / =# --- /emagent ---= format
-are automatically migrated to the headline structure the first time they are
-opened in emagent-mode.
 
 ** Side notes while the agent is thinking (/btw/)
 
@@ -208,8 +208,22 @@ validates each request before replying.  The agent always receives a one-shot
 allow response (=allow_once=) — never =allow_always= — so every tool call still
 passes through the emagent gate even after you choose /Allow always/.
 
-Permission choices: =y= / =RET= (once), =s= (session), =w= (always, saved to
-=#+EMAGENT_ALLOWED_PERMISSIONS=), =a= (allow all for session), =n= (deny).
+Permission choices: =y= / =RET= (once), =s= (session →
+=~/.emagent/sessions/…=), =w= (always → =~/.emagent/global.json=), =a= (allow
+all for session), =n= (deny).
+
+** Permission storage
+
+Permission state lives under =emagent-permissions-directory= (default
+=~/.emagent=):
+
+| File | Contents |
+|------+----------|
+| =global.json= | Fingerprints from *Allow always* |
+| =sessions/SESSION.json= | Session fingerprints and auto-approve flag |
+| =projects/HASH.json= | Per-project MCP tool allowlist and project-scoped fingerprints |
+
+=M-x emagent-reset-permissions= clears entries in these files.
 
 To undo an accidentally-granted permission, use =M-x emagent-reset-permissions=
 (also in the =C-c ?= palette under Session).  A minibuffer menu offers:
@@ -222,6 +236,40 @@ writes, and harmless shell commands while still prompting for destructive
 operations (=rm -rf=, =dd=, dangerous =eval=, etc.).  Set to =t= to skip
 prompts for anything that passes validation.  This does not replace Claude Code's
 own permission and trust layers inside the agent process.
+
+** Permission policy
+
+Validation lives in =lisp/trust/emagent-policy.el= — a single engine with
+declarative rule tables:
+
+| Module | Checks |
+|--------+--------|
+| =emagent-policy-rules-shell.el= | Destructive shell (=rm -rf=, =dd=, =sudo rm=, pipe-to-shell, …) |
+| =emagent-policy-rules-elisp.el= | Blocked/dangerous symbols in =eval= |
+| =emagent-policy-rules-python.el= | Risky patterns in =python -c= and structural =.py= writes |
+
+Each rule is a plist: =:id=, =:severity= (=deny= / =confirm=), =:reason=, =:match=.
+Highest severity wins when several rules match.  Extend with
+=emagent-policy-extra-*-rules= without editing the built-in tables.
+
+Emagent applies these rules at the ACP permission gate *before* your Allow /
+Deny choice, and again when a tool actually runs (defense in depth).
+
+| What emagent sees | Result |
+|-------------------+--------|
+| =kill-emacs=, =pause-emacs= in =eval= | Hard *deny* — blocked with no Allow option |
+| =delete-file=, =shell-command=, =write-file=, … in =eval= | *Confirm* — extra prompt; re-checked at eval time |
+| Destructive shell (=rm -rf=, =dd=, …) | *Confirm* at the gate and in =run_shell_command= |
+| =delete_file= / =delete_directory= MCP tools | Inline prompt; path confined to session project root |
+
+Allow-always fingerprints do not override hard denies.  =:confirm= rules still
+require explicit approval for that operation even when =emagent-acp-auto-approve-permissions=
+is ='safe= or =t= (unless you already stored a matching fingerprint).
+
+Blocked elisp (=kill-emacs=, =pause-emacs=) and dangerous shell commands are
+denied or confirmed at the ACP gate; MCP skips a second confirm when the call
+comes from an ACP session (=emagent-tools--acp-session-p=) because the ACP gate
+already ran.
 
 Workspace trust helpers are split across =emagent-trust.el= (startup auto-trust),
 =emagent-trust-claude.el= (=~/.claude.json= / =hasTrustDialogAccepted=),
@@ -258,32 +306,13 @@ Toggle with =emagent-trust-enabled=.
 
 Destructive MCP tool calls (=write_file=, =delete_file=, etc.) prompt before
 running using inline buttons in the chat buffer.  =write_file= shows a unified
-diff before asking.  Answer /Allow all/ to remember a tool for the current
-buffer session (=#+EMAGENT_ALLOWED_TOOLS=).
+diff before asking.  Answer /Allow all/ to remember a tool for this project
+directory (=~/.emagent/projects/…=).
 
 ACP execute (shell) and eval requests go through the same permission gate
 described above.  Shell commands are also checked at execution time in
 =emagent-shell-run-command= (defense in depth for direct MCP =run_shell_command=
 calls).
-
-** Permission policy
-
-Validation lives in =lisp/trust/emagent-policy.el= — a single engine with
-declarative rule tables:
-
-| Module | Checks |
-|--------+--------|
-| =emagent-policy-rules-shell.el= | Destructive shell (=rm -rf=, =dd=, =sudo rm=, pipe-to-shell, …) |
-| =emagent-policy-rules-elisp.el= | Blocked/dangerous symbols in =eval= |
-| =emagent-policy-rules-python.el= | Risky patterns in =python -c= and structural =.py= writes |
-
-Each rule is a plist: =:id=, =:severity= (=deny= / =confirm=), =:reason=, =:match=.
-Highest severity wins when several rules match.  Extend with
-=emagent-policy-extra-*-rules= without editing the built-in tables.
-
-Blocked elisp (=kill-emacs=, =pause-emacs=) and dangerous shell commands are
-denied or confirmed at the ACP gate; MCP skips a second confirm when the call
-comes from an ACP session (=emagent-tools--acp-session-p=).
 
 ** Eval safety
 
