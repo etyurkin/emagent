@@ -23,6 +23,8 @@
 (require 'emagent-log)
 (require 'emagent-tools)
 (require 'emagent-acp-custom)
+
+(declare-function emagent-mcp--run-tool-async "emagent-mcp")
 (defun emagent-mcp--json-encode (object)
   "Serialize OBJECT to a JSON string."
   (json-serialize object :null-object :null :false-object :false))
@@ -51,27 +53,6 @@ A nil ID is serialized as JSON null (not an empty object)."
       (capabilities . ((tools . ((listChanged . :false)))))
       (serverInfo . ((name . ,emagent-mcp-server-name)
                      (version . "1.0.0"))))))
-
-(defun emagent-mcp--handle-tools-call (id params token)
-  "Handle a tools/call request; return a JSON-RPC response string."
-  (let* ((name (and (hash-table-p params) (gethash "name" params)))
-         (args (or (and (hash-table-p params) (gethash "arguments" params))
-                   (make-hash-table :test 'equal)))
-         (session (and token (gethash token emagent-mcp--sessions))))
-    (cond
-     ((null token)
-      (emagent-mcp--rpc-result
-       id (emagent-mcp--tool-content "No emagent session token in request path" t)))
-     ((null session)
-      (emagent-mcp--rpc-result
-       id (emagent-mcp--tool-content "Unknown or expired emagent session" t)))
-     (t
-      (condition-case err
-          (emagent-mcp--rpc-result
-           id (emagent-mcp--tool-content (emagent-mcp--run-tool name args session) nil))
-        (error
-         (emagent-mcp--rpc-result
-          id (emagent-mcp--tool-content (error-message-string err) t))))))))
 
 ;;;; HTTP layer
 
@@ -125,17 +106,31 @@ A nil ID is serialized as JSON null (not an empty object)."
 A tool call may prompt the user for confirmation, and Emacs cannot reliably
 read keyboard input from a process filter (keystrokes are dropped).  Running
 the call from an idle timer moves the prompt into the command loop where input
-works, and keeps Emacs responsive while the user decides.  The HTTP response
-is sent on PROC when the call completes."
+works, and keeps Emacs responsive while the user decides.
+
+The HTTP response is sent via a RESPOND callback that may be called either
+from within the idle timer (synchronous tools) or from a process sentinel
+after the subprocess exits (async tools such as run_shell_command), so Emacs
+stays fully responsive during long-running shell commands."
   (run-with-idle-timer
    0 nil
    (lambda ()
-     (let ((response (condition-case err
-                         (emagent-mcp--handle-tools-call id params token)
-                       (error (emagent-mcp--rpc-result
-                               id (emagent-mcp--tool-content
-                                   (error-message-string err) t))))))
-       (emagent-mcp--respond-json proc response)))))
+     (let* ((name (and (hash-table-p params) (gethash "name" params)))
+            (args (or (and (hash-table-p params) (gethash "arguments" params))
+                      (make-hash-table :test 'equal)))
+            (session (and token (gethash token emagent-mcp--sessions)))
+            (respond (lambda (result is-error)
+                       (emagent-mcp--respond-json
+                        proc
+                        (emagent-mcp--rpc-result
+                         id (emagent-mcp--tool-content result is-error))))))
+       (cond
+        ((null token)
+         (funcall respond "No emagent session token in request path" t))
+        ((null session)
+         (funcall respond "Unknown or expired emagent session" t))
+        (t
+         (emagent-mcp--run-tool-async name args session respond)))))))
 
 (defun emagent-mcp--dispatch (proc token message)
   "Dispatch a parsed JSON-RPC MESSAGE (hash-table) from PROC with TOKEN."

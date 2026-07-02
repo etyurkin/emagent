@@ -270,7 +270,7 @@ instead; emagent then writes whatever port it gets into the agent config."
          (lambda (args)
            (emagent-tool-where-is (emagent-mcp--arg args "command"))))
    (list "run_shell_command"
-         "Run a shell command through Emacs (shell-command-to-string) and return its output."
+         "Run a shell command through Emacs and return its output. The result is returned only when the process exits, so the MCP client may time out on commands that take longer than ~30 s (e.g. curl hitting a service paused in a debugger). For such commands use background execution: append '> /tmp/out.txt 2>&1 & echo \"PID: $!\"' so the shell exits immediately and you can read the result from the file later with read_file."
          '(("command" . ((type . "string")
                          (description . "The shell command line.")))
            ("directory" . ((type . "string")
@@ -278,7 +278,13 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("command")
          (lambda (args)
            (emagent-tool-run-shell-command (emagent-mcp--arg args "command")
-                                           (emagent-mcp--arg args "directory"))))
+                                           (emagent-mcp--arg args "directory")))
+         :async
+         (lambda (args cb)
+           (emagent-tool-run-shell-command-async
+            (emagent-mcp--arg args "command")
+            (emagent-mcp--arg args "directory")
+            cb)))
    (list "project_directory"
          "Return the session's project directory."
          '()
@@ -402,6 +408,46 @@ Only includes tools whose :available predicate passes."
                                        (and (boundp 'emagent-acp-prefer-emacs)
                                             emagent-acp-prefer-emacs))))
       (emagent-mcp--string-result (funcall handler args)))))
+
+(defun emagent-mcp--run-tool-async (name args session callback)
+  "Run tool NAME with ARGS in SESSION and deliver the result to CALLBACK.
+CALLBACK is called as (CALLBACK RESULT IS-ERROR).  Tools with an :async
+handler in the registry are non-blocking — CALLBACK is called from a
+process sentinel.  All other tools are synchronous and CALLBACK is called
+immediately before this function returns."
+  (let ((entry (emagent-mcp--tool-entry name)))
+    (cond
+     ((null entry)
+      (funcall callback (format "Unknown tool: %s" name) t))
+     ((not (emagent-mcp--tool-available-p entry))
+      (funcall callback (format "Tool %s is not available (install lisp-sitter)" name) t))
+     (t
+      (let* ((root (plist-get session :root))
+             (buffer (plist-get session :buffer))
+             (emagent-tools--project-directory (or root emagent-tools--project-directory))
+             (emagent-tools--root-boundary root)
+             (emagent-tools--session-allowed-tools
+              (emagent-mcp--session-allowed-tools buffer))
+             (emagent-tools-allow-all-function
+              (emagent-mcp--make-allow-all-fn buffer))
+             (emagent-tools--chat-buffer buffer)
+             (emagent-tools--acp-session-p t)
+             (emagent-acp-prefer-emacs (if session
+                                           (plist-get session :prefer-emacs)
+                                         (and (boundp 'emagent-acp-prefer-emacs)
+                                              emagent-acp-prefer-emacs)))
+             (async-fn (plist-get (nthcdr 5 entry) :async)))
+        (if async-fn
+            (condition-case err
+                (funcall async-fn args
+                         (lambda (result is-error)
+                           (funcall callback (emagent-mcp--string-result result) is-error)))
+              (error (funcall callback (error-message-string err) t)))
+          (condition-case err
+              (funcall callback
+                       (emagent-mcp--string-result (funcall (nth 4 entry) args))
+                       nil)
+            (error (funcall callback (error-message-string err) t)))))))))
 
 (provide 'emagent-mcp)
 ;;; emagent-mcp.el ends here

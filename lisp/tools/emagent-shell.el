@@ -289,6 +289,61 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
            (not (string-match-p "\\(?:--post\\|-O\\|--output-document\\|>[[:space:]]\\)" cmd))))
      (t nil))))
 
+(defun emagent-shell-run-command-async (command directory callback)
+  "Like `emagent-shell-run-command' but deliver the result via CALLBACK.
+CALLBACK is called as (CALLBACK OUTPUT IS-ERROR).  Synchronous guards
+(policy, --no-verify, push check) run immediately in the calling context.
+The final shell execution is non-blocking: CALLBACK is invoked from the
+process sentinel after the subprocess exits, so Emacs stays responsive."
+  (let* ((cmd (string-trim command))
+         (words (emagent-shell--words cmd))
+         (guard-error
+          (condition-case err
+              (progn
+                (emagent-policy-enforce (emagent-policy-check-shell cmd) cmd)
+                (when (and emagent-shell-block-no-verify
+                           (emagent-shell--git-no-verify-p cmd))
+                  (user-error
+                   "--no-verify bypasses pre-commit hooks. Fix the pre-commit issue instead."))
+                (when (emagent-shell--git-push-p cmd)
+                  (emagent-shell--guard-git-push directory))
+                nil)
+            (error (error-message-string err)))))
+    (if guard-error
+        (funcall callback guard-error t)
+      (if (emagent-shell--build-command-p words)
+          (condition-case err
+              (funcall callback (emagent-tool-compile cmd directory) nil)
+            (error (funcall callback (error-message-string err) t)))
+        (let ((redirected (emagent-shell--try-redirect cmd directory)))
+          (if redirected
+              (funcall callback redirected nil)
+            (let ((suggestion (emagent-shell--suggest-alternative cmd)))
+              (if suggestion
+                  (funcall callback suggestion t)
+                (let* ((default-directory (emagent-tools--root-directory directory))
+                       (limit emagent-tools--shell-output-limit)
+                       (buf (generate-new-buffer " *emagent-shell*")))
+                  (condition-case start-err
+                      (let ((proc (start-process-shell-command "emagent-shell" buf cmd)))
+                        (set-process-sentinel
+                         proc
+                         (lambda (_p _e)
+                           (unwind-protect
+                               (condition-case sentinel-err
+                                   (let ((output (with-current-buffer buf (buffer-string))))
+                                     (funcall callback
+                                              (if (> (length output) limit)
+                                                  (concat (substring output 0 limit)
+                                                          "\n… (output truncated)")
+                                                output)
+                                              nil))
+                                 (error (funcall callback (error-message-string sentinel-err) t)))
+                             (when (buffer-live-p buf) (kill-buffer buf))))))
+                    (error
+                     (when (buffer-live-p buf) (kill-buffer buf))
+                     (funcall callback (error-message-string start-err) t))))))))))))
+
 (defun emagent-shell-run-command (command &optional directory)
   "Run COMMAND with Emacs-native routing, guards, and redirects."
   (let* ((cmd (string-trim command))

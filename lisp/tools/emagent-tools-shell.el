@@ -144,11 +144,19 @@ agent's built-in WebSearch and shell tools are blocked."
         (kill-buffer result-buf)))))
 
 (declare-function emagent-shell-run-command "emagent-shell")
+(declare-function emagent-shell-run-command-async "emagent-shell")
 
 (defun emagent-tool-run-shell-command (command &optional directory)
   "Run COMMAND in DIRECTORY through Emacs, not an agent terminal."
   (require 'emagent-shell)
   (emagent-shell-run-command command directory))
+
+(defun emagent-tool-run-shell-command-async (command directory callback)
+  "Like `emagent-tool-run-shell-command' but call CALLBACK asynchronously.
+CALLBACK receives (OUTPUT IS-ERROR); for long-running commands Emacs
+stays responsive because no polling loop is used."
+  (require 'emagent-shell)
+  (emagent-shell-run-command-async command directory callback))
 
 (defun emagent-tool-grep (pattern &optional path)
   "Search for PATTERN under PATH and return matching lines as a string.

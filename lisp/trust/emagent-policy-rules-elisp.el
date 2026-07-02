@@ -14,6 +14,15 @@
   :type '(repeat symbol)
   :group 'emagent-policy)
 
+(defcustom emagent-policy-elisp-shell-blocked-symbols
+  '(shell-command shell-command-to-string
+    call-process call-process-shell-command process-file)
+  "Synchronous shell functions blocked in eval.
+These block Emacs until the subprocess exits; use the run_shell_command
+tool instead, which runs the process asynchronously."
+  :type '(repeat symbol)
+  :group 'emagent-policy)
+
 (defcustom emagent-policy-elisp-dangerous-symbols
   '(delete-file delete-directory
     rename-file rename-directory
@@ -21,8 +30,7 @@
     write-region write-file
     insert-file-contents
     load load-file load-library
-    shell-command shell-command-to-string
-    call-process start-process start-file-process process-file
+    start-process start-file-process
     kill-buffer kill-buffer-and-save)
   "Symbols in eval that require explicit user confirmation."
   :type '(repeat symbol)
@@ -40,6 +48,10 @@
      :severity deny
      :reason-kind blocked
      :match ((any-symbol . ,emagent-policy-elisp-blocked-symbols)))
+   `(:id elisp-shell-blocked
+     :severity deny
+     :reason "Synchronous shell functions block Emacs. Use the run_shell_command tool instead — it runs the process asynchronously."
+     :match ((any-symbol . ,emagent-policy-elisp-shell-blocked-symbols)))
    `(:id elisp-dangerous
      :severity confirm
      :reason-kind dangerous
