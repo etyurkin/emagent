@@ -363,7 +363,8 @@ read/write/search tools are not treated as shell commands."
 Explicit shell commands render as `sh' and eval forms as `elisp' (their detail
 is real code).  A structured CLI tool (grep, cat, ...) renders as `sh' with its
 detail reconstructed into a command line (e.g. grep PATTERN).  Any other tool
-renders as a block only when its detail spans multiple lines; single-line
+renders as a block when its detail spans multiple lines or exceeds
+`emagent-acp--tool-call-detail-limit' characters; shorter single-line
 details such as file paths stay as compact arrow lines."
   (let* ((command (emagent-acp--tool-call-shell-command update))
          (form (unless command (emagent-acp--tool-call-eval-form update)))
@@ -374,7 +375,9 @@ details such as file paths stay as compact arrow lines."
      (command (cons "sh" command))
      (form (cons "elisp" form))
      (cli (cons "sh" (format "%s %s" cli detail)))
-     ((and detail (string-match-p "\n" detail)) (cons "text" detail))
+     ((and detail (or (string-match-p "\n" detail)
+                      (> (length detail) emagent-acp--tool-call-detail-limit)))
+      (cons "text" detail))
      (t nil))))
 
 (defconst emagent-acp--tool-call-weak-details
