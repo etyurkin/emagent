@@ -4,7 +4,7 @@
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; URL: https://github.com/etyurkin/emagent
-;; Version: 1.0.0
+;; Version: 1.0.1
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: comm tools
 
@@ -352,7 +352,7 @@ When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
                                    :protocol-version 1
                                    :client-info `((name . "emagent")
                                                   (title . "Emagent")
-                                                  (version . "1.0.0")))
+                                                  (version . "1.0.1")))
                          :sync t)
                         (emagent-acp--model-entries-from-response
                          (emagent-acp-send-request

@@ -1,7 +1,7 @@
 ;;; emagent-struct.el --- Structural file editing via lisp-sitter CLI -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Version: 1.0.0
+;; Version: 1.0.1
 ;; Package-Requires: ((emacs "29.1"))
 
 ;;; Commentary:

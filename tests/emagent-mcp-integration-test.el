@@ -74,7 +74,7 @@
                 (resp nil)
                 (parsed nil))
            (puthash "name" "project_directory" params)
-           (setq resp (emagent-mcp--handle-tools-call 3 params token))
+           (setq resp (emagent-test--tools-call-sync 3 params token))
            (setq parsed (json-parse-string resp :object-type 'alist))
            (should (string-match-p (regexp-quote dir)
                                    (map-nested-elt parsed '(result content 0 text))))))))))
@@ -84,7 +84,7 @@
          (resp nil)
          (parsed nil))
     (puthash "name" "project_directory" params)
-    (setq resp (emagent-mcp--handle-tools-call 1 params nil))
+    (setq resp (emagent-test--tools-call-sync 1 params nil))
     (setq parsed (json-parse-string resp :object-type 'alist))
     (should (string-match-p "No emagent session token"
                             (map-nested-elt parsed '(result content 0 text))))))
@@ -96,7 +96,7 @@
             (resp nil)
             (parsed nil))
        (puthash "name" "not_a_real_tool" params)
-       (setq resp (emagent-mcp--handle-tools-call 2 params token))
+       (setq resp (emagent-test--tools-call-sync 2 params token))
        (setq parsed (json-parse-string resp :object-type 'alist))
        (should (string-match-p "Unknown tool"
                                (map-nested-elt parsed '(result content 0 text))))))))
@@ -170,7 +170,7 @@
                        args)
                      params)
             (setq parsed (json-parse-string
-                           (emagent-mcp--handle-tools-call 4 params token)
+                           (emagent-test--tools-call-sync 4 params token)
                            :object-type 'alist))
             (should (string-match-p "integration readme"
                                     (map-nested-elt parsed '(result content 0 text)))))))))))

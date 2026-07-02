@@ -52,7 +52,7 @@ A nil ID is serialized as JSON null (not an empty object)."
     `((protocolVersion . ,(or version emagent-mcp-protocol-version))
       (capabilities . ((tools . ((listChanged . :false)))))
       (serverInfo . ((name . ,emagent-mcp-server-name)
-                     (version . "1.0.0"))))))
+                     (version . "1.0.1"))))))
 
 ;;;; HTTP layer
 

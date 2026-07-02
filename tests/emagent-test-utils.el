@@ -110,6 +110,30 @@
         (with-current-buffer buffer (funcall fn token buffer))
       (remhash token emagent-mcp--sessions))))
 
+(defun emagent-test--tools-call-sync (id params token)
+  "Run tools/call synchronously for tests; return a JSON-RPC response string."
+  (let ((resp nil)
+        (name (and (hash-table-p params) (gethash "name" params)))
+        (args (or (and (hash-table-p params) (gethash "arguments" params))
+                  (make-hash-table :test 'equal)))
+        (session (and token (gethash token emagent-mcp--sessions))))
+    (cond
+     ((null token)
+      (setq resp (emagent-mcp--rpc-result
+                  id (emagent-mcp--tool-content
+                      "No emagent session token in request path" t))))
+     ((null session)
+      (setq resp (emagent-mcp--rpc-result
+                  id (emagent-mcp--tool-content
+                      "Unknown or expired emagent session" t))))
+     (t
+      (emagent-mcp--run-tool-async name args session
+                                   (lambda (result is-error)
+                                     (setq resp (emagent-mcp--rpc-result
+                                                 id (emagent-mcp--tool-content
+                                                     result is-error)))))))
+    resp))
+
 (defun emagent-test--capturing-response-sender (responses)
   "Return a response sender that pushes each RESPONSE onto list RESPONSES."
   (cl-function
