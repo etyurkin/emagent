@@ -118,7 +118,9 @@ Run \\[emagent-mode] to reconnect a saved session."
   (setq-local default-directory (emagent-chat--session-directory))
   (if (bound-and-true-p doom-modeline-mode)
       (emagent-chat--setup-doom-modeline)
-    (setq-local mode-line-format (list "" 'emagent-mode-line "")))
+    (setq-local mode-line-format
+                  (append (default-value 'mode-line-format)
+                          '(" " (:eval (emagent-mode-line))))))
   (org-indent-mode -1)
   (emagent-chat--disable-incompatible-org-minor-modes)
   (when-let ((dir (emagent-chat-project-directory)))
