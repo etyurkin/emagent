@@ -33,7 +33,20 @@
     (string-match-p "claude-agent-acp" launch)))
 
 (defun emagent-acp-claude--enrich-tool-call (_state update)
-  update)
+  "Normalize a claude-agent-acp tool-call update before display merging.
+claude-agent-acp echoes rawInput fields as the title on tool_call_update:
+title = rawInput.command for Bash, title = rawInput.description for Agent.
+Strip the redundant title so the stored display name (e.g. \"Terminal\",
+\"Task\") is kept and the rawInput field becomes the visible detail."
+  (let* ((raw (or (map-elt update 'rawInput) (map-elt update 'arguments)))
+         (title (map-elt update 'title)))
+    (if (and title (listp raw)
+             (let ((cmd (alist-get 'command raw))
+                   (desc (alist-get 'description raw)))
+               (or (and cmd (string= title cmd))
+                   (and desc (string= title desc)))))
+        (cons (cons 'title nil) update)
+      update)))
 
 (defun emagent-acp-claude--external-gate-reason (_state)
   'claude-agent-sdk)

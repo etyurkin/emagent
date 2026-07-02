@@ -317,7 +317,10 @@ real parameters live in arguments; prefer arguments when both are present."
 (defun emagent-acp--tool-call-detail (update)
   "Return a concise detail string from ACP tool-call UPDATE, or nil."
   (let ((input (emagent-acp--tool-call-input update)))
-    (or (emagent-acp--tool-call-raw-input-detail input)
+    (or (when-let ((desc (map-elt update 'description)))
+          (when (and (stringp desc) (not (string-empty-p (string-trim desc))))
+            (string-trim desc)))
+        (emagent-acp--tool-call-raw-input-detail input)
         (emagent-acp--tool-call-edits-detail input)
         (emagent-acp--tool-call-locations-detail (map-elt update 'locations))
         (let ((subtitle (map-elt update 'subtitle)))
@@ -462,7 +465,8 @@ details such as file paths stay as compact arrow lines."
 (defun emagent-acp--on-tool-call (state update)
   "Display or refresh a tool-call line from ACP UPDATE."
   (unless (map-elt state :replaying-history)
-    (let* ((id (map-elt update 'toolCallId))
+    (let* ((update (emagent-acp--provider-enrich-tool-call state update))
+           (id (map-elt update 'toolCallId))
            (status (map-elt update 'status))
            (kind (map-elt update 'kind))
            (merged (emagent-acp--merged-tool-call-update state update))
