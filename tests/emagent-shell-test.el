@@ -58,6 +58,68 @@
   (should (emagent-shell--read-only-network-p "curl -s https://example.com"))
   (should-not (emagent-shell--read-only-network-p "curl -X POST https://example.com")))
 
+;;;; fetch_url
+
+(require 'emagent-test-utils)
+(require 'emagent-tools)
+(require 'url)  ;; pre-load so cl-letf mocks aren't overwritten by require inside the function
+
+(defmacro emagent-shell-test--with-fake-url-retrieve (response &rest body)
+  "Run BODY with `url-retrieve' mocked to deliver RESPONSE string.
+RESPONSE should use \\n\\n (not \\r\\n\\r\\n) as the header/body separator,
+matching what the Emacs url package puts in its response buffers."
+  (declare (indent 1))
+  `(emagent-test--with-mocks
+       (((symbol-function 'url-retrieve)
+         (lambda (_url callback &optional _cbargs &rest _)
+           (with-temp-buffer
+             (insert ,response)
+             (funcall callback nil)))))
+     ,@body))
+
+(ert-deftest emagent-tools-fetch-url-test-invalid-url ()
+  "Non-http URLs are rejected synchronously without touching url-retrieve."
+  (let (got-result got-error)
+    (emagent-tool-fetch-url-async
+     (lambda (result is-error) (setq got-result result got-error is-error))
+     "ftp://example.com")
+    (should got-error)
+    (should (string-match-p "http" got-result))))
+
+(ert-deftest emagent-tools-fetch-url-test-cbargs-is-nil ()
+  "Regression: timer object must not be passed as CBARGS to url-retrieve.
+The bug caused Wrong type argument: listp in url-http-chunked-encoding-after-change-function."
+  (let (captured-cbargs called)
+    (emagent-test--with-mocks
+        (((symbol-function 'url-retrieve)
+          (lambda (_url _cb &optional cbargs &rest _)
+            (setq captured-cbargs cbargs called t))))
+      (emagent-tool-fetch-url-async #'ignore "http://example.com"))
+    (should called)
+    (should (null captured-cbargs))))
+
+(ert-deftest emagent-tools-fetch-url-test-success ()
+  "Body after the blank line separator is returned."
+  (emagent-shell-test--with-fake-url-retrieve "HTTP/1.1 200 OK\n\nHello!"
+    (let ((result (emagent-tool-fetch-url "http://example.com")))
+      (should (string= "Hello!" result)))))
+
+(ert-deftest emagent-tools-fetch-url-test-no-separator-yields-error ()
+  "Missing blank-line separator returns is-error=t, not an uncaught throw."
+  (let (got-error)
+    (emagent-shell-test--with-fake-url-retrieve "HTTP/1.1 200 OK\n"
+      (emagent-tool-fetch-url-async
+       (lambda (_result is-error) (setq got-error is-error))
+       "http://example.com"))
+    (should got-error)))
+
+(ert-deftest emagent-tools-fetch-url-test-truncation ()
+  "Body exceeding max-bytes is truncated and marked."
+  (emagent-shell-test--with-fake-url-retrieve
+      (concat "HTTP/1.1 200 OK\n\n" (make-string 200 ?x))
+    (let ((result (emagent-tool-fetch-url "http://example.com" 10)))
+      (should (string-match-p "truncated" result)))))
+
 (provide 'emagent-shell-test)
 
 ;;; emagent-shell-test.el ends here
