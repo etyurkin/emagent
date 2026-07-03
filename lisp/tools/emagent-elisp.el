@@ -128,18 +128,29 @@ Return a list of (POS . FORM) or signal with read error string."
   "Validate FORM-STR.  Return \"OK\" or an error description."
   (let* ((trimmed (string-trim (or form-str "")))
          (wrapped (emagent-elisp--wrap-form trimmed))
-         (err (emagent-elisp--validate-content wrapped)))
-    (if err
-        (format "SYNTAX ERROR -- %s\n\nFix the form and call check_elisp again before eval."
-                err)
-      "OK")))
+         (err (emagent-elisp--validate-content wrapped))
+         (doc-warn (unless err (emagent-elisp--check-docstrings trimmed))))
+    (cond
+     (err
+      (format "SYNTAX ERROR -- %s\n\nFix the form and call check_elisp again before eval."
+              err))
+     (doc-warn
+      (format "STYLE WARNING -- %s\n\nShorten docstring lines to ≤%d chars."
+              doc-warn emagent-elisp--docstring-max-line))
+     (t "OK"))))
 
 (defun emagent-elisp-check-file-content (content &optional path)
   "Validate Elisp file CONTENT.  Return \"OK\" or an error description."
-  (if-let ((err (emagent-elisp--validate-content-strict content path)))
+  (let ((err (emagent-elisp--validate-content-strict content path))
+        (doc-warn (emagent-elisp--check-docstrings content)))
+    (cond
+     (err
       (format "SYNTAX ERROR -- %s\n\nFix the file and call check_structural_file before writing."
-              err)
-    "OK"))
+              err))
+     (doc-warn
+      (format "STYLE WARNING -- %s\n\nShorten docstring lines to ≤%d chars."
+              doc-warn emagent-elisp--docstring-max-line))
+     (t "OK"))))
 
 ;; ── Path helpers ──────────────────────────────────────────────────
 
@@ -152,6 +163,40 @@ Return a list of (POS . FORM) or signal with read error string."
   (when (and (listp form) (memq (car form) '(defun cl-defun))
              (symbolp (nth 1 form)))
     (nth 1 form)))
+
+(defconst emagent-elisp--docstring-max-line 80
+  "Maximum allowed length for any single line of an Emacs Lisp docstring.")
+
+(defun emagent-elisp--form-docstring (form)
+  "Return the docstring of FORM as a string, or nil when absent."
+  (when (listp form)
+    (pcase (car form)
+      ((or 'defun 'cl-defun 'defmacro 'cl-defmacro)
+       (when (stringp (nth 3 form)) (nth 3 form)))
+      ((or 'defvar 'defconst 'defcustom 'defgroup 'defface)
+       (when (stringp (nth 3 form)) (nth 3 form))))))
+
+(defun emagent-elisp--check-docstrings (content)
+  "Return a warning string when any docstring line in CONTENT exceeds 80 chars.
+Returns nil when all docstrings are within the limit."
+  (condition-case nil
+      (let ((forms (emagent-elisp--read-forms content)))
+        (catch 'found
+          (dolist (pos-form forms)
+            (let* ((form (cdr pos-form))
+                   (name (and (listp form) (symbolp (nth 1 form)) (nth 1 form)))
+                   (doc (emagent-elisp--form-docstring form)))
+              (when doc
+                (dolist (line (split-string doc "\n"))
+                  (when (> (length line) emagent-elisp--docstring-max-line)
+                    (throw 'found
+                           (format "docstring line >%d chars in `%s': \"%s\""
+                                   emagent-elisp--docstring-max-line
+                                   (or name "?")
+                                   (truncate-string-to-width
+                                    line 60 nil nil "…"))))))))
+          nil))
+    (error nil)))
 
 (provide 'emagent-elisp)
 ;;; emagent-elisp.el ends here
