@@ -61,17 +61,6 @@
   (should (string-match-p "<conversation>" (emagent-chat--compress-prompt-text "hello")))
   (should (string-match-p "hello" (emagent-chat--compress-prompt-text "hello"))))
 
-(ert-deftest emagent-chat-test-apply-compression ()
-  (with-temp-buffer
-    (insert emagent-chat-initial-comment)
-    (insert (format "%sfirst\n\n# --- emagent ---\nreply\n# --- /emagent ---\n"
-                    (emagent-chat--user-heading-prefix)))
-    (emagent-chat--sync-user-zone-marker)
-    (emagent-chat-apply-compression "summary text")
-    (should (string-match-p "\\* emagent> \\[compressed\\]" (buffer-string)))
-    (should (string-match-p "summary text" (buffer-string)))
-    (should-not (string-match-p "first" (buffer-string)))))
-
 (ert-deftest emagent-chat-test-migrate-legacy-response-block ()
   (with-temp-buffer
     (insert (format "%srequest\n\n# --- emagent ---\n#+begin_quote Thinking\n,* heading\n,#+end_quote\n#+end_quote\n\n## Result title\nbody\n# --- /emagent ---\n"

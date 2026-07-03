@@ -46,7 +46,7 @@
 (declare-function emagent-chat-set-slash-commands "emagent-chat-slash")
 (declare-function emagent-chat--refresh-mode-line "emagent-chat-mode-line")
 (declare-function emagent-chat--spinner-start "emagent-chat-mode-line")
-(declare-function emagent-chat-apply-compression "emagent-chat-compress")
+(declare-function emagent-chat-finish-assistant "emagent-chat-render")
 
 (defun emagent-acp--notify-user (_state message)
   "Append MESSAGE to `emagent-log-buffer-name'."
@@ -137,12 +137,20 @@
   (when (map-elt state :prompt-finishing)
     (when-let ((buffer (emagent-acp--chat-buffer state)))
       (if (map-elt state :compress-pending)
-          (let ((summary (map-elt state :assistant-text)))
+          (let ((summary (string-trim (or (map-elt state :assistant-text) ""))))
             (map-put! state :compress-pending nil)
-            (with-current-buffer buffer
-              (emagent-chat-apply-compression summary))
-            (emagent-log "compressed session (%d chars)" (length (or summary "")))
-            (emagent-acp--new-session :state state))
+            (if (string-empty-p summary)
+                (progn
+                  (emagent-log "compression aborted: empty summary")
+                  (with-current-buffer buffer
+                    (when-let ((cb (map-elt state :cb-fail)))
+                      (funcall cb "Compression produced no summary; conversation left intact"))))
+              (with-current-buffer buffer
+                (emagent-chat-finish-assistant
+                 (format "*Context compacted.* Agent session reset; the summary below is its only memory of the prior conversation.\n\n%s"
+                         summary)))
+              (emagent-log "compressed session (%d chars)" (length summary))
+              (emagent-acp--new-session :state state :compressed-context summary)))
         (condition-case err
             (with-current-buffer buffer
               (when-let ((cb (map-elt state :cb-finish)))
