@@ -127,24 +127,6 @@ Signal an error when lisp-sitter exits non-zero."
              (funcall callback (string-trim output) nil)))
          emagent-struct-lisp-sitter-bin args))
 
-(defun emagent-struct--call-path (&rest args)
-  "Run lisp-sitter ARGS against a file path; return trimmed stdout."
-  (emagent-tools--run-async-sync
-   (lambda (cb)
-     (apply #'emagent-struct--call-path-async cb args))))
-
-(defun emagent-struct--call-path (&rest args)
-  "Run lisp-sitter ARGS against a file path; return trimmed stdout."
-  (emagent-struct--ensure)
-  (with-temp-buffer
-    (let ((exit (apply #'call-process emagent-struct-lisp-sitter-bin nil
-                      (current-buffer) nil args)))
-      (if (= exit 0)
-          (string-trim (buffer-string))
-        (error "lisp-sitter exited %d: %s" exit
-               (truncate-string-to-width
-                (car (split-string (buffer-string) "\n" t)) 80 nil nil "…"))))))
-
 (define-error 'emagent-struct-unavailable
   "lisp-sitter is not installed; install it with `make install` in the lisp-sitter repo"
   'error)
