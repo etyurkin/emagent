@@ -290,52 +290,50 @@ When RECURSIVE is non-nil, delete contents as well."
 
 (defun emagent-tool-fetch-url-async (callback url &optional max-bytes)
   "Fetch URL asynchronously; call CALLBACK with (body is-error)."
-  (unless (and (stringp url) (string-match-p "\\`https?://" url))
-    (funcall callback "fetch_url requires an http:// or https:// URL" t)
-    (cl-return-from emagent-tool-fetch-url-async))
-  (require 'url)
-  (let* ((limit (or max-bytes emagent-tools--fetch-url-limit))
-         (timeout-secs (if emagent-tools--timeout-override
-                           (emagent-tools--clamp-timeout
-                            emagent-tools--timeout-override)
-                         emagent-tools--fetch-url-timeout))
-         (done nil)
-         (timer nil)
-         (finish
-          (lambda (body is-error)
-            (unless done
-              (setq done t)
-              (when timer (cancel-timer timer))
-              (funcall callback body is-error)))))
-    (url-retrieve
-     url
-     (lambda (_status)
-       (let ((buf (current-buffer)))
-         (unwind-protect
-             (condition-case err
-                 (progn
-                   (goto-char (point-min))
-                   (unless (re-search-forward "\n\n" nil t)
-                     (funcall finish (format "No HTTP body in response from %s" url) t)
-                     (cl-return))
-                   (let ((body (buffer-substring-no-properties (point) (point-max))))
-                     (funcall finish
-                              (if (> (length body) limit)
-                                  (concat (substring body 0 limit)
-                                          "\n… (output truncated)")
-                                body)
-                              nil)))
-               (error (funcall finish (error-message-string err) t)))
-           (when (buffer-live-p buf)
-             (kill-buffer buf))))
-     nil t)
-    (setq timer
-          (run-with-timer
-           timeout-secs nil
-           (lambda ()
-             (funcall finish
-                      (emagent-tools--timeout-message timeout-secs)
-                      t)))))))
+  (if (not (and (stringp url) (string-match-p "\\`https?://" url)))
+      (funcall callback "fetch_url requires an http:// or https:// URL" t)
+    (require 'url)
+    (let* ((limit (or max-bytes emagent-tools--fetch-url-limit))
+           (timeout-secs (if emagent-tools--timeout-override
+                             (emagent-tools--clamp-timeout
+                              emagent-tools--timeout-override)
+                           emagent-tools--fetch-url-timeout))
+           (done nil)
+           (timer nil)
+           (finish
+            (lambda (body is-error)
+              (unless done
+                (setq done t)
+                (when timer (cancel-timer timer))
+                (funcall callback body is-error)))))
+      (url-retrieve
+       url
+       (lambda (_status)
+         (let ((buf (current-buffer)))
+           (unwind-protect
+               (condition-case err
+                   (progn
+                     (goto-char (point-min))
+                     (if (re-search-forward "\n\n" nil t)
+                         (let ((body (buffer-substring-no-properties (point) (point-max))))
+                           (funcall finish
+                                    (if (> (length body) limit)
+                                        (concat (substring body 0 limit)
+                                                "\n… (output truncated)")
+                                      body)
+                                    nil))
+                       (funcall finish (format "No HTTP body in response from %s" url) t)))
+                 (error (funcall finish (error-message-string err) t)))
+             (when (buffer-live-p buf)
+               (kill-buffer buf)))))
+       nil t)
+      (setq timer
+            (run-with-timer
+             timeout-secs nil
+             (lambda ()
+               (funcall finish
+                        (emagent-tools--timeout-message timeout-secs)
+                        t)))))))
 
 (defun emagent-tool-fetch-url (url &optional max-bytes)
   "Fetch URL over HTTP/HTTPS and return the response body as a string.
