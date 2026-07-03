@@ -860,6 +860,16 @@
     (should (string-match-p "org markup" prompt))
     (should (string-match-p "Tool preference" prompt))))
 
+(ert-deftest emagent-acp-session-test-session-system-prompt-compressed ()
+  (let ((summary "decided to use async runners"))
+    (should (string-match-p "Compressed prior conversation context"
+                            (emagent-acp--session-system-prompt summary)))
+    (should (string-match-p summary (emagent-acp--session-system-prompt summary)))
+    (should (string= (emagent-acp--system-prompt)
+                     (emagent-acp--session-system-prompt nil)))
+    (should (string= (emagent-acp--system-prompt)
+                     (emagent-acp--session-system-prompt "")))))
+
 (ert-deftest emagent-acp-session-test-mcp-http-capable-p ()
   (should (emagent-acp--mcp-http-capable-p
            '((agentCapabilities . ((mcpCapabilities . ((http . t))))))))
