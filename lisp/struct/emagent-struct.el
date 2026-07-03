@@ -65,9 +65,32 @@ Agents must use structural_* MCP tools for .el, .lisp, .cl, and .scm files."
 
 ;; ── CLI invocation ────────────────────────────────────────────────
 
+(declare-function emagent-tools--run-async-sync "emagent-tools-shell")
+(declare-function emagent-tools--run-process-async "emagent-tools-shell")
+(declare-function emagent-tools--run-process-input-async "emagent-tools-shell")
+
+(defun emagent-struct--lisp-sitter-error (output)
+  "Format non-zero lisp-sitter OUTPUT as an error string."
+  (truncate-string-to-width
+   (car (split-string output "\n" t)) 80 nil nil "…"))
+
+(defun emagent-struct--call-async (callback content &rest args)
+  "Pipe CONTENT to lisp-sitter ARGS; call CALLBACK with (output is-error)."
+  (emagent-struct--ensure)
+  (apply #'emagent-tools--run-process-input-async
+         (lambda (output is-error)
+           (if is-error
+               (funcall callback
+                        (format "lisp-sitter exited: %s"
+                                (emagent-struct--lisp-sitter-error output))
+                        t)
+             (funcall callback (string-trim output) nil)))
+         content emagent-struct-lisp-sitter-bin args))
+
 (defun emagent-struct--call (content &rest args)
   "Pipe CONTENT as stdin to lisp-sitter ARGS, return trimmed stdout.
 Signal an error when lisp-sitter exits non-zero."
+  (emagent-struct--ensure)
   (with-temp-buffer
     (let ((out (current-buffer))
           exit)
@@ -78,8 +101,37 @@ Signal an error when lisp-sitter exits non-zero."
       (if (= exit 0)
           (string-trim (buffer-string))
         (error "lisp-sitter exited %d: %s" exit
-               (truncate-string-to-width
-                (car (split-string (buffer-string) "\n" t)) 80 nil nil "…"))))))
+               (emagent-struct--lisp-sitter-error (buffer-string)))))))
+
+(defun emagent-struct--call-path (&rest args)
+  "Run lisp-sitter ARGS against a file path; return trimmed stdout."
+  (emagent-struct--ensure)
+  (with-temp-buffer
+    (let ((exit (apply #'call-process emagent-struct-lisp-sitter-bin nil
+                      (current-buffer) nil args)))
+      (if (= exit 0)
+          (string-trim (buffer-string))
+        (error "lisp-sitter exited %d: %s" exit
+               (emagent-struct--lisp-sitter-error (buffer-string)))))))
+
+(defun emagent-struct--call-path-async (callback &rest args)
+  "Run lisp-sitter ARGS against a file path; call CALLBACK with (output is-error)."
+  (emagent-struct--ensure)
+  (apply #'emagent-tools--run-process-async
+         (lambda (output is-error)
+           (if is-error
+               (funcall callback
+                        (format "lisp-sitter exited: %s"
+                                (emagent-struct--lisp-sitter-error output))
+                        t)
+             (funcall callback (string-trim output) nil)))
+         emagent-struct-lisp-sitter-bin args))
+
+(defun emagent-struct--call-path (&rest args)
+  "Run lisp-sitter ARGS against a file path; return trimmed stdout."
+  (emagent-tools--run-async-sync
+   (lambda (cb)
+     (apply #'emagent-struct--call-path-async cb args))))
 
 (defun emagent-struct--call-path (&rest args)
   "Run lisp-sitter ARGS against a file path; return trimmed stdout."
