@@ -29,13 +29,44 @@
 (defconst emagent-tools--grep-max-results 50)
 
 (defcustom emagent-tools-subprocess-timeout 60
-  "Seconds before killing an agent subprocess."
+  "Default seconds before killing an agent subprocess.
+Agent tools may override this per call up to
+`emagent-tools-subprocess-timeout-max'."
   :type 'integer
   :group 'emagent-tools)
 
+(defcustom emagent-tools-subprocess-timeout-max 300
+  "Maximum seconds an agent may request as a per-call subprocess timeout."
+  :type 'integer
+  :group 'emagent-tools)
+
+(defvar emagent-tools--timeout-override nil
+  "When non-nil, the per-call subprocess timeout requested by the agent.
+Bound dynamically around a tool call and read synchronously when a runner
+starts, so it is captured before any process wait.")
+
+(defun emagent-tools--clamp-timeout (secs)
+  "Clamp SECS to [1, `emagent-tools-subprocess-timeout-max']."
+  (max 1 (min secs emagent-tools-subprocess-timeout-max)))
+
 (defun emagent-tools--subprocess-timeout ()
-  "Return the configured agent subprocess timeout in seconds."
-  (max 1 emagent-tools-subprocess-timeout))
+  "Return the effective agent subprocess timeout in seconds.
+Honors `emagent-tools--timeout-override' when set, clamped to the max."
+  (emagent-tools--clamp-timeout
+   (or emagent-tools--timeout-override emagent-tools-subprocess-timeout)))
+
+(defun emagent-tools--timeout-message (secs &optional shell)
+  "Return a timeout error string for a SECS-second limit.
+When SHELL is non-nil, also suggest background execution."
+  (concat
+   (format
+    "Timed out after %ds. Retry with a larger `timeout` argument (up to %ds)."
+    secs emagent-tools-subprocess-timeout-max)
+   (when shell
+     (concat
+      " For genuinely long-running work, use background execution"
+      " (append ' > /tmp/out.txt 2>&1 & echo \"PID: $!\"') and read the"
+      " output file later with read_file."))))
 
 (defun emagent-tools--run-async-sync (async-fn &rest args)
   "Run ASYNC-FN with ARGS and a result callback; block until it finishes.
@@ -78,7 +109,7 @@ For tests and internal callers only — MCP agent tools use the async path."
                    (when (and proc (process-live-p proc))
                      (delete-process proc))
                    (funcall finish
-                            (format "Timed out after %ds" timeout-secs)
+                            (emagent-tools--timeout-message timeout-secs)
                             t))))
           (set-process-sentinel
            proc
@@ -134,7 +165,7 @@ For tests and internal callers only — MCP agent tools use the async path."
                    (when (and proc (process-live-p proc))
                      (delete-process proc))
                    (funcall finish
-                            (format "Timed out after %ds" timeout-secs)
+                            (emagent-tools--timeout-message timeout-secs)
                             t)))))
       (error (funcall finish (error-message-string start-err) t)))))
 
@@ -167,7 +198,7 @@ For tests and internal callers only — MCP agent tools use the async path."
                    (when (and proc (process-live-p proc))
                      (delete-process proc))
                    (funcall finish
-                            (format "Timed out after %ds" timeout-secs)
+                            (emagent-tools--timeout-message timeout-secs t)
                             t))))
           (set-process-sentinel
            proc
@@ -264,7 +295,10 @@ When RECURSIVE is non-nil, delete contents as well."
     (cl-return-from emagent-tool-fetch-url-async))
   (require 'url)
   (let* ((limit (or max-bytes emagent-tools--fetch-url-limit))
-         (timeout-secs emagent-tools--fetch-url-timeout)
+         (timeout-secs (if emagent-tools--timeout-override
+                           (emagent-tools--clamp-timeout
+                            emagent-tools--timeout-override)
+                         emagent-tools--fetch-url-timeout))
          (done nil)
          (timer nil)
          (finish
@@ -299,7 +333,9 @@ When RECURSIVE is non-nil, delete contents as well."
           (run-with-timer
            timeout-secs nil
            (lambda ()
-             (funcall finish (format "Failed to fetch %s (timeout)" url) t)))))))
+             (funcall finish
+                      (emagent-tools--timeout-message timeout-secs)
+                      t)))))))
 
 (defun emagent-tool-fetch-url (url &optional max-bytes)
   "Fetch URL over HTTP/HTTPS and return the response body as a string.
@@ -504,7 +540,7 @@ Uses pure Emacs search when `emagent-acp-prefer-emacs' is non-nil."
                      (when (process-live-p proc)
                        (delete-process proc))
                      (funcall finish
-                              (format "Timed out after %ds" timeout-secs)
+                              (emagent-tools--timeout-message timeout-secs t)
                               t))))
             (set-process-sentinel
              proc
