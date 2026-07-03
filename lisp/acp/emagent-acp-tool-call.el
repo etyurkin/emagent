@@ -404,12 +404,19 @@ details such as file paths stay as compact arrow lines."
     (let* ((t0 (downcase (string-trim title)))
            (d0 (downcase (string-trim detail)))
            (t1 (replace-regexp-in-string "^emagent-" "" t0))
-           (t2 (replace-regexp-in-string "^mcp_" "" t1)))
+           (t2 (replace-regexp-in-string "^mcp_" "" t1))
+           (basename (when (string-match-p "/" d0)
+                       (car (last (split-string d0 "/"))))))
       (or (string= t0 d0)
           (string= t1 d0)
           (string= t2 d0)
           (and (string-match-p ":" t0)
-               (string= (car (split-string t0 ":")) d0))))))
+               (string= (car (split-string t0 ":")) d0))
+          ;; Detail is an absolute path whose filename is already in the title
+          ;; (title carries a relative path; absolute path adds no new info).
+          (and basename
+               (not (string-empty-p basename))
+               (string-match-p (regexp-quote basename) t0))))))
 
 (defun emagent-acp--tool-call-displayable-p (state update)
   "Return non-nil when UPDATE should appear in the Thinking block."
@@ -433,8 +440,15 @@ details such as file paths stay as compact arrow lines."
          (detail (emagent-acp--tool-call-detail update)))
     (cond
      ((and detail (not (string-empty-p detail))
-           (not (string-match-p (regexp-quote detail) title)))
+           (not (string-match-p (regexp-quote detail) title))
+           (not (emagent-acp--tool-call-redundant-detail-p title detail)))
       (format "%s: %s" title (emagent-acp--tool-call-truncate detail)))
+     ;; Detail is redundant (basename already in title) or equals title: when
+     ;; it is an absolute path, the title carries a user-friendly relative path
+     ;; — prefer the title so the operation name and relative path stay visible.
+     ((and detail (not (string-empty-p detail))
+           (string-match-p "\\`/" (string-trim detail)))
+      title)
      ((and detail (not (string-empty-p detail))) detail)
      (t title))))
 

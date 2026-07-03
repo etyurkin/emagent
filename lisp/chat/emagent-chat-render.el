@@ -315,8 +315,13 @@ exactly one blank line, so the two never glue onto the same line."
     (insert safe)))
 
 (defun emagent-chat--org-verbatim-paths (text)
-  "Wrap absolute paths in org =verbatim= so /Users/ is not parsed as /italic/."
-  (replace-regexp-in-string "\\(/[^ \t\n]+\\)" "=\\1=" text))
+  "Wrap file paths in org =verbatim= to prevent /italic/ and =verbatim= glitches.
+Matches any token containing a / that follows whitespace, a colon, or the
+start of the string, so both absolute (/Users/...) and relative
+(project/src/...) paths are wrapped as a unit."
+  (replace-regexp-in-string
+   "\\(\\(?:^\\|[ \t:]\\)\\)\\([^ \t\n]+/[^ \t\n]*\\)"
+   "\\1=\\2=" text))
 
 (defun emagent-chat--format-tool-line (label)
   "Return a Thinking-block tool line for LABEL, safe in org-mode."
@@ -330,6 +335,23 @@ exactly one blank line, so the two never glue onto the same line."
   "Return the trailing decision/(Emacs) annotation in LABEL, or nil."
   (when (and label (string-match emagent-chat--tool-annotation-re label))
     (match-string 1 label)))
+
+(defun emagent-chat--tool-label-title-annotation (label)
+  "Return comment text for a text block: tool title plus decision annotation.
+Strips the path detail (already visible in the block code) to avoid redundancy."
+  (when label
+    (let* ((annotation (emagent-chat--tool-label-annotation label))
+           (base (if annotation
+                     (string-trim
+                      (replace-regexp-in-string
+                       (concat " *" (regexp-quote annotation) "\\'") "" label))
+                   (string-trim label)))
+           (title (if (string-match "\\`\\(.*?\\): [/~]" base)
+                      (match-string 1 base)
+                    base)))
+      (if (and annotation (not (string-empty-p annotation)))
+          (concat (string-trim title) " " annotation)
+        (string-trim title)))))
 
 (defun emagent-chat--src-comment-prefix (lang)
   "Return the line-comment prefix used inside a src block of LANG."
@@ -457,7 +479,10 @@ line, with LABEL's trailing decision/(Emacs) annotation beneath."
                        (blockp (and code (not (string-empty-p code)))))
                    (insert (if blockp
                                (emagent-chat--format-tool-block
-                                code lang (emagent-chat--tool-label-annotation label))
+                                code lang
+                                (if (equal lang "text")
+                                    (emagent-chat--tool-label-title-annotation label)
+                                  (emagent-chat--tool-label-annotation label)))
                              (emagent-chat--format-tool-line label)))
                    (let ((line-end (line-end-position)))
                      (when id
@@ -482,7 +507,10 @@ Return non-nil when a span was updated."
              (blockp (and code (not (string-empty-p code))))
              (display (if blockp
                           (emagent-chat--format-tool-block
-                           code lang (emagent-chat--tool-label-annotation label))
+                           code lang
+                           (if (equal lang "text")
+                               (emagent-chat--tool-label-title-annotation label)
+                             (emagent-chat--tool-label-annotation label)))
                         (emagent-chat--format-tool-line label))))
         (unless (string= (buffer-substring-no-properties start end) display)
           (save-excursion
@@ -630,9 +658,7 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                          (insert "  ")))
                      choices hints))
                   (insert "\n")
-                  (setq buttons-end (copy-marker (point) nil))
-                  (when-let ((stream (emagent-chat--reasoning-stream-marker)))
-                    (setq emagent-chat--thought-marker stream)))
+                  (setq buttons-end (copy-marker (point) nil)))
               (setq question-beg nil content-beg nil buttons-beg nil))))
         (emagent-chat--notify-inactive-update)
         (if (not buttons-beg)
