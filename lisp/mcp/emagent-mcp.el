@@ -110,6 +110,18 @@ instead; emagent then writes whatever port it gets into the agent config."
   "Return non-nil when KEY in ARGS is JSON true."
   (eq (emagent-mcp--arg args key) t))
 
+(defvar emagent-tools--timeout-override)
+
+(defun emagent-mcp--timeout (args)
+  "Return the integer `timeout' in ARGS, or nil when absent."
+  (let ((value (emagent-mcp--arg args "timeout")))
+    (and (integerp value) value)))
+
+(defconst emagent-mcp--timeout-prop
+  '(("timeout" . ((type . "integer")
+                  (description . "Optional seconds to wait before the subprocess is killed. Defaults to emagent-tools-subprocess-timeout; on timeout, retry with a larger value."))))
+  "Shared JSON-schema property for a per-call subprocess timeout.")
+
 (defun emagent-mcp--string-result (value)
   "Coerce a tool VALUE into a string for MCP text content."
   (cond
@@ -142,7 +154,13 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("path" "content")
          (lambda (args)
            (emagent-tool-write-file (emagent-mcp--arg args "path")
-                                    (emagent-mcp--arg args "content" ""))))
+                                    (emagent-mcp--arg args "content" "")))
+         :async
+         (lambda (args cb)
+           (emagent-tool-write-file-async
+            cb
+            (emagent-mcp--arg args "path")
+            (emagent-mcp--arg args "content" ""))))
    (list "undo_file"
          "Undo edits in a file's buffer and save. Use to revert a write_file change."
          '(("path" . ((type . "string")
@@ -179,14 +197,23 @@ instead; emagent then writes whatever port it gets into the agent config."
            (emagent-tool-list-files (emagent-mcp--arg args "path"))))
    (list "grep"
          "Search for a regexp under a directory; returns matching lines."
-         '(("pattern" . ((type . "string")
-                         (description . "Regexp to search for.")))
-           ("path" . ((type . "string")
-                      (description . "Directory to search; defaults to the session root."))))
+         (append
+          '(("pattern" . ((type . "string")
+                          (description . "Regexp to search for.")))
+            ("path" . ((type . "string")
+                       (description . "Directory to search; defaults to the session root."))))
+          emagent-mcp--timeout-prop)
          '("pattern")
          (lambda (args)
            (emagent-tool-grep (emagent-mcp--arg args "pattern")
-                              (emagent-mcp--arg args "path"))))
+                              (emagent-mcp--arg args "path")))
+         :async
+         (lambda (args cb)
+           (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
+             (emagent-tool-grep-async
+              cb
+              (emagent-mcp--arg args "pattern")
+              (emagent-mcp--arg args "path")))))
    (list "find_files"
          "List files matching a shell glob under a directory."
          '(("glob" . ((type . "string")
@@ -199,24 +226,40 @@ instead; emagent then writes whatever port it gets into the agent config."
                                     (emagent-mcp--arg args "path"))))
    (list "git_status"
          "Return git status for the session project directory."
-         '()
+         emagent-mcp--timeout-prop
          '()
          (lambda (_args)
-           (emagent-tool-git-status)))
+           (emagent-tool-git-status))
+         :async
+         (lambda (args cb)
+           (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
+             (emagent-tool-git-status-async cb))))
    (list "git_diff"
          "Return git diff output for the session project directory."
-         '(("args" . ((type . "string")
-                      (description . "Optional extra git diff arguments."))))
+         (append
+          '(("args" . ((type . "string")
+                       (description . "Optional extra git diff arguments."))))
+          emagent-mcp--timeout-prop)
          '()
          (lambda (args)
-           (emagent-tool-git-diff (emagent-mcp--arg args "args"))))
+           (emagent-tool-git-diff (emagent-mcp--arg args "args")))
+         :async
+         (lambda (args cb)
+           (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
+             (emagent-tool-git-diff-async cb (emagent-mcp--arg args "args")))))
    (list "git_log"
          "Return git log output for the session project directory."
-         '(("args" . ((type . "string")
-                      (description . "Optional extra git log arguments."))))
+         (append
+          '(("args" . ((type . "string")
+                       (description . "Optional extra git log arguments."))))
+          emagent-mcp--timeout-prop)
          '()
          (lambda (args)
-           (emagent-tool-git-log (emagent-mcp--arg args "args"))))
+           (emagent-tool-git-log (emagent-mcp--arg args "args")))
+         :async
+         (lambda (args cb)
+           (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
+             (emagent-tool-git-log-async cb (emagent-mcp--arg args "args")))))
    (list "eval"
          "Evaluate an Emacs Lisp form in the live Emacs and return the result. For small utilities and text processing, not shell. Filesystem and process ops are blocked here; use the dedicated tools."
          '(("form" . ((type . "string")
@@ -226,14 +269,23 @@ instead; emagent then writes whatever port it gets into the agent config."
            (emagent-tool-eval (emagent-mcp--arg args "form"))))
    (list "fetch_url"
          "Fetch an http(s) URL and return the response body. Use for live web data when the agent's WebSearch or shell tools are sandboxed; runs through Emacs network access."
-         '(("url" . ((type . "string")
-                     (description . "http:// or https:// URL to fetch.")))
-           ("max_bytes" . ((type . "integer")
-                           (description . "Optional maximum response size in bytes."))))
+         (append
+          '(("url" . ((type . "string")
+                      (description . "http:// or https:// URL to fetch.")))
+            ("max_bytes" . ((type . "integer")
+                            (description . "Optional maximum response size in bytes."))))
+          emagent-mcp--timeout-prop)
          '("url")
          (lambda (args)
            (emagent-tool-fetch-url (emagent-mcp--arg args "url")
-                                   (emagent-mcp--arg args "max_bytes"))))
+                                   (emagent-mcp--arg args "max_bytes")))
+         :async
+         (lambda (args cb)
+           (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
+             (emagent-tool-fetch-url-async
+              cb
+              (emagent-mcp--arg args "url")
+              (emagent-mcp--arg args "max_bytes")))))
    (list "apropos"
          "List Emacs symbols whose NAME matches a regexp. Use to discover functions and variables when you know part of the name."
          '(("pattern" . ((type . "string")
@@ -271,20 +323,23 @@ instead; emagent then writes whatever port it gets into the agent config."
            (emagent-tool-where-is (emagent-mcp--arg args "command"))))
    (list "run_shell_command"
          "Run a shell command through Emacs and return its output. The result is returned only when the process exits, so the MCP client may time out on commands that take longer than ~30 s (e.g. curl hitting a service paused in a debugger). For such commands use background execution: append '> /tmp/out.txt 2>&1 & echo \"PID: $!\"' so the shell exits immediately and you can read the result from the file later with read_file."
-         '(("command" . ((type . "string")
-                         (description . "The shell command line.")))
-           ("directory" . ((type . "string")
-                           (description . "Working directory; defaults to the session root."))))
+         (append
+          '(("command" . ((type . "string")
+                          (description . "The shell command line.")))
+            ("directory" . ((type . "string")
+                            (description . "Working directory; defaults to the session root."))))
+          emagent-mcp--timeout-prop)
          '("command")
          (lambda (args)
            (emagent-tool-run-shell-command (emagent-mcp--arg args "command")
                                            (emagent-mcp--arg args "directory")))
          :async
          (lambda (args cb)
-           (emagent-tool-run-shell-command-async
-            (emagent-mcp--arg args "command")
-            (emagent-mcp--arg args "directory")
-            cb)))
+           (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
+             (emagent-tool-run-shell-command-async
+              (emagent-mcp--arg args "command")
+              (emagent-mcp--arg args "directory")
+              cb))))
    (list "project_directory"
          "Return the session's project directory."
          '()
@@ -293,14 +348,23 @@ instead; emagent then writes whatever port it gets into the agent config."
            (emagent-tool-project-directory)))
    (list "compile"
          "Run a build or test command via Emacs compilation-mode. Errors appear in *emagent-compile* and are navigable with next-error / M-g n. Returns the full build output."
-         '(("command" . ((type . "string")
-                         (description . "The shell command to compile or test, e.g. 'mvn test', 'cargo build'.")))
-           ("directory" . ((type . "string")
-                           (description . "Working directory; defaults to the session root."))))
+         (append
+          '(("command" . ((type . "string")
+                          (description . "The shell command to compile or test, e.g. 'mvn test', 'cargo build'.")))
+            ("directory" . ((type . "string")
+                            (description . "Working directory; defaults to the session root."))))
+          emagent-mcp--timeout-prop)
          '("command")
          (lambda (args)
            (emagent-tool-compile (emagent-mcp--arg args "command")
-                                 (emagent-mcp--arg args "directory"))))
+                                 (emagent-mcp--arg args "directory")))
+         :async
+         (lambda (args cb)
+           (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
+             (emagent-tool-compile-async
+              cb
+              (emagent-mcp--arg args "command")
+              (emagent-mcp--arg args "directory")))))
    (list "buffer_list"
          "List open Emacs buffers that visit files inside the session project root. Use to see what the user is currently editing."
          '()

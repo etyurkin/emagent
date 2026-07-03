@@ -31,6 +31,12 @@
 (declare-function emagent-struct-convert-let-file "emagent-struct")
 (declare-function emagent-struct-splice-file "emagent-struct")
 (declare-function emagent-struct-raise-file "emagent-struct")
+(declare-function emagent-tools--run-async-sync "emagent-tools-shell")
+(declare-function emagent-tools--run-process-async "emagent-tools-shell")
+(declare-function emagent-struct--call-async "emagent-struct")
+(declare-function emagent-struct--call-path-async "emagent-struct")
+(declare-function emagent-struct--lang-for "emagent-struct")
+(declare-function emagent-struct-available-p "emagent-struct")
 (require 'emagent-elisp)
 (require 'emagent-tools-file)
 (require 'emagent-tools-intro)
@@ -211,6 +217,29 @@ nil or dead, calling CALLBACK with the chosen value."
   (or (memq tool-name emagent-allowed-tools)
       (memq tool-name emagent-tools--session-allowed-tools)))
 
+
+(defun emagent-tools--write-diff-string-async (callback resolved new-content)
+  "Compare RESOLVED with NEW-CONTENT; call CALLBACK with (diff is-error)."
+  (unless (executable-find "diff")
+    (funcall callback nil nil)
+    (cl-return-from emagent-tools--write-diff-string-async))
+  (let ((old-file (make-temp-file "emagent-old-"))
+        (new-file (make-temp-file "emagent-new-")))
+    (if (file-exists-p resolved)
+        (copy-file resolved old-file t)
+      (write-region "" nil old-file nil 'quiet))
+    (write-region new-content nil new-file nil 'quiet)
+    (emagent-tools--run-process-async
+     (lambda (output is-error)
+       (ignore-errors (delete-file old-file))
+       (ignore-errors (delete-file new-file))
+       (if (or is-error (string-empty-p output))
+           (funcall callback nil nil)
+         (funcall callback output nil)))
+     "diff" "-u"
+     "--label" (concat (file-name-nondirectory resolved) " (current)")
+     "--label" (concat (file-name-nondirectory resolved) " (proposed)")
+     old-file new-file)))
 
 (defun emagent-tools--write-diff-string (resolved new-content)
   "Return a unified diff string comparing RESOLVED with NEW-CONTENT, or nil."
@@ -586,6 +615,227 @@ Call this before writing non-trivial Elisp."
     (when emagent-struct-eval-after-structural-edit
       (ignore-errors (eval (read node))))
     (format "Wrote %s" (expand-file-name file))))
+
+(defun emagent-tools--structural-apply-async (callback file args)
+  "Run lisp-sitter ARGS on synced FILE; write result and call CALLBACK."
+  (apply #'emagent-struct--call-path-async
+         (lambda (result is-error)
+           (if is-error
+               (funcall callback result t)
+             (funcall callback
+                      (emagent-tools--structural-apply-file-result file result)
+                      nil)))
+         args))
+
+(defun emagent-tool-check-structural-file-async (callback file)
+  "Validate FILE with lisp-sitter asynchronously."
+  (if (emagent-struct-available-p)
+      (let ((content (emagent-tools--read-structural-file-content file)))
+        (apply #'emagent-struct--call-async
+               (lambda (out is-error)
+                 (if is-error
+                     (funcall callback out t)
+                   (funcall callback
+                            (if (string-match "^[^:]+: \\(.*\\)$" out)
+                                (match-string 1 out)
+                              out)
+                            nil)))
+               content "check" "-" "--lang" (emagent-struct--lang-for file)))
+    (funcall callback
+             (emagent-elisp-check-file-content
+              (emagent-tools--read-structural-file-content file) file)
+             nil)))
+
+(defun emagent-tool-check-structural-node-async (callback file node)
+  "Validate NODE text with lisp-sitter for FILE's language asynchronously."
+  (if (emagent-struct-available-p)
+      (apply #'emagent-struct--call-async callback node "check-node"
+             "--lang" (emagent-struct--lang-for file) "--body-file" "-")
+    (funcall callback
+             (if (string-match-p "\\.el\\'" file)
+                 (emagent-elisp-check-form node)
+               (format "No checker for %s (install lisp-sitter)" file))
+             nil)))
+
+(defun emagent-tool-structural-tree-async (callback file &optional depth)
+  "Return a structural outline of FILE asynchronously."
+  (if (emagent-struct-available-p)
+      (let* ((content (emagent-tools--read-structural-file-content file))
+             (args (list "tree" "-" "--json" "--lang"
+                         (emagent-struct--lang-for file))))
+        (when (and depth (> depth 1))
+          (setq args (append args (list "--depth" (number-to-string depth)))))
+        (apply #'emagent-struct--call-async callback content args))
+    (let ((content (emagent-tools--read-structural-file-content file)))
+      (funcall callback
+               (if (string-empty-p content)
+                   ""
+                 (format "install lisp-sitter to see structural outline of %s" file))
+               nil))))
+
+(defun emagent-tool-structural-get-async (callback file symbol)
+  "Return full text of top-level SYMBOL in FILE asynchronously."
+  (let ((content (emagent-tools--read-structural-file-content file)))
+    (apply #'emagent-struct--call-async callback content "get" "-" symbol
+           "--lang" (emagent-struct--lang-for file))))
+
+(defun emagent-tool-structural-find-errors-async (callback file)
+  "Return tree-sitter MISSING/ERROR nodes for FILE asynchronously."
+  (emagent-struct--call-path-async
+   callback "find-errors" (emagent-tools--structural-sync-path file)))
+
+(defun emagent-tool-structural-context-async (callback file)
+  "Return outline and full text of each top-level form in FILE asynchronously."
+  (emagent-struct--call-path-async
+   callback "context" (emagent-tools--structural-sync-path file)))
+
+(defun emagent-tool-structural-complete-async (callback lang body)
+  "Complete missing closing parens in BODY for LANG asynchronously."
+  (apply #'emagent-struct--call-async callback body "complete"
+         "--lang" lang "--body-file" "-"))
+
+(defun emagent-tool-structural-format-async (callback file &optional write)
+  "Re-indent FILE with lisp-sitter asynchronously."
+  (let* ((path (emagent-tools--structural-sync-path file))
+         (args (list "fmt" path)))
+    (when write (setq args (append args '("--write"))))
+    (if write
+        (apply #'emagent-struct--call-path-async
+               (lambda (result is-error)
+                 (if is-error
+                     (funcall callback result t)
+                   (funcall callback (format "Wrote %s" path) nil)))
+               args)
+      (apply #'emagent-struct--call-path-async callback args))))
+
+(defun emagent-tool-structural-rename-async (callback file old new &optional refs no-refs)
+  "Rename top-level form OLD to NEW in FILE asynchronously."
+  (let* ((path (emagent-tools--structural-sync-path file))
+         (args (list "rename" path old new)))
+    (when refs (setq args (append args '("--refs"))))
+    (when no-refs (setq args (append args '("--no-refs"))))
+    (emagent-tools--structural-apply-async callback file args)))
+
+(defun emagent-tool-structural-wrap-async (callback file symbol wrap
+                                                   &optional bindings condition)
+  "Wrap SYMBOL's body in WRAP in FILE asynchronously."
+  (let* ((path (emagent-tools--structural-sync-path file))
+         (args (list "wrap" path symbol "--in" wrap)))
+    (when bindings (setq args (append args (list "--bindings" bindings))))
+    (when condition (setq args (append args (list "--condition" condition))))
+    (emagent-tools--structural-apply-async callback file args)))
+
+(defun emagent-tool-structural-remove-async (callback file symbol &optional keep-calls)
+  "Remove top-level SYMBOL from FILE asynchronously."
+  (let* ((path (emagent-tools--structural-sync-path file))
+         (args (list "remove" path symbol)))
+    (when keep-calls (setq args (append args '("--keep-calls"))))
+    (emagent-tools--structural-apply-async callback file args)))
+
+(defun emagent-tool-structural-move-async (callback file symbol after)
+  "Move top-level SYMBOL after AFTER in FILE asynchronously."
+  (emagent-tools--structural-apply-async
+   callback file
+   (list "move" (emagent-tools--structural-sync-path file) symbol after)))
+
+(defun emagent-tool-structural-substitute-async (callback file symbol pattern replacement)
+  "Replace PATTERN with REPLACEMENT inside SYMBOL in FILE asynchronously."
+  (emagent-tools--structural-apply-async
+   callback file
+   (list "substitute" (emagent-tools--structural-sync-path file) symbol
+         "--pattern" pattern "--replacement" replacement)))
+
+(defun emagent-tool-structural-extract-async (callback file symbol pattern name
+                                                      &optional params)
+  "Extract PATTERN into new function NAME inside SYMBOL in FILE asynchronously."
+  (let* ((path (emagent-tools--structural-sync-path file))
+         (args (list "extract" path symbol "--pattern" pattern "--name" name)))
+    (when (and params (not (string-empty-p params)))
+      (setq args (append args (list "--params" params))))
+    (emagent-tools--structural-apply-async callback file args)))
+
+(defun emagent-tool-structural-callers-async (callback file symbol)
+  "Return callers of SYMBOL in FILE asynchronously."
+  (emagent-struct--call-path-async
+   callback "callers" (emagent-tools--structural-sync-path file) symbol))
+
+(defun emagent-tool-structural-instrument-async (callback file symbol
+                                                         &optional with at wrap)
+  "Instrument SYMBOL in FILE with tracing asynchronously."
+  (let* ((path (emagent-tools--structural-sync-path file))
+         (args (list "instrument" path symbol)))
+    (when with (setq args (append args (list "--with" with))))
+    (when at (setq args (append args (list "--at" at))))
+    (when wrap (setq args (append args (list "--wrap" wrap))))
+    (emagent-tools--structural-apply-async callback file args)))
+
+(defun emagent-tool-structural-flatten-async (callback file symbol)
+  "Inline SYMBOL at call sites in FILE asynchronously."
+  (emagent-tools--structural-apply-async
+   callback file
+   (list "flatten" (emagent-tools--structural-sync-path file) symbol)))
+
+(defun emagent-tool-structural-convert-let-async (callback file symbol to)
+  "Convert let/let* for SYMBOL to TO in FILE asynchronously."
+  (emagent-tools--structural-apply-async
+   callback file
+   (list "convert-let" (emagent-tools--structural-sync-path file) symbol "--to" to)))
+
+(defun emagent-tool-structural-splice-async (callback file symbol pattern)
+  "Splice PATTERN inside SYMBOL in FILE asynchronously."
+  (emagent-tools--structural-apply-async
+   callback file
+   (list "splice" (emagent-tools--structural-sync-path file) symbol "--pattern" pattern)))
+
+(defun emagent-tool-structural-raise-async (callback file symbol pattern)
+  "Raise PATTERN inside SYMBOL in FILE asynchronously."
+  (emagent-tools--structural-apply-async
+   callback file
+   (list "raise" (emagent-tools--structural-sync-path file) symbol "--pattern" pattern)))
+
+(defun emagent-tool-structural-bounds-async (callback file symbol)
+  "Return START:END byte positions for SYMBOL in FILE asynchronously."
+  (let ((content (emagent-tools--read-structural-file-content file)))
+    (apply #'emagent-struct--call-async callback content "bounds" "-" symbol
+           "--lang" (emagent-struct--lang-for file))))
+
+(defun emagent-tool-structural-replace-async (callback file symbol new-body)
+  "Replace top-level node SYMBOL in FILE with NEW-BODY asynchronously."
+  (condition-case err
+      (when-let ((guard (emagent-tools--eval-form-guard new-body)))
+        (user-error "%s" guard))
+    (error (funcall callback (error-message-string err) t)
+           (cl-return-from emagent-tool-structural-replace-async)))
+  (let* ((content (emagent-tools--read-structural-file-content file))
+         (lang (emagent-struct--lang-for file)))
+    (apply #'emagent-struct--call-async
+           (lambda (updated is-error)
+             (if is-error
+                 (funcall callback updated t)
+               (emagent-tools--write-file-content file updated)
+               (when emagent-struct-eval-after-structural-edit
+                 (ignore-errors (eval (read new-body))))
+               (funcall callback (format "Wrote %s" (expand-file-name file)) nil)))
+           content "replace" "-" symbol "--body" new-body "--lang" lang)))
+
+(defun emagent-tool-structural-insert-async (callback file after-symbol node)
+  "Insert complete top-level NODE after AFTER-SYMBOL in FILE asynchronously."
+  (condition-case err
+      (when-let ((guard (emagent-tools--eval-form-guard node)))
+        (user-error "%s" guard))
+    (error (funcall callback (error-message-string err) t)
+           (cl-return-from emagent-tool-structural-insert-async)))
+  (let* ((content (emagent-tools--read-structural-file-content file))
+         (lang (emagent-struct--lang-for file)))
+    (apply #'emagent-struct--call-async
+           (lambda (updated is-error)
+             (if is-error
+                 (funcall callback updated t)
+               (emagent-tools--write-file-content file updated)
+               (when emagent-struct-eval-after-structural-edit
+                 (ignore-errors (eval (read node))))
+               (funcall callback (format "Wrote %s" (expand-file-name file)) nil)))
+           content "insert" "-" after-symbol "--node" node "--lang" lang)))
 
 (defun emagent-tool-check-elisp (form)
   "Check FORM for Emacs Lisp syntax errors without executing it.
