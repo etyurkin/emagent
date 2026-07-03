@@ -21,7 +21,7 @@
 
 ;; /compress, /compact, /summarize slash command support.
 ;; Manages conversation boundary detection, history extraction,
-;; compression prompt assembly, and applying the result.
+;; compression prompt assembly, and session context reset via ACP.
 
 ;;; Code:
 
@@ -93,22 +93,7 @@
             body)))
 
 ;;;###autoload
-(defun emagent-chat-apply-compression (summary-text)
-  "Replace conversation history with compressed SUMMARY-TEXT."
-  (let ((inhibit-read-only t)
-        (summary (string-trim (or summary-text ""))))
-    (emagent-chat--with-stable-view
-     (lambda ()
-       (emagent-chat--writable)
-       (let ((zone-start (emagent-chat--metadata-end)))
-         (goto-char zone-start)
-         (delete-region zone-start (point-max))
-         (unless (string-empty-p summary)
-           (insert (format "* emagent> [compressed]\n%s\n\n" summary)))
-         (insert (emagent-chat--user-heading-prefix))
-         (emagent-chat--reset-response-state)
-         (emagent-chat--sync-user-zone-marker)
-         (emagent-chat--maybe-font-lock-flush))))))
+
 
 (provide 'emagent-chat-compress)
 ;;; emagent-chat-compress.el ends here

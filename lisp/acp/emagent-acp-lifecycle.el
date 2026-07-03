@@ -108,7 +108,7 @@ grants full plan access (including Auto model) to this ACP session."
   (emagent-acp--reveal-buffer state)
   (when on-ready (funcall on-ready)))
 
-(cl-defun emagent-acp--new-session (&key state on-ready)
+(cl-defun emagent-acp--new-session (&key state on-ready compressed-context)
   (emagent-acp--progress state "creating session…")
   (emagent-acp--send-request
    :state state
@@ -116,7 +116,8 @@ grants full plan access (including Auto model) to this ACP session."
              :cwd (emagent-acp--session-cwd state)
              :mcp-servers (emagent-mcp-session-servers (map-elt state :mcp-http)
                                                        (emagent-acp--chat-buffer state))
-             :meta `((systemPrompt . ((append . ,(emagent-acp--system-prompt))))))
+             :meta `((systemPrompt . ((append . ,(emagent-acp--session-system-prompt
+                                                  compressed-context))))))
    :on-success (lambda (response)
                  (unless (fboundp 'emagent-acp--configure-model)
                    (require 'emagent-acp-model))
@@ -212,6 +213,7 @@ CALLBACKS is an alist of rendering callbacks keyed by:
 (declare-function emagent-acp--chat-buffer "emagent-acp-usage")
 (declare-function emagent-acp--reveal-buffer "emagent-acp-prompt")
 (declare-function emagent-acp--system-prompt "emagent-acp")
+(declare-function emagent-acp--session-system-prompt "emagent-acp")
 (declare-function emagent-acp--configure-model "emagent-acp-model")
 (declare-function emagent-acp--saved-session-id "emagent-acp-usage")
 (declare-function emagent-acp--subscribe "emagent-acp-notify")

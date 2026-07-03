@@ -61,13 +61,21 @@
           (when emagent-acp-prefer-emacs
             (emagent-prompts--structural-policy))))
 
+(defun emagent-acp--session-system-prompt (&optional compressed-context)
+  "Return the system prompt for session/new, optionally with COMPRESSED-CONTEXT."
+  (let ((summary (string-trim (or compressed-context ""))))
+    (if (string-empty-p summary)
+        (emagent-acp--system-prompt)
+      (concat (emagent-acp--system-prompt)
+              (format "\n\n[Compressed prior conversation context]\n%s"
+                      summary)))))
+
 (declare-function emagent-chat-clear-slash-commands "emagent-chat-slash")
 (declare-function emagent-chat-seed-cursor-slash-commands "emagent-chat-slash")
 (declare-function emagent-chat--bare-slash-command-p "emagent-chat-compress")
 (declare-function emagent-chat--compress-command-p "emagent-chat-compress")
 (declare-function emagent-chat--conversation-history-text "emagent-chat-compress")
 (declare-function emagent-chat--compress-prompt-text "emagent-chat-compress")
-(declare-function emagent-chat-apply-compression "emagent-chat-compress")
 (declare-function emagent-chat-show-tool-call "emagent-chat")
 (declare-function emagent-chat-permission-prompt "emagent-chat")
 (declare-function emagent-chat--open-response-p "emagent-chat")
