@@ -84,7 +84,14 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
   "Return non-nil when WORDS names a build/test/compile executable."
   (member (car words) emagent-shell--build-executables))
 
-(declare-function emagent-tools--run-git "emagent-tools")
+(declare-function emagent-tools--run-git-async "emagent-tools-shell")
+(declare-function emagent-tools--run-shell-async "emagent-tools-shell")
+(declare-function emagent-tool-compile-async "emagent-tools-shell")
+(declare-function emagent-tool-git-status-async "emagent-tools-shell")
+(declare-function emagent-tool-git-diff-async "emagent-tools-shell")
+(declare-function emagent-tool-git-log-async "emagent-tools-shell")
+(declare-function emagent-tool-grep-async "emagent-tools-shell")
+(declare-function emagent-tools--run-git "emagent-tools-shell")
 
 (defvar emagent-tools--shell-output-limit)
 
@@ -120,7 +127,6 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
                   "Branch '%s' has an already-merged PR. Checkout main, pull, and create a new branch instead."
                   branch))
              (require 'emagent-log)
-(require 'emagent-policy)
              (emagent-log "emagent: gh CLI not found; skipping merged-PR check for push"))))))))
 
 (defun emagent-shell--unquote (text)
@@ -289,12 +295,142 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
            (not (string-match-p "\\(?:--post\\|-O\\|--output-document\\|>[[:space:]]\\)" cmd))))
      (t nil))))
 
+(defun emagent-shell--guard-git-push-async (directory callback)
+  "Call CALLBACK with nil on success or an error string when push is blocked."
+  (if (not emagent-shell-guard-push)
+      (funcall callback nil)
+    (emagent-tools--run-git-async
+     (lambda (branch-out is-error)
+       (if is-error
+           (funcall callback branch-out)
+         (let ((branch (string-trim branch-out)))
+           (cond
+            ((or (null branch) (string-empty-p branch))
+             (funcall callback nil))
+            ((not (executable-find "gh"))
+             (require 'emagent-log)
+             (emagent-log "emagent: gh CLI not found; skipping merged-PR check for push")
+             (funcall callback nil))
+            (t
+             (emagent-tools--run-shell-async
+              (lambda (state-out is-error-gh)
+                (if is-error-gh
+                    (funcall callback nil)
+                  (if (string= (string-trim state-out) "MERGED")
+                      (funcall callback
+                               (format "Branch '%s' has an already-merged PR. Checkout main, pull, and create a new branch instead."
+                                       branch))
+                    (funcall callback nil))))
+              (format "gh pr view --head %s --json state -q .state 2>/dev/null"
+                      (shell-quote-argument branch))
+              directory))))))
+     "branch" "--show-current")))
+
+(defun emagent-shell--redirect-git-async (words callback)
+  (pcase words
+    (`("git" "status" . ,_)
+     (emagent-tool-git-status-async callback))
+    (`("git" "diff" . ,rest)
+     (emagent-tool-git-diff-async callback (and rest (string-join rest " "))))
+    (`("git" "log" . ,rest)
+     (emagent-tool-git-log-async callback (and rest (string-join rest " "))))
+    (_ (funcall callback nil nil))))
+
+(defun emagent-shell--redirect-cat-async (words callback)
+  (pcase words
+    (`("cat" ,path)
+     (funcall callback (emagent-tool-read-file (emagent-shell--unquote path)) nil))
+    (_ (funcall callback nil nil))))
+
+(defun emagent-shell--redirect-head-async (words callback)
+  (pcase words
+    (`("head" "-n" ,n ,path)
+     (funcall callback
+              (emagent-tool-read-file (emagent-shell--unquote path)
+                                      1 (string-to-number n))
+              nil))
+    (`("head" ,path)
+     (funcall callback
+              (emagent-tool-read-file (emagent-shell--unquote path) 1 10)
+              nil))
+    (_ (funcall callback nil nil))))
+
+(defun emagent-shell--redirect-grep-async (words directory callback)
+  (let ((pattern nil)
+        (path nil)
+        (skip-next nil))
+    (dolist (word (cdr words))
+      (cond
+       (skip-next (setq skip-next nil))
+       ((member word '("-r" "-R" "-n" "-H" "-h" "--color=auto" "--color=never"))
+        nil)
+       ((string-prefix-p "-" word)
+        (setq skip-next t))
+       ((null pattern)
+        (setq pattern (emagent-shell--unquote word)))
+       (t
+        (setq path (emagent-shell--unquote word)))))
+    (if pattern
+        (emagent-tool-grep-async callback pattern path)
+      (funcall callback nil nil))))
+
+(defun emagent-shell--redirect-rg-async (words directory callback)
+  (let ((pattern nil)
+        (path nil))
+    (dolist (word (cdr words))
+      (cond
+       ((and (string-prefix-p "-" word) (not (string-match-p "^-[0-9]+$" word)))
+        nil)
+       ((null pattern)
+        (setq pattern (emagent-shell--unquote word)))
+       (t
+        (setq path (emagent-shell--unquote word)))))
+    (if pattern
+        (emagent-tool-grep-async callback pattern path)
+      (funcall callback nil nil))))
+
+(defun emagent-shell--try-redirect-async (command directory callback)
+  "Run COMMAND via an emagent tool when it matches; call CALLBACK with result."
+  (if (not (emagent-shell--prefer-emacs-p))
+      (funcall callback nil nil)
+    (let* ((trimmed (string-trim command))
+           (words (emagent-shell--words trimmed))
+           (first (car words)))
+      (pcase first
+        ("git"
+         (emagent-shell--redirect-git-async words callback))
+        ("cat"
+         (emagent-shell--redirect-cat-async words callback))
+        ("head"
+         (emagent-shell--redirect-head-async words callback))
+        ("grep"
+         (emagent-shell--redirect-grep-async words directory callback))
+        ((or "rg" "ag")
+         (emagent-shell--redirect-rg-async words directory callback))
+        (_
+         (let ((found (emagent-shell--redirect-find trimmed directory)))
+           (if found
+               (funcall callback found nil)
+             (funcall callback nil nil))))))))
+
+(defun emagent-shell--run-command-body-async (cmd words directory callback)
+  "Run guarded shell CMD asynchronously; deliver via CALLBACK."
+  (if (emagent-shell--build-command-p words)
+      (emagent-tool-compile-async callback cmd directory)
+    (emagent-shell--try-redirect-async cmd directory
+     (lambda (redirected is-error)
+       (if redirected
+           (funcall callback redirected is-error)
+         (let ((suggestion (emagent-shell--suggest-alternative cmd)))
+           (if suggestion
+               (funcall callback suggestion t)
+             (emagent-tools--run-shell-async callback cmd directory))))))))
+
 (defun emagent-shell-run-command-async (command directory callback)
   "Like `emagent-shell-run-command' but deliver the result via CALLBACK.
 CALLBACK is called as (CALLBACK OUTPUT IS-ERROR).  Synchronous guards
-(policy, --no-verify, push check) run immediately in the calling context.
-The final shell execution is non-blocking: CALLBACK is invoked from the
-process sentinel after the subprocess exits, so Emacs stays responsive."
+(policy, --no-verify) run immediately; push guard, redirects, compile,
+and shell fallback are non-blocking."
   (let* ((cmd (string-trim command))
          (words (emagent-shell--words cmd))
          (guard-error
@@ -305,44 +441,18 @@ process sentinel after the subprocess exits, so Emacs stays responsive."
                            (emagent-shell--git-no-verify-p cmd))
                   (user-error
                    "--no-verify bypasses pre-commit hooks. Fix the pre-commit issue instead."))
-                (when (emagent-shell--git-push-p cmd)
-                  (emagent-shell--guard-git-push directory))
                 nil)
             (error (error-message-string err)))))
     (if guard-error
         (funcall callback guard-error t)
-      (if (emagent-shell--build-command-p words)
-          (condition-case err
-              (funcall callback (emagent-tool-compile cmd directory) nil)
-            (error (funcall callback (error-message-string err) t)))
-        (let ((redirected (emagent-shell--try-redirect cmd directory)))
-          (if redirected
-              (funcall callback redirected nil)
-            (let ((suggestion (emagent-shell--suggest-alternative cmd)))
-              (if suggestion
-                  (funcall callback suggestion t)
-                (let* ((default-directory (emagent-tools--root-directory directory))
-                       (limit emagent-tools--shell-output-limit)
-                       (buf (generate-new-buffer " *emagent-shell*")))
-                  (condition-case start-err
-                      (let ((proc (start-process-shell-command "emagent-shell" buf cmd)))
-                        (set-process-sentinel
-                         proc
-                         (lambda (_p _e)
-                           (unwind-protect
-                               (condition-case sentinel-err
-                                   (let ((output (with-current-buffer buf (buffer-string))))
-                                     (funcall callback
-                                              (if (> (length output) limit)
-                                                  (concat (substring output 0 limit)
-                                                          "\n… (output truncated)")
-                                                output)
-                                              nil))
-                                 (error (funcall callback (error-message-string sentinel-err) t)))
-                             (when (buffer-live-p buf) (kill-buffer buf))))))
-                    (error
-                     (when (buffer-live-p buf) (kill-buffer buf))
-                     (funcall callback (error-message-string start-err) t))))))))))))
+      (if (emagent-shell--git-push-p cmd)
+          (emagent-shell--guard-git-push-async
+           directory
+           (lambda (push-err)
+             (if push-err
+                 (funcall callback push-err t)
+               (emagent-shell--run-command-body-async cmd words directory callback))))
+        (emagent-shell--run-command-body-async cmd words directory callback)))))
 
 (defun emagent-shell-run-command (command &optional directory)
   "Run COMMAND with Emacs-native routing, guards, and redirects."

@@ -142,7 +142,13 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("path" "content")
          (lambda (args)
            (emagent-tool-write-file (emagent-mcp--arg args "path")
-                                    (emagent-mcp--arg args "content" ""))))
+                                    (emagent-mcp--arg args "content" "")))
+         :async
+         (lambda (args cb)
+           (emagent-tool-write-file-async
+            cb
+            (emagent-mcp--arg args "path")
+            (emagent-mcp--arg args "content" ""))))
    (list "undo_file"
          "Undo edits in a file's buffer and save. Use to revert a write_file change."
          '(("path" . ((type . "string")
@@ -186,7 +192,13 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("pattern")
          (lambda (args)
            (emagent-tool-grep (emagent-mcp--arg args "pattern")
-                              (emagent-mcp--arg args "path"))))
+                              (emagent-mcp--arg args "path")))
+         :async
+         (lambda (args cb)
+           (emagent-tool-grep-async
+            cb
+            (emagent-mcp--arg args "pattern")
+            (emagent-mcp--arg args "path"))))
    (list "find_files"
          "List files matching a shell glob under a directory."
          '(("glob" . ((type . "string")
@@ -202,21 +214,30 @@ instead; emagent then writes whatever port it gets into the agent config."
          '()
          '()
          (lambda (_args)
-           (emagent-tool-git-status)))
+           (emagent-tool-git-status))
+         :async
+         (lambda (_args cb)
+           (emagent-tool-git-status-async cb)))
    (list "git_diff"
          "Return git diff output for the session project directory."
          '(("args" . ((type . "string")
                       (description . "Optional extra git diff arguments."))))
          '()
          (lambda (args)
-           (emagent-tool-git-diff (emagent-mcp--arg args "args"))))
+           (emagent-tool-git-diff (emagent-mcp--arg args "args")))
+         :async
+         (lambda (args cb)
+           (emagent-tool-git-diff-async cb (emagent-mcp--arg args "args"))))
    (list "git_log"
          "Return git log output for the session project directory."
          '(("args" . ((type . "string")
                       (description . "Optional extra git log arguments."))))
          '()
          (lambda (args)
-           (emagent-tool-git-log (emagent-mcp--arg args "args"))))
+           (emagent-tool-git-log (emagent-mcp--arg args "args")))
+         :async
+         (lambda (args cb)
+           (emagent-tool-git-log-async cb (emagent-mcp--arg args "args"))))
    (list "eval"
          "Evaluate an Emacs Lisp form in the live Emacs and return the result. For small utilities and text processing, not shell. Filesystem and process ops are blocked here; use the dedicated tools."
          '(("form" . ((type . "string")
@@ -233,7 +254,13 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("url")
          (lambda (args)
            (emagent-tool-fetch-url (emagent-mcp--arg args "url")
-                                   (emagent-mcp--arg args "max_bytes"))))
+                                   (emagent-mcp--arg args "max_bytes")))
+         :async
+         (lambda (args cb)
+           (emagent-tool-fetch-url-async
+            cb
+            (emagent-mcp--arg args "url")
+            (emagent-mcp--arg args "max_bytes"))))
    (list "apropos"
          "List Emacs symbols whose NAME matches a regexp. Use to discover functions and variables when you know part of the name."
          '(("pattern" . ((type . "string")
@@ -300,7 +327,13 @@ instead; emagent then writes whatever port it gets into the agent config."
          '("command")
          (lambda (args)
            (emagent-tool-compile (emagent-mcp--arg args "command")
-                                 (emagent-mcp--arg args "directory"))))
+                                 (emagent-mcp--arg args "directory")))
+         :async
+         (lambda (args cb)
+           (emagent-tool-compile-async
+            cb
+            (emagent-mcp--arg args "command")
+            (emagent-mcp--arg args "directory"))))
    (list "buffer_list"
          "List open Emacs buffers that visit files inside the session project root. Use to see what the user is currently editing."
          '()

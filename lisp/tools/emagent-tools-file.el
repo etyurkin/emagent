@@ -29,6 +29,8 @@
 (declare-function emagent-tools--buffer-mode "emagent-tools")
 (declare-function emagent-struct-write-required-p "emagent-struct")
 (declare-function magit-toplevel "magit-git")
+(declare-function emagent-tools--run-async-sync "emagent-tools-shell")
+(declare-function emagent-tools--run-process-async "emagent-tools-shell")
 
 (defconst emagent-tools--icloud-dir
   (expand-file-name "~/Library/Mobile Documents/"))
@@ -132,6 +134,29 @@ Each call is recorded as a single undoable change in the target buffer."
        (display-buffer buffer)))
     resolved))
 
+(defun emagent-tools--unified-diff-async (callback old new label)
+  "Return unified diff between OLD and NEW for LABEL via CALLBACK."
+  (if (string= old new)
+      (funcall callback "" nil)
+    (let ((old-file (make-temp-file "emagent-old"))
+          (new-file (make-temp-file "emagent-new")))
+      (write-region old nil old-file nil 'silent)
+      (write-region new nil new-file nil 'silent)
+      (unless (executable-find "diff")
+        (ignore-errors (delete-file old-file))
+        (ignore-errors (delete-file new-file))
+        (funcall callback "" nil)
+        (cl-return-from emagent-tools--unified-diff-async))
+      (emagent-tools--run-process-async
+       (lambda (output is-error)
+         (ignore-errors (delete-file old-file))
+         (ignore-errors (delete-file new-file))
+         (funcall callback output is-error))
+       "diff" "-u"
+       "--label" (concat "a/" label)
+       "--label" (concat "b/" label)
+       old-file new-file))))
+
 (defun emagent-tools--unified-diff (old new label)
   "Return a unified diff string between OLD and NEW content for LABEL."
   (if (string= old new)
@@ -150,6 +175,36 @@ Each call is recorded as a single undoable change in the target buffer."
               (buffer-string)))
         (ignore-errors (delete-file old-file))
         (ignore-errors (delete-file new-file))))))
+
+(defun emagent-tool-write-file-async (callback path content)
+  "Write CONTENT to PATH; call CALLBACK with (result is-error)."
+  (condition-case err
+      (when (emagent-struct-write-required-p path)
+        (user-error
+         "Refusing write_file on %s: lisp-sitter is installed — use structural_* tools"
+         (emagent-tools--root-directory path)))
+    (error (funcall callback (error-message-string err) t)
+           (cl-return-from emagent-tool-write-file-async)))
+  (let* ((resolved (emagent-tools--root-directory path))
+         (label (file-name-nondirectory resolved))
+         (old (emagent-tools--read-elisp-file-content path)))
+    (condition-case err
+        (progn
+          (when (emagent-tools--protected-fs-path-p path)
+            (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
+                        resolved))
+          (emagent-tools--write-file-content path content)
+          (emagent-tools--unified-diff-async
+           (lambda (diff is-error)
+             (if is-error
+                 (funcall callback diff t)
+               (funcall callback
+                        (if (string-empty-p diff)
+                            (format "Wrote %s (no changes)" resolved)
+                          diff)
+                        nil)))
+           old content label))
+      (error (funcall callback (error-message-string err) t)))))
 
 (defun emagent-tool-write-file (path content)
   "Write CONTENT to PATH through Emacs after user confirmation."
