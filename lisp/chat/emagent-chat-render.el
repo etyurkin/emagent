@@ -439,10 +439,16 @@ the result reads `tool (Allow: X): detail' rather than appending at the end."
                                 (lambda (s) (string-match-p "/" s))
                                 parts)))
                 (if path-idx
-                    (let ((pre (string-join (seq-take parts path-idx) " "))
-                          (post (string-join (seq-drop parts path-idx) " ")))
-                      (concat (if (string-empty-p pre) "" (concat pre " "))
-                              annotation " " post))
+                    (let* ((pre (string-join (seq-take parts path-idx) " "))
+                           (post (string-join (seq-drop parts path-idx) " "))
+                           ;; Strip trailing ":" from "Tool:" and reattach after
+                           ;; annotation: "Tool (Allow: X): /path" not "Tool: (Allow: X) /path".
+                           (pre-clean (if (string-suffix-p ":" pre)
+                                          (substring pre 0 -1) pre))
+                           (sep (if (string-suffix-p ":" pre) ": " " ")))
+                      (concat (if (string-empty-p pre-clean) ""
+                                (concat pre-clean " "))
+                              annotation sep post))
                   ;; No path: insert annotation between "Tool" and ": detail"
                   ;; → "Tool (Allow: X): detail" instead of "Tool: detail (Allow: X)".
                   (let ((colon-pos (string-match ": " base)))
