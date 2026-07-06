@@ -457,6 +457,8 @@ Abbreviates to the operation verb when the block already carries the detail."
           (cond
            ;; Multi-line code: block shows it in full, arrow just names the tool.
            ((string-match-p "\n" code-trimmed) verb)
+           ;; Truncated label (ends with …): label IS the code but cut short.
+           ((string-match-p "…\\'" base) verb)
            ;; Single-line code that IS the label (or a suffix of it).
            ((and (not (string-empty-p code-trimmed))
                  (or (string= (string-trim-right base) code-trimmed)
