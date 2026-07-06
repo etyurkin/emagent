@@ -175,12 +175,14 @@
            "\\1\n\n\\2"
            result))
     ;; Insert a space when sentence-ending punctuation is immediately followed
-    ;; by a capital letter (agent chunks often lack the separating newline).
+    ;; by a capital letter.  Bind case-fold-search=nil so [A-Z] only matches
+    ;; true uppercase — without this, domain names like github.corp get spaces.
     (setq result
-          (replace-regexp-in-string
-           "\\([.?!]\\)\\([A-Z]\\)"
-           "\\1 \\2"
-           result))
+          (let ((case-fold-search nil))
+            (replace-regexp-in-string
+             "\\([.?!]\\)\\([A-Z]\\)"
+             "\\1 \\2"
+             result)))
     (setq result
           (replace-regexp-in-string
            "\\(|[^\n]*|\n\\)\\([^|\n#]\\)"
