@@ -379,7 +379,13 @@ details such as file paths stay as compact arrow lines."
      (form (cons "elisp" form))
      (cli (cons "sh" (format "%s %s" cli detail)))
      ((and detail (or (string-match-p "\n" detail)
-                      (> (length detail) emagent-acp--tool-call-detail-limit)))
+                      (> (length detail) emagent-acp--tool-call-detail-limit))
+           ;; Don't create a text block for an absolute path when the title
+           ;; already carries the user-friendly relative path — the arrow
+           ;; line from the label is cleaner in that case.
+           (not (emagent-acp--tool-call-redundant-detail-p
+                 (string-trim (or (map-elt update 'title) ""))
+                 detail)))
       (cons "text" detail))
      (t nil))))
 
@@ -423,10 +429,9 @@ details such as file paths stay as compact arrow lines."
   (let* ((title (string-trim (or (map-elt update 'title) "")))
          (detail (emagent-acp--tool-call-detail update)))
     (cond
-     ((and detail
-           (emagent-acp--tool-call-meaningful-detail-p update)
-           (not (emagent-acp--tool-call-redundant-detail-p title detail)))
-      t)
+     ;; Show when detail is meaningful — redundancy check belongs only in
+     ;; label-building/block-spec, not in the visibility decision.
+     ((and detail (emagent-acp--tool-call-meaningful-detail-p update)) t)
      ((and (not (string-empty-p title))
            (not (emagent-acp--tool-call-generic-title-p state title))
            (or (null detail) (string-empty-p detail)))
