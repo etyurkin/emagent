@@ -177,8 +177,8 @@ the hide when the response is fully complete and the session is idle."
 
 (defun emagent-chat--cancel-thought-flush ()
   "Flush any pending reasoning content and cancel the flush timer.
-On interrupt/cancel the incomplete code fence (if any) is closed into a proper
-org src block so the buffered content remains readable."
+Empty-lang fences (reasoning notes) are emitted as plain text; language-tagged
+fences are closed as org src blocks so buffered content stays readable."
   (when emagent-chat--thought-flush-timer
     (cancel-timer emagent-chat--thought-flush-timer)
     (setq emagent-chat--thought-flush-timer nil))
@@ -189,12 +189,13 @@ org src block so the buffered content remains readable."
     (let ((to-insert
            (concat
             (when fence
-              ;; Convert the incomplete fence to a closed org src block
-              (let* ((lang (emagent-chat--lang-from-src-tag (car fence)))
+              (let* ((raw-lang (car fence))
                      (body (string-trim-right (cdr fence))))
-                (if (string-empty-p body)
-                    ""
-                  (format "#+BEGIN_SRC %s\n%s\n#+END_SRC\n" lang body))))
+                (cond
+                 ((string-empty-p body) "")
+                 ((string-empty-p raw-lang) (concat body "\n"))
+                 (t (format "#+BEGIN_SRC %s\n%s\n#+END_SRC\n"
+                            (emagent-chat--lang-from-src-tag raw-lang) body)))))
             pending)))
       (when (and (not (string-empty-p to-insert))
                  (emagent-chat--open-response-p))
@@ -236,13 +237,17 @@ are closed, or (lang . body-so-far) for the last unclosed fence."
                 (progn
                   (setq incomplete (cons lang (substring text body-start)))
                   (setq pos (length text)))
-              ;; Complete fence — emit as org src block
+              ;; Complete fence — emit as org src block when lang is given,
+              ;; or as plain text (fence stripped) when lang is empty so
+              ;; reasoning notes wrapped in plain ``` don't become src blocks.
               (let* ((body-end (match-beginning 0))
                      (close-end (match-end 0))
                      (body (string-trim-right (substring text body-start body-end))))
-                (push (format "#+BEGIN_SRC %s\n%s\n#+END_SRC"
-                              (emagent-chat--lang-from-src-tag lang)
-                              body)
+                (push (if (string-empty-p lang)
+                          body
+                        (format "#+BEGIN_SRC %s\n%s\n#+END_SRC"
+                                (emagent-chat--lang-from-src-tag lang)
+                                body))
                       parts)
                 (setq pos close-end))))))))
     (unless incomplete
@@ -364,7 +369,7 @@ fences in `emagent-chat--fence-state' until the closing ``` arrives."
   (save-excursion
     (skip-chars-backward " \t\n")
     (beginning-of-line)
-    (looking-at-p "\\(?:→ \\|#\\+end_src\\)")))
+    (looking-at-p "\\(?:→ \\|#\\+[Ee][Nn][Dd]_[Ss][Rr][Cc]\\)")))
 
 (defun emagent-chat--newlines-before-point ()
   "Return the count of consecutive newlines immediately before point."
@@ -569,8 +574,8 @@ fontifies with the comment face natively.")
 
 (defun emagent-chat--separate-before-tool ()
   "Ensure point starts a fresh line, with a blank line before tool prose.
-Consecutive plain arrow lines stay adjacent; anything following #+end_src
-(i.e. the end of a src block) gets a blank line so blocks don't run together."
+Consecutive arrow lines stay adjacent; anything following a src block
+(#+end_src) gets a blank line so blocks don't run together."
   (unless (bolp) (insert "\n"))
   (unless (or (bobp)
               (save-excursion

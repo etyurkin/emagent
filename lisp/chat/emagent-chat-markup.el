@@ -185,10 +185,16 @@
   "Escape LINE so Org will not parse it as a headline or keyword.
 
 Reasoning is rendered as the body of the `** Thinking' subsection (not inside
-a block), so a leading `*' or `#' must be neutralized with a leading space."
-  (if (string-match-p "\\`[ \t]*[*#]" line)
-      (concat " " line)
-    line))
+a block), so a leading `*' or `#' must be neutralized with a leading space.
+Exception: `#+begin_src'/`#+end_src' markers inserted by our fence conversion
+must not be escaped — they need to remain valid org src block delimiters."
+  (cond
+   ;; Preserve org src block markers produced by emagent-chat--split-fences.
+   ((string-match-p "\\`#\\+\\(?:begin_src\\|end_src\\)\\b" (downcase line))
+    line)
+   ((string-match-p "\\`[ \t]*[*#]" line)
+    (concat " " line))
+   (t line)))
 
 ;;;###autoload
 (defun emagent-chat--escape-reasoning-text (text)
