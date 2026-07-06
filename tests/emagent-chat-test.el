@@ -535,8 +535,8 @@
             (should (string-match-p "#\\+begin_src sh" text))
             (should (string-match-p "python3 - <<'PY'" text))
             (should (string-match-p "#\\+end_src" text))
-            ;; block-only: no → line, and no =verbatim= path mangling.
-            (should-not (string-match-p "→ Shell" text))
+            ;; arrow names the tool above the block; no =verbatim= path mangling.
+            (should (string-match-p "→ Shell" text))
             (should-not (string-match-p "=/tmp=" text)))))))))
 
 (ert-deftest emagent-chat-test-tool-call-multiline-updates-in-place ()
@@ -583,13 +583,14 @@
           (goto-char (point-max))
           (emagent-chat--begin-response (point))
           (emagent-chat-begin-thought)
-          ;; A single long command (CODE provided) renders as a src block.
+          ;; A single long command (CODE provided) renders as a src block
+          ;; beneath an arrow line that names the tool.
           (emagent-chat-show-tool-call "id-c" "Shell: cargo" "sh"
                                        "cargo add foo --dry-run")
           (let ((text (substring-no-properties (buffer-string))))
             (should (string-match-p "#\\+begin_src sh" text))
             (should (string-match-p "cargo add foo --dry-run" text))
-            (should-not (string-match-p "→ Shell" text)))))))))
+            (should (string-match-p "→ Shell: cargo" text)))))))))
 
 (ert-deftest emagent-chat-test-tool-call-multiline-decision-annotation ()
   (emagent-test--with-emagent-buffer
@@ -604,9 +605,9 @@
            "id-blk" "Shell: run (Allow: Always)"
            "sh" "echo one\necho two")
           (let ((text (substring-no-properties (buffer-string))))
-            ;; annotation rides as a leading comment inside the block, not on
-            ;; the command lines or dangling beneath the block.
-            (should (string-match-p "#\\+begin_src sh\n# (Allow: Always)" text))
+            ;; annotation rides on the arrow line above the block, not on the
+            ;; command lines or dangling beneath the block.
+            (should (string-match-p "→ Shell (Allow: Always)" text))
             (should-not (string-match-p "echo two (Allow: Always)" text))
             (should-not (string-match-p "#\\+end_src\n(Allow: Always)" text)))))))))
 
@@ -642,9 +643,9 @@
           (emagent-chat-show-tool-call "id-b" "Read: /b.el")
           (let ((text (substring-no-properties (buffer-string))))
             ;; one blank line between prose and the first tool line,
-            (should (string-match-p "planning the change\n\n→ Read: =/a.el=" text))
+            (should (string-match-p "planning the change\n\n→ Read: /a.el" text))
             ;; but consecutive distinct tool lines stay adjacent.
-            (should (string-match-p "→ Read: =/a.el=\n→ Read: =/b.el=" text)))))))))
+            (should (string-match-p "→ Read: /a.el\n→ Read: /b.el" text)))))))))
 
 (ert-deftest emagent-chat-test-tool-call-block-then-thought-separated ()
   (emagent-test--with-emagent-buffer
@@ -719,7 +720,9 @@
                    (emagent-chat--escape-reasoning-text "#+end_quote")))
   (should (string= " * headline"
                    (emagent-chat--escape-reasoning-text "* headline")))
-  (should (string= "plain\n #+BEGIN_SRC elisp"
+  ;; #+begin_src/#+end_src markers are preserved (not space-escaped) so they
+  ;; stay valid org src-block delimiters.
+  (should (string= "plain\n#+BEGIN_SRC elisp"
                    (emagent-chat--escape-reasoning-text "plain\n#+BEGIN_SRC elisp"))))
 
 (ert-deftest emagent-chat-test-close-unclosed-code-fence ()

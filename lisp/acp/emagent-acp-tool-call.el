@@ -101,13 +101,16 @@ because generic names like `grep' collide with agent-native tools."
          (prev (and id labels (gethash id labels)))
          (decision (and id (when-let ((d (map-elt state :tool-call-decisions)))
                              (gethash id d))))
+         (completed (member status '("completed" "failed")))
          (display (cond
                    ((or (null label) (string-empty-p label)) label)
                    (decision (emagent-acp--permission-decision-label label decision))
                    ((emagent-acp--tool-call-emagent-tool-p merged)
-                    (format "%s (Emacs)" label))
+                    (format "%s (Allow: Emacs)" label))
+                   ;; Tool completed without ACP permission: the agent's own
+                   ;; allow-list permitted it directly — infer the decision.
+                   (completed (format "%s (Allow: Agent)" label))
                    (t label)))
-         (completed (member status '("completed" "failed")))
          (label-changed (and display (not (string-empty-p display))
                              (or (null prev) (not (string= prev display))))))
     (when label
@@ -360,6 +363,60 @@ read/write/search tools are not treated as shell commands."
          (word (car (split-string title "[^a-z0-9.+-]+" t))))
     (and word (member word emagent-acp--shell-tool-names) word)))
 
+(defconst emagent-acp--cli-tool-arg-order
+  '(("grep" pattern path glob)
+    ("rg" pattern path glob)
+    ("ripgrep" pattern path glob)
+    ("ag" pattern path glob)
+    ("find" path name glob pattern)
+    ("fd" pattern path)
+    ("sed" pattern file path)
+    ("awk" pattern file path)
+    ("cat" path file)
+    ("head" path file)
+    ("tail" path file)
+    ("ls" path directory dir))
+  "Ordered rawInput fields used to reconstruct a CLI tool command line.
+The car of each entry is the tool word; the rest name structured arguments
+in the order they should appear after it, so e.g. grep renders both its
+pattern and path rather than a single field.")
+
+(defun emagent-acp--tool-call-display-quote (value)
+  "Wrap VALUE in double quotes for shell-command display when it needs quoting.
+Only embedded double quotes are escaped; regexp backslashes are preserved so
+the displayed pattern matches what the agent actually searched for."
+  (if (and (stringp value)
+           (not (string-empty-p value))
+           (string-match-p "[][[:space:]\"'`$|&;<>()*?{}]" value))
+      (concat "\"" (replace-regexp-in-string "\"" "\\\\\"" value) "\"")
+    value))
+
+(defun emagent-acp--cli-command-args (data order)
+  "Return quoted argument strings for the ORDER fields present in DATA."
+  (delq nil
+        (mapcar
+         (lambda (key)
+           (when-let ((v (emagent-acp--tool-call-value-string
+                          (emagent-acp--tool-call-data-get data key))))
+             (let ((s (string-trim v)))
+               (unless (string-empty-p s)
+                 (emagent-acp--tool-call-display-quote s)))))
+         order)))
+
+(defun emagent-acp--tool-call-cli-command (update cli)
+  "Reconstruct a full command line for CLI tool word CLI from UPDATE, or nil.
+Unlike a single-field detail, this includes every recognized structured
+argument (e.g. grep's pattern and path) in a natural order so the rendered
+command is complete."
+  (when-let* ((raw (emagent-acp--tool-call-input update))
+              (data (emagent-acp--tool-call-normalize-data raw))
+              (order (cdr (assoc cli emagent-acp--cli-tool-arg-order))))
+    (let* ((nested (emagent-acp--tool-call-nested-raw-input data))
+           (args (or (and nested (emagent-acp--cli-command-args nested order))
+                     (emagent-acp--cli-command-args data order))))
+      (when args
+        (string-join (cons cli args) " ")))))
+
 
 (defun emagent-acp--tool-call-block-spec (update)
   "Return (LANG . CODE) when UPDATE should render as an Org src block, else nil.
@@ -377,9 +434,16 @@ details such as file paths stay as compact arrow lines."
     (cond
      (command (cons "sh" command))
      (form (cons "elisp" form))
-     (cli (cons "sh" (format "%s %s" cli detail)))
+     (cli (cons "sh" (or (emagent-acp--tool-call-cli-command update cli)
+                         (format "%s %s" cli detail))))
      ((and detail (or (string-match-p "\n" detail)
-                      (> (length detail) emagent-acp--tool-call-detail-limit)))
+                      (> (length detail) emagent-acp--tool-call-detail-limit))
+           ;; Don't create a text block for an absolute path when the title
+           ;; already carries the user-friendly relative path — the arrow
+           ;; line from the label is cleaner in that case.
+           (not (emagent-acp--tool-call-redundant-detail-p
+                 (string-trim (or (map-elt update 'title) ""))
+                 detail)))
       (cons "text" detail))
      (t nil))))
 
@@ -404,22 +468,28 @@ details such as file paths stay as compact arrow lines."
     (let* ((t0 (downcase (string-trim title)))
            (d0 (downcase (string-trim detail)))
            (t1 (replace-regexp-in-string "^emagent-" "" t0))
-           (t2 (replace-regexp-in-string "^mcp_" "" t1)))
+           (t2 (replace-regexp-in-string "^mcp_" "" t1))
+           (basename (when (string-match-p "/" d0)
+                       (car (last (split-string d0 "/"))))))
       (or (string= t0 d0)
           (string= t1 d0)
           (string= t2 d0)
           (and (string-match-p ":" t0)
-               (string= (car (split-string t0 ":")) d0))))))
+               (string= (car (split-string t0 ":")) d0))
+          ;; Detail is an absolute path whose filename is already in the title
+          ;; (title carries a relative path; absolute path adds no new info).
+          (and basename
+               (not (string-empty-p basename))
+               (string-match-p (regexp-quote basename) t0))))))
 
 (defun emagent-acp--tool-call-displayable-p (state update)
   "Return non-nil when UPDATE should appear in the Thinking block."
   (let* ((title (string-trim (or (map-elt update 'title) "")))
          (detail (emagent-acp--tool-call-detail update)))
     (cond
-     ((and detail
-           (emagent-acp--tool-call-meaningful-detail-p update)
-           (not (emagent-acp--tool-call-redundant-detail-p title detail)))
-      t)
+     ;; Show when detail is meaningful — redundancy check belongs only in
+     ;; label-building/block-spec, not in the visibility decision.
+     ((and detail (emagent-acp--tool-call-meaningful-detail-p update)) t)
      ((and (not (string-empty-p title))
            (not (emagent-acp--tool-call-generic-title-p state title))
            (or (null detail) (string-empty-p detail)))
@@ -433,8 +503,15 @@ details such as file paths stay as compact arrow lines."
          (detail (emagent-acp--tool-call-detail update)))
     (cond
      ((and detail (not (string-empty-p detail))
-           (not (string-match-p (regexp-quote detail) title)))
+           (not (string-match-p (regexp-quote detail) title))
+           (not (emagent-acp--tool-call-redundant-detail-p title detail)))
       (format "%s: %s" title (emagent-acp--tool-call-truncate detail)))
+     ;; Detail is redundant (basename already in title) or equals title: when
+     ;; it is an absolute path, the title carries a user-friendly relative path
+     ;; — prefer the title so the operation name and relative path stay visible.
+     ((and detail (not (string-empty-p detail))
+           (string-match-p "\\`/" (string-trim detail)))
+      title)
      ((and detail (not (string-empty-p detail))) detail)
      (t title))))
 

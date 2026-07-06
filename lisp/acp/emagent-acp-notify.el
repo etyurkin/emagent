@@ -31,16 +31,33 @@
     (pcase update-type
       ((or "agent_message_chunk" "agent_thought_chunk")
        (emagent-acp--trace "recv %s +%d" update-type (length text)))
-      ("tool_call"
-       (emagent-acp--trace "recv tool_call %s"
-                           (or title
-                               (map-nested-elt emagent-acp-notification '(params update toolCallId))
-                               "running")))
-      ("tool_call_update"
-       (emagent-acp--trace "recv tool_call_update %s"
-                           (or title
-                               (map-nested-elt emagent-acp-notification '(params update toolCallId))
-                               "running")))
+      ((or "tool_call" "tool_call_update")
+       (let* ((update (map-nested-elt emagent-acp-notification '(params update)))
+              (raw (or (map-elt update 'rawInput) (map-elt update 'arguments)))
+              (subtitle (map-elt update 'subtitle))
+              (locations (map-elt update 'locations))
+              (id (map-elt update 'toolCallId))
+              (raw-summary
+               (cond
+                ((or (null raw) (equal raw :null) (equal raw "")) nil)
+                ((hash-table-p raw)
+                 (format "keys(%s)"
+                         (string-join (hash-table-keys raw) ",")))
+                ((listp raw)
+                 (format "keys(%s)"
+                         (string-join (mapcar (lambda (p) (format "%s" (car p))) raw) ",")))
+                ((stringp raw)
+                 (format "str(%d)" (length raw)))
+                (t "?")))
+              (detail (or raw-summary
+                          (when subtitle (format "sub=%s" (truncate-string-to-width subtitle 40 nil nil "…")))
+                          (when locations (format "locs=%d" (length (append locations nil))))
+                          "no-detail")))
+         (emagent-acp--trace "recv %s %s [%s] %s"
+                             update-type
+                             (or title id "?")
+                             (or (map-elt update 'status) "")
+                             detail)))
       (_
        (emagent-acp--trace "recv %s" (or update-type "session/update"))))))
 

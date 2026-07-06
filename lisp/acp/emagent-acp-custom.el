@@ -150,6 +150,27 @@ agent regularly makes long chains of tool calls."
   :type 'integer
   :group 'emagent)
 
+(defcustom emagent-acp-prompt-retry-attempts 3
+  "How many times to try a prompt before showing a network error to the user.
+
+A prompt request that fails with a transient network error (see
+`emagent-acp--retriable-prompt-error-p', e.g. Cursor's
+\"RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh\")
+is retried automatically with exponential backoff up to this many total
+attempts.  Only after the last attempt fails is the error surfaced in the
+chat buffer.  Set to 1 to disable retries."
+  :type 'integer
+  :group 'emagent)
+
+(defcustom emagent-acp-prompt-retry-base-delay 1.5
+  "Base seconds for exponential backoff between retriable prompt retries.
+
+The delay before retry N (1-based) is BASE * 2^(N-1), so with the default
+1.5 the waits are roughly 1.5s, then 3s, then 6s.  See
+`emagent-acp-prompt-retry-attempts'."
+  :type 'number
+  :group 'emagent)
+
 (defcustom emagent-acp-trace nil
   "Log ACP wire events to `emagent-log-buffer-name'.
 
