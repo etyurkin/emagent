@@ -172,6 +172,7 @@ the hide when the response is fully complete and the session is idle."
         emagent-chat--thought-marker nil
         emagent-chat--reasoning-streamed-p nil
         emagent-chat--fence-state nil
+        emagent-chat--response-fence-state nil
         emagent-chat--permission-pending nil)
   (clrhash emagent-chat--tool-call-lines))
 
@@ -205,6 +206,11 @@ fences are closed as org src blocks so buffered content stays readable."
   "Streaming code-fence buffer for the open Thinking block.
 Nil when not inside a fenced code block.
 Non-nil: (lang . accumulated-body-so-far) while waiting for the closing ```.")
+
+(defvar-local emagent-chat--response-fence-state nil
+  "Streaming fence state for the response body.
+Nil when outside a fenced block; (lang . body-so-far) while buffering.
+Mirrors emagent-chat--fence-state but tracks the `** Response' stream.")
 
 (defvar-local emagent-chat--permission-pending nil
   "Non-nil while a permission dialog is active in the current buffer.
@@ -913,7 +919,9 @@ Keyboard shortcuts (via keymap text property on the buttons line):
             (point))))))
 
 (defun emagent-chat-append-assistant (text)
-  "Append streamed assistant TEXT under the `** Response' subsection."
+  "Append streamed assistant TEXT under the `** Response' subsection.
+Each chunk is passed through the streaming markdown->org converter so the
+buffer shows formatted org while the response is still arriving."
   (when (not (string-empty-p text))
     (emagent-chat--with-stable-view
       (lambda ()
@@ -922,7 +930,23 @@ Keyboard shortcuts (via keymap text property on the buttons line):
             (let ((inhibit-read-only t))
               (emagent-chat--writable)
               (emagent-chat-close-thought)
-              (let* ((existing (emagent-chat--response-body-bounds))
+              ;; Streaming markdown->org: feed chunk through the fence state
+              ;; machine, then apply inline conversions to the safe portion.
+              (let* ((combined (if emagent-chat--response-fence-state
+                                   (concat "```"
+                                           (car emagent-chat--response-fence-state)
+                                           "\n"
+                                           (cdr emagent-chat--response-fence-state)
+                                           text)
+                                 text))
+                     (result (emagent-chat--split-fences combined))
+                     (safe (let ((case-fold-search nil))
+                             (replace-regexp-in-string
+                              "`\\([^`\n]+\\)`" "=\\1="
+                              (replace-regexp-in-string
+                               "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*"
+                               (car result)))))
+                     (existing (emagent-chat--response-body-bounds))
                      (insert-at
                       (cond
                        ((and existing
@@ -933,10 +957,11 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                         (marker-position emagent-chat--assistant-marker))
                        (existing (cdr existing))
                        (t (emagent-chat--ensure-response-headline)))))
-                (when insert-at
+                (setq emagent-chat--response-fence-state (cdr result))
+                (when (and insert-at (not (string-empty-p safe)))
                   (save-excursion
                     (goto-char insert-at)
-                    (insert text)
+                    (insert safe)
                     (setq emagent-chat--assistant-marker (point-marker)))))
               (emagent-chat--maybe-font-lock-flush))))))))
 
@@ -977,6 +1002,9 @@ open one eagerly."
 
 (defun emagent-chat--finalize-streamed-assistant (converted)
   "Replace the `** Response' body with CONVERTED assistant text."
+  ;; Streaming fence state is no longer needed — finalization replaces the
+  ;; buffer content with the fully-converted text.
+  (setq emagent-chat--response-fence-state nil)
   (when-let ((content-start (or (car (emagent-chat--response-body-bounds))
                                 (emagent-chat--ensure-response-headline))))
     (let ((body-end (cdr (emagent-chat--open-response-body-bounds))))
