@@ -171,7 +171,8 @@ the hide when the response is fully complete and the session is idle."
         emagent-chat--thought-open-p nil
         emagent-chat--thought-marker nil
         emagent-chat--reasoning-streamed-p nil
-        emagent-chat--fence-state nil)
+        emagent-chat--fence-state nil
+        emagent-chat--permission-pending nil)
   (clrhash emagent-chat--tool-call-lines))
 
 (defun emagent-chat--cancel-thought-flush ()
@@ -203,6 +204,11 @@ org src block so the buffered content remains readable."
   "Streaming code-fence buffer for the open Thinking block.
 Nil when not inside a fenced code block.
 Non-nil: (lang . accumulated-body-so-far) while waiting for the closing ```.")
+
+(defvar-local emagent-chat--permission-pending nil
+  "Non-nil while a permission dialog is active in the current buffer.
+New tool-call lines are suppressed while a dialog awaits user input so the
+thinking block stays stable until the user responds.")
 
 (defun emagent-chat--split-fences (text)
   "Convert complete markdown fences in TEXT to org src blocks.
@@ -580,7 +586,8 @@ When ID is non-nil, remember the span for later in-place updates.  When CODE
 is non-empty, render it as an Org src block in LANG instead of a single →
 line, with LABEL's trailing decision/(Emacs) annotation beneath."
   (when (and label (not (string-empty-p label))
-               (emagent-chat--open-response-p))
+               (emagent-chat--open-response-p)
+               (not emagent-chat--permission-pending))
     (emagent-chat--with-stable-view
      (lambda ()
        (with-current-buffer (current-buffer)
@@ -712,7 +719,8 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                               (marker-buffer content-beg) (marker-buffer content-end))
                      (delete-region (marker-position content-beg) (marker-position content-end)))
                    (when-let ((stream (emagent-chat--reasoning-stream-marker)))
-                     (setq emagent-chat--thought-marker stream)))))))
+                     (setq emagent-chat--thought-marker stream))
+                   (setq emagent-chat--permission-pending nil))))))
         (with-current-buffer buf
           (let ((inhibit-read-only t))
             (emagent-chat--writable)
@@ -810,7 +818,8 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                          (insert "  ")))
                      choices hints))
                   (insert "\n")
-                  (setq buttons-end (copy-marker (point) nil)))
+                  (setq buttons-end (copy-marker (point) nil))
+                  (setq emagent-chat--permission-pending t))
               (setq question-beg nil content-beg nil buttons-beg nil))))
         (emagent-chat--notify-inactive-update)
         (if (not buttons-beg)
