@@ -101,13 +101,16 @@ because generic names like `grep' collide with agent-native tools."
          (prev (and id labels (gethash id labels)))
          (decision (and id (when-let ((d (map-elt state :tool-call-decisions)))
                              (gethash id d))))
+         (completed (member status '("completed" "failed")))
          (display (cond
                    ((or (null label) (string-empty-p label)) label)
                    (decision (emagent-acp--permission-decision-label label decision))
                    ((emagent-acp--tool-call-emagent-tool-p merged)
                     (format "%s (Emacs)" label))
+                   ;; Tool completed without ACP permission: the agent's own
+                   ;; allow-list permitted it directly — infer the decision.
+                   (completed (format "%s (Allow: Agent)" label))
                    (t label)))
-         (completed (member status '("completed" "failed")))
          (label-changed (and display (not (string-empty-p display))
                              (or (null prev) (not (string= prev display))))))
     (when label
