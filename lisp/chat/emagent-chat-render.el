@@ -443,8 +443,7 @@ so it is visible without scrolling on long paths."
 
 (defun emagent-chat--combined-arrow-label (label code &optional lang)
   "Return the arrow-line label for a combined arrow + block display.
-Abbreviates to the operation verb when the block already carries the detail,
-so the content is not duplicated on both the arrow and in the block."
+Abbreviates to the operation verb when the block already carries the detail."
   (let* ((annotation (emagent-chat--tool-label-annotation label))
          (base (if annotation
                    (string-trim
@@ -453,15 +452,18 @@ so the content is not duplicated on both the arrow and in the block."
                      "" label))
                  label))
          (code-trimmed (string-trim-right (or code "")))
+         (verb (car (split-string base "[ :/\n]" t)))
          (summary-base
-          (if (and (not (string-empty-p code-trimmed))
-                   (or ;; Label IS the code (command used as title)
-                       (string= (string-trim-right base) code-trimmed)
-                       (string-prefix-p base code-trimmed)
-                       ;; Label = "tool-name: code" (code is the suffix)
-                       (string-suffix-p code-trimmed base)))
-              (car (split-string base "[ :/]" t))
-            base)))
+          (cond
+           ;; Multi-line code: block shows it in full, arrow just names the tool.
+           ((string-match-p "\n" code-trimmed) verb)
+           ;; Single-line code that IS the label (or a suffix of it).
+           ((and (not (string-empty-p code-trimmed))
+                 (or (string= (string-trim-right base) code-trimmed)
+                     (string-prefix-p base code-trimmed)
+                     (string-suffix-p code-trimmed base)))
+            verb)
+           (t base))))
     (if annotation
         (concat summary-base " " annotation)
       summary-base)))

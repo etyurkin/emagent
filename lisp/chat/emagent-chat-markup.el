@@ -174,6 +174,13 @@
            "\\([^[:space:]\n|]\\)\n\\(|\\)"
            "\\1\n\n\\2"
            result))
+    ;; Insert a space when sentence-ending punctuation is immediately followed
+    ;; by a capital letter (agent chunks often lack the separating newline).
+    (setq result
+          (replace-regexp-in-string
+           "\\([.?!]\\)\\([A-Z]\\)"
+           "\\1 \\2"
+           result))
     (setq result
           (replace-regexp-in-string
            "\\(|[^\n]*|\n\\)\\([^|\n#]\\)"
