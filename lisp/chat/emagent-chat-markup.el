@@ -327,9 +327,14 @@ its own headings must nest beneath it rather than starting new turns."
    (emagent-chat--normalize-response-spacing
     (emagent-chat--convert-markdown-tables
      (emagent-chat--normalize-elisp-src-tags
-      (emagent-chat--convert-code-fences
-       (emagent-chat--fix-org-src-citations
-        (emagent-chat--unwrap-outer-org-src text))))))))
+      ;; Convert single-backtick inline code `foo` → =foo= after triple-backtick
+      ;; fences are already converted to #+BEGIN_SRC blocks, so this only affects
+      ;; inline code spans that are not inside any block.
+      (replace-regexp-in-string
+       "`\\([^`\n]+\\)`" "=\\1="
+       (emagent-chat--convert-code-fences
+        (emagent-chat--fix-org-src-citations
+         (emagent-chat--unwrap-outer-org-src text)))))))))
 
 (defvar-local emagent-chat--font-lock-deferred-p nil
   "When non-nil, defer org font-lock until the emagent buffer is active.")
