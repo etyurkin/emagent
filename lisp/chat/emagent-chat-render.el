@@ -170,15 +170,95 @@ the hide when the response is fully complete and the session is idle."
         emagent-chat--response-body-start nil
         emagent-chat--thought-open-p nil
         emagent-chat--thought-marker nil
-        emagent-chat--reasoning-streamed-p nil)
+        emagent-chat--reasoning-streamed-p nil
+        emagent-chat--fence-state nil
+        emagent-chat--response-fence-state nil
+        emagent-chat--permission-pending nil)
   (clrhash emagent-chat--tool-call-lines))
 
 (defun emagent-chat--cancel-thought-flush ()
-  "Discard pending reasoning chunks and cancel any flush timer."
+  "Flush any pending reasoning content and cancel the flush timer.
+Empty-lang fences (reasoning notes) are emitted as plain text; language-tagged
+fences are closed as org src blocks so buffered content stays readable."
   (when emagent-chat--thought-flush-timer
     (cancel-timer emagent-chat--thought-flush-timer)
     (setq emagent-chat--thought-flush-timer nil))
-  (setq emagent-chat--thought-pending ""))
+  (let ((fence emagent-chat--fence-state)
+        (pending emagent-chat--thought-pending))
+    (setq emagent-chat--fence-state nil
+          emagent-chat--thought-pending "")
+    (let ((to-insert
+           (concat
+            (when fence
+              (let* ((raw-lang (car fence))
+                     (body (string-trim-right (cdr fence))))
+                (cond
+                 ((string-empty-p body) "")
+                 ((string-empty-p raw-lang) (concat body "\n"))
+                 (t (format "#+BEGIN_SRC %s\n%s\n#+END_SRC\n"
+                            (emagent-chat--lang-from-src-tag raw-lang) body)))))
+            pending)))
+      (when (and (not (string-empty-p to-insert))
+                 (emagent-chat--open-response-p))
+        (emagent-chat--insert-thought-now to-insert)))))
+
+(defvar-local emagent-chat--fence-state nil
+  "Streaming code-fence buffer for the open Thinking block.
+Nil when not inside a fenced code block.
+Non-nil: (lang . accumulated-body-so-far) while waiting for the closing ```.")
+
+(defvar-local emagent-chat--response-fence-state nil
+  "Streaming fence state for the response body.
+Nil when outside a fenced block; (lang . body-so-far) while buffering.
+Mirrors emagent-chat--fence-state but tracks the `** Response' stream.")
+
+(defvar-local emagent-chat--permission-pending nil
+  "Non-nil while a permission dialog is active in the current buffer.
+New tool-call lines are suppressed while a dialog awaits user input so the
+thinking block stays stable until the user responds.")
+
+(defun emagent-chat--split-fences (text)
+  "Convert complete markdown fences in TEXT to org src blocks.
+Returns (safe-text . fence-state) where fence-state is nil when all fences
+are closed, or (lang . body-so-far) for the last unclosed fence."
+  (let ((pos 0)
+        (parts nil)
+        (incomplete nil))
+    (while (and (not incomplete) (string-match "```" text pos))
+      (let* ((fence-pos (match-beginning 0))
+             (after-fence (match-end 0)))
+        (push (substring text pos fence-pos) parts)
+        (cond
+         ;; No newline after ``` — partial lang tag at end of chunk
+         ((not (string-match "\n" text after-fence))
+          (setq incomplete (cons (substring text after-fence) ""))
+          (setq pos (length text)))
+         ;; Newline found — complete lang tag, look for closing ```
+         (t
+          (let* ((tag-end (match-beginning 0))
+                 (body-start (match-end 0))
+                 (lang (string-trim (substring text after-fence tag-end))))
+            (if (not (string-match "```" text body-start))
+                ;; No closing fence — buffer the rest
+                (progn
+                  (setq incomplete (cons lang (substring text body-start)))
+                  (setq pos (length text)))
+              ;; Complete fence — emit as org src block when lang is given,
+              ;; or as plain text (fence stripped) when lang is empty so
+              ;; reasoning notes wrapped in plain ``` don't become src blocks.
+              (let* ((body-end (match-beginning 0))
+                     (close-end (match-end 0))
+                     (body (string-trim-right (substring text body-start body-end))))
+                (push (if (string-empty-p lang)
+                          body
+                        (format "#+BEGIN_SRC %s\n%s\n#+END_SRC"
+                                (emagent-chat--lang-from-src-tag lang)
+                                body))
+                      parts)
+                (setq pos close-end))))))))
+    (unless incomplete
+      (push (substring text pos) parts))
+    (cons (apply #'concat (nreverse parts)) incomplete)))
 
 (defun emagent-chat--schedule-thought-flush ()
   "Debounce reasoning inserts using `emagent-chat-thought-stream-delay'."
@@ -209,16 +289,28 @@ the hide when the response is fully complete and the session is idle."
                   emagent-chat--reasoning-streamed-p t)))))))
 
 (defun emagent-chat--flush-thought-pending ()
-  "Insert any batched reasoning text into the open Thinking block."
+  "Insert any batched reasoning text into the open Thinking block.
+Converts complete markdown code fences to org src blocks; buffers incomplete
+fences in `emagent-chat--fence-state' until the closing ``` arrives."
   (when emagent-chat--thought-flush-timer
     (cancel-timer emagent-chat--thought-flush-timer)
     (setq emagent-chat--thought-flush-timer nil))
   (let ((text emagent-chat--thought-pending))
     (setq emagent-chat--thought-pending "")
     (when (not (string-empty-p text))
-      (emagent-chat--with-streaming-view
-       (lambda ()
-         (emagent-chat--insert-thought-now text))))))
+      ;; Prepend any previously buffered fence content before processing
+      (let* ((fence emagent-chat--fence-state)
+             (combined (if fence
+                           (concat "```" (car fence) "\n" (cdr fence) text)
+                         text))
+             (result (emagent-chat--split-fences combined))
+             (to-insert (car result))
+             (new-fence (cdr result)))
+        (setq emagent-chat--fence-state new-fence)
+        (when (not (string-empty-p to-insert))
+          (emagent-chat--with-streaming-view
+           (lambda ()
+             (emagent-chat--insert-thought-now to-insert))))))))
 
 (defun emagent-chat--ensure-response-markers ()
   "Set body markers for the open response when they were lost."
@@ -265,7 +357,11 @@ the hide when the response is fully complete and the session is idle."
                 (hide-at (emagent-chat--open-reasoning-begin)))
             (emagent-chat--writable)
             (when-let ((tail (emagent-chat--reasoning-block-tail)))
-              (setq emagent-chat--assistant-marker (copy-marker tail nil)))
+              ;; Only reset assistant-marker to the reasoning tail when response
+              ;; text hasn't started yet.  If the Response section already exists
+              ;; (streaming started), keep the marker tracking the response content.
+              (unless (emagent-chat--response-body-bounds)
+                (setq emagent-chat--assistant-marker (copy-marker tail nil))))
             (setq emagent-chat--thought-open-p nil
                   emagent-chat--thought-marker nil)
             (emagent-chat--maybe-font-lock-flush)
@@ -283,7 +379,7 @@ the hide when the response is fully complete and the session is idle."
   (save-excursion
     (skip-chars-backward " \t\n")
     (beginning-of-line)
-    (looking-at-p "\\(?:→ \\|#\\+end_src\\)")))
+    (looking-at-p "\\(?:→ \\|#\\+[Ee][Nn][Dd]_[Ss][Rr][Cc]\\)")))
 
 (defun emagent-chat--newlines-before-point ()
   "Return the count of consecutive newlines immediately before point."
@@ -315,21 +411,109 @@ exactly one blank line, so the two never glue onto the same line."
     (insert safe)))
 
 (defun emagent-chat--org-verbatim-paths (text)
-  "Wrap absolute paths in org =verbatim= so /Users/ is not parsed as /italic/."
-  (replace-regexp-in-string "\\(/[^ \t\n]+\\)" "=\\1=" text))
+  "Wrap file paths in org =verbatim= to prevent /italic/ and =verbatim= glitches.
+Matches any token containing a / that follows whitespace, a colon, or the
+start of the string, so both absolute (/Users/...) and relative
+(project/src/...) paths are wrapped as a unit."
+  (replace-regexp-in-string
+   "\\(\\(?:^\\|[ \t:]\\)\\)\\([^ \t\n]+/[^ \t\n]*\\)"
+   "\\1=\\2=" text))
 
 (defun emagent-chat--format-tool-line (label)
-  "Return a Thinking-block tool line for LABEL, safe in org-mode."
-  (format "→ %s" (emagent-chat--org-verbatim-paths label)))
+  "Return a Thinking-block tool line for LABEL, safe in org-mode.
+The decision annotation (Allow/Deny) is placed before the file path so it
+is visible without scrolling on long paths.  When there is no path but the
+label has a `tool: detail' separator, the annotation goes between them so
+the result reads `tool (Allow: X): detail' rather than appending at the end."
+  (let* ((annotation (emagent-chat--tool-label-annotation label))
+         (base (if annotation
+                   (string-trim
+                    (replace-regexp-in-string
+                     (concat " *" (regexp-quote annotation) "\\'")
+                     "" label))
+                 label))
+         (reordered
+          (if annotation
+              (let* ((parts (split-string base " " t))
+                     (path-idx (cl-position-if
+                                (lambda (s) (string-match-p "/" s))
+                                parts)))
+                (if path-idx
+                    (let* ((pre (string-join (seq-take parts path-idx) " "))
+                           (post (string-join (seq-drop parts path-idx) " "))
+                           ;; Strip trailing ":" from "Tool:" and reattach after
+                           ;; annotation: "Tool (Allow: X): /path" not "Tool: (Allow: X) /path".
+                           (pre-clean (if (string-suffix-p ":" pre)
+                                          (substring pre 0 -1) pre))
+                           (sep (if (string-suffix-p ":" pre) ": " " ")))
+                      (concat (if (string-empty-p pre-clean) ""
+                                (concat pre-clean " "))
+                              annotation sep post))
+                  ;; No path: insert annotation between "Tool" and ": detail"
+                  ;; → "Tool (Allow: X): detail" instead of "Tool: detail (Allow: X)".
+                  (let ((colon-pos (string-match ": " base)))
+                    (if colon-pos
+                        (concat (substring base 0 colon-pos)
+                                " " annotation
+                                (substring base colon-pos))
+                      (concat base " " annotation)))))
+            base)))
+    (format "→ %s" (emagent-chat--org-verbatim-paths reordered))))
+
+(defun emagent-chat--combined-arrow-label (label code)
+  "Return the arrow-line label for a combined arrow + block display.
+Abbreviates to the operation verb when the block already carries the detail."
+  (let* ((annotation (emagent-chat--tool-label-annotation label))
+         (base (if annotation
+                   (string-trim
+                    (replace-regexp-in-string
+                     (concat " *" (regexp-quote annotation) "\\'")
+                     "" label))
+                 label))
+         (code-trimmed (string-trim-right (or code "")))
+         (verb (car (split-string base "[ :/\n]" t)))
+         (summary-base
+          (cond
+           ;; Multi-line code: block shows it in full, arrow just names the tool.
+           ((string-match-p "\n" code-trimmed) verb)
+           ;; Truncated label (ends with …): label IS the code but cut short.
+           ((string-match-p "…\\'" base) verb)
+           ;; Single-line code that IS the label (or a suffix of it).
+           ((and (not (string-empty-p code-trimmed))
+                 (or (string= (string-trim-right base) code-trimmed)
+                     (string-prefix-p base code-trimmed)
+                     (string-suffix-p code-trimmed base)))
+            verb)
+           (t base))))
+    (if annotation
+        (concat summary-base " " annotation)
+      summary-base)))
 
 (defconst emagent-chat--tool-annotation-re
-  " ?\\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\|(Emacs)\\)\\'"
+  " ?\\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\)\\'"
   "Regexp matching a trailing decision / (Emacs) annotation on a tool label.")
 
 (defun emagent-chat--tool-label-annotation (label)
   "Return the trailing decision/(Emacs) annotation in LABEL, or nil."
   (when (and label (string-match emagent-chat--tool-annotation-re label))
     (match-string 1 label)))
+
+(defun emagent-chat--tool-label-title-annotation (label)
+  "Return comment text for a text block: tool title plus decision annotation.
+Strips the path detail (already visible in the block code) to avoid redundancy."
+  (when label
+    (let* ((annotation (emagent-chat--tool-label-annotation label))
+           (base (if annotation
+                     (string-trim
+                      (replace-regexp-in-string
+                       (concat " *" (regexp-quote annotation) "\\'") "" label))
+                   (string-trim label)))
+           (title (if (string-match "\\`\\(.*?\\): [/~]" base)
+                      (match-string 1 base)
+                    base)))
+      (if (and annotation (not (string-empty-p annotation)))
+          (concat (string-trim title) " " annotation)
+        (string-trim title)))))
 
 (defun emagent-chat--src-comment-prefix (lang)
   "Return the line-comment prefix used inside a src block of LANG."
@@ -366,8 +550,9 @@ without leaving a dangling line beneath the block."
     (insert "\n")))
 
 (defconst emagent-chat--tool-decision-re
-  " \\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\)$"
-  "Regexp matching the permission decision suffix on a tool-call line.")
+  " \\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\)"
+  "Regexp matching a permission decision or source annotation on a tool-call line.
+No end-anchor: the annotation may appear before a path on the same line.")
 
 (defun emagent-chat--repair-tool-line-faces (start end)
   "Re-apply path and decision faces after org font-lock on tool-call lines."
@@ -418,14 +603,14 @@ fontifies with the comment face natively.")
 
 (defun emagent-chat--separate-before-tool ()
   "Ensure point starts a fresh line, with a blank line before tool prose.
-Consecutive tool lines/blocks and the `** Thinking' headline stay adjacent, so
-only prose gets the extra blank line of separation."
+Consecutive arrow lines stay adjacent; anything following a src block
+(#+end_src) gets a blank line so blocks don't run together."
   (unless (bolp) (insert "\n"))
   (unless (or (bobp)
               (save-excursion
                 (forward-line -1)
                 (or (looking-at-p "[ \t]*$")
-                    (looking-at-p "\\(?:→ \\|#\\+end_src\\)")
+                    (looking-at-p "→ ")
                     (looking-at emagent-chat--thinking-headline-re))))
     (insert "\n")))
 
@@ -435,7 +620,8 @@ When ID is non-nil, remember the span for later in-place updates.  When CODE
 is non-empty, render it as an Org src block in LANG instead of a single →
 line, with LABEL's trailing decision/(Emacs) annotation beneath."
   (when (and label (not (string-empty-p label))
-               (emagent-chat--open-response-p))
+               (emagent-chat--open-response-p)
+               (not emagent-chat--permission-pending))
     (emagent-chat--with-stable-view
      (lambda ()
        (with-current-buffer (current-buffer)
@@ -456,8 +642,26 @@ line, with LABEL's trailing decision/(Emacs) annotation beneath."
                  (let ((line-start (line-beginning-position))
                        (blockp (and code (not (string-empty-p code)))))
                    (insert (if blockp
-                               (emagent-chat--format-tool-block
-                                code lang (emagent-chat--tool-label-annotation label))
+                               (if (and (equal lang "text")
+                                        (not (string-match-p "\n" (or code ""))))
+                                   ;; Text block = file path: arrow with full path, no block.
+                                   (let* ((annotation (emagent-chat--tool-label-annotation label))
+                                          (base (if annotation
+                                                    (string-trim
+                                                     (replace-regexp-in-string
+                                                      (concat " *" (regexp-quote annotation) "\\'")
+                                                      "" label))
+                                                  label))
+                                          (verb (car (split-string base "[ :/]" t)))
+                                          (full-label (concat (or verb base)
+                                                              ": " code
+                                                              (if annotation (concat " " annotation) ""))))
+                                     (emagent-chat--format-tool-line full-label))
+                                 ;; Non-text blocks: arrow + block.
+                                 (concat (emagent-chat--format-tool-line
+                                          (emagent-chat--combined-arrow-label label code))
+                                         "\n"
+                                         (emagent-chat--format-tool-block code lang nil)))
                              (emagent-chat--format-tool-line label)))
                    (let ((line-end (line-end-position)))
                      (when id
@@ -480,10 +684,47 @@ Return non-nil when a span was updated."
       (let* ((start (car entry))
              (end (cdr entry))
              (blockp (and code (not (string-empty-p code))))
-             (display (if blockp
-                          (emagent-chat--format-tool-block
-                           code lang (emagent-chat--tool-label-annotation label))
-                        (emagent-chat--format-tool-line label))))
+             (annotation (emagent-chat--tool-label-annotation label))
+             ;; When transitioning from an arrow line to a block, keep the
+             ;; arrow line (without annotation) and append the block below.
+             ;; The annotation moves into the block comment so it appears once.
+             (current (buffer-substring-no-properties start end))
+             ;; Arrow-only: single → line with no block appended yet.
+             ;; Arrow-with-block: already combined → line + #+begin_src block.
+             (was-arrow-only (string-match-p "\\`→ [^\n]*\\'" current))
+             (was-arrow-with-block (and (string-match-p "\\`→ " current)
+                                        (not was-arrow-only)))
+             (display (cond
+                       ((and blockp (or was-arrow-only was-arrow-with-block)
+                             (equal lang "text")
+                             (not (string-match-p "\n" (or code ""))))
+                        ;; Text block = file path: show the FULL path on the
+                        ;; arrow (no block) by reconstructing the label from
+                        ;; the untruncated code.
+                        (let* ((base (if annotation
+                                         (string-trim
+                                          (replace-regexp-in-string
+                                           (concat " *" (regexp-quote annotation) "\\'")
+                                           "" label))
+                                       label))
+                               (verb (car (split-string base "[ :/]" t)))
+                               (full-label (concat (or verb base)
+                                                   ": " code
+                                                   (if annotation (concat " " annotation) ""))))
+                          (emagent-chat--format-tool-line full-label)))
+                       ((and blockp (or was-arrow-only was-arrow-with-block))
+                        ;; Arrow carries annotation; abbreviate if label==code.
+                        (concat (emagent-chat--format-tool-line
+                                 (emagent-chat--combined-arrow-label label code))
+                                "\n"
+                                (emagent-chat--format-tool-block code lang nil)))
+                       (blockp
+                        (emagent-chat--format-tool-block
+                         code lang
+                         (if (equal lang "text")
+                             (emagent-chat--tool-label-title-annotation label)
+                           annotation)))
+                       (t (emagent-chat--format-tool-line label)))))
         (unless (string= (buffer-substring-no-properties start end) display)
           (save-excursion
             (delete-region start end)
@@ -544,7 +785,8 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                               (marker-buffer content-beg) (marker-buffer content-end))
                      (delete-region (marker-position content-beg) (marker-position content-end)))
                    (when-let ((stream (emagent-chat--reasoning-stream-marker)))
-                     (setq emagent-chat--thought-marker stream)))))))
+                     (setq emagent-chat--thought-marker stream))
+                   (setq emagent-chat--permission-pending nil))))))
         (with-current-buffer buf
           (let ((inhibit-read-only t))
             (emagent-chat--writable)
@@ -553,6 +795,18 @@ Keyboard shortcuts (via keymap text property on the buttons line):
             (if-let ((insert-at (emagent-chat--reasoning-block-tail)))
                 (progn
                   (goto-char insert-at)
+                  ;; Normalize: keep at most 1 blank line before the dialog.
+                  ;; reasoning-block-tail may point past trailing \n\n from the
+                  ;; response body; strip the excess so the dialog stays tight.
+                  (let ((content-end-pos (save-excursion
+                                           (skip-chars-backward
+                                            "\n"
+                                            (or (emagent-chat--open-response-begin)
+                                                (point-min)))
+                                           (point))))
+                    (when (> (- insert-at content-end-pos) 2)
+                      (delete-region (+ content-end-pos 2) insert-at)
+                      (goto-char (+ content-end-pos 2))))
                   (when content-block
                     (setq content-beg (copy-marker (point) nil))
                     (emagent-chat--insert-permission-newline-if-needed)
@@ -631,8 +885,7 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                      choices hints))
                   (insert "\n")
                   (setq buttons-end (copy-marker (point) nil))
-                  (when-let ((stream (emagent-chat--reasoning-stream-marker)))
-                    (setq emagent-chat--thought-marker stream)))
+                  (setq emagent-chat--permission-pending t))
               (setq question-beg nil content-beg nil buttons-beg nil))))
         (emagent-chat--notify-inactive-update)
         (if (not buttons-beg)
@@ -679,7 +932,9 @@ Keyboard shortcuts (via keymap text property on the buttons line):
             (point))))))
 
 (defun emagent-chat-append-assistant (text)
-  "Append streamed assistant TEXT under the `** Response' subsection."
+  "Append streamed assistant TEXT under the `** Response' subsection.
+Each chunk is passed through the streaming markdown->org converter so the
+buffer shows formatted org while the response is still arriving."
   (when (not (string-empty-p text))
     (emagent-chat--with-stable-view
       (lambda ()
@@ -688,7 +943,26 @@ Keyboard shortcuts (via keymap text property on the buttons line):
             (let ((inhibit-read-only t))
               (emagent-chat--writable)
               (emagent-chat-close-thought)
-              (let* ((existing (emagent-chat--response-body-bounds))
+              ;; Streaming markdown->org: feed chunk through the fence state
+              ;; machine, then apply inline conversions to the safe portion.
+              (let* ((combined (if emagent-chat--response-fence-state
+                                   (concat "```"
+                                           (car emagent-chat--response-fence-state)
+                                           "\n"
+                                           (cdr emagent-chat--response-fence-state)
+                                           text)
+                                 text))
+                     (result (emagent-chat--split-fences combined))
+                     (safe (let ((case-fold-search nil))
+                             (replace-regexp-in-string
+                              "`\\([^`\n]+\\)`" "=\\1="
+                              (replace-regexp-in-string
+                               "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*"
+                               (replace-regexp-in-string
+                                "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
+                                "[[\\2][\\1]]"
+                                (car result))))))
+                     (existing (emagent-chat--response-body-bounds))
                      (insert-at
                       (cond
                        ((and existing
@@ -699,10 +973,11 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                         (marker-position emagent-chat--assistant-marker))
                        (existing (cdr existing))
                        (t (emagent-chat--ensure-response-headline)))))
-                (when insert-at
+                (setq emagent-chat--response-fence-state (cdr result))
+                (when (and insert-at (not (string-empty-p safe)))
                   (save-excursion
                     (goto-char insert-at)
-                    (insert text)
+                    (insert safe)
                     (setq emagent-chat--assistant-marker (point-marker)))))
               (emagent-chat--maybe-font-lock-flush))))))))
 
@@ -743,6 +1018,9 @@ open one eagerly."
 
 (defun emagent-chat--finalize-streamed-assistant (converted)
   "Replace the `** Response' body with CONVERTED assistant text."
+  ;; Streaming fence state is no longer needed — finalization replaces the
+  ;; buffer content with the fully-converted text.
+  (setq emagent-chat--response-fence-state nil)
   (when-let ((content-start (or (car (emagent-chat--response-body-bounds))
                                 (emagent-chat--ensure-response-headline))))
     (let ((body-end (cdr (emagent-chat--open-response-body-bounds))))

@@ -174,6 +174,21 @@
            "\\([^[:space:]\n|]\\)\n\\(|\\)"
            "\\1\n\n\\2"
            result))
+    ;; Markdown links [text](url) → [[url][text]] org links.
+    (setq result
+          (replace-regexp-in-string
+           "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
+           "[[\\2][\\1]]"
+           result))
+    ;; Insert a space when sentence-ending punctuation is immediately followed
+    ;; by a capital letter.  Bind case-fold-search=nil so [A-Z] only matches
+    ;; true uppercase — without this, domain names like github.corp get spaces.
+    (setq result
+          (let ((case-fold-search nil))
+            (replace-regexp-in-string
+             "\\([.?!]\\)\\([A-Z]\\)"
+             "\\1 \\2"
+             result)))
     (setq result
           (replace-regexp-in-string
            "\\(|[^\n]*|\n\\)\\([^|\n#]\\)"
@@ -185,17 +200,42 @@
   "Escape LINE so Org will not parse it as a headline or keyword.
 
 Reasoning is rendered as the body of the `** Thinking' subsection (not inside
-a block), so a leading `*' or `#' must be neutralized with a leading space."
-  (if (string-match-p "\\`[ \t]*[*#]" line)
-      (concat " " line)
-    line))
+a block), so a leading `*' or `#' must be neutralized with a leading space.
+Exception: `#+begin_src'/`#+end_src' markers inserted by our fence conversion
+must not be escaped — they need to remain valid org src block delimiters."
+  (cond
+   ;; Preserve org src block markers produced by emagent-chat--split-fences.
+   ((string-match-p "\\`#\\+\\(?:begin_src\\|end_src\\)\\b" (downcase line))
+    line)
+   ((string-match-p "\\`[ \t]*[*#]" line)
+    (concat " " line))
+   (t line)))
 
 ;;;###autoload
 (defun emagent-chat--escape-reasoning-text (text)
-  "Escape agent reasoning TEXT before inserting it under `** Thinking'."
+  "Convert markdown markup in reasoning TEXT to org before inserting it.
+Applied once per flush (text is already outside any code fence at this point).
+Order matters: heading and bold conversions run before escape-reasoning-line
+so the escape pass never sees raw # / ** markers."
   (if (string-empty-p (or text ""))
       ""
-    (mapconcat #'emagent-chat--escape-reasoning-line (split-string text "\n") "\n")))
+    (let* (;; Markdown links [text](url) → [[url][text]]
+           (text (replace-regexp-in-string
+                  "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
+                  "[[\\2][\\1]]" text))
+           ;; Markdown headings → bold text
+           (text (replace-regexp-in-string
+                  "^#\\{1,6\\} \\(.*\\)$" "*\\1*" text))
+           ;; Markdown bold **text** → org bold *text*
+           (text (replace-regexp-in-string
+                  "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*" text))
+           ;; Markdown inline code `code` → org verbatim =code=
+           (text (replace-regexp-in-string
+                  "`\\([^`\n]+\\)`" "=\\1=" text)))
+      ;; Finally escape any remaining # / * at line starts so org
+      ;; does not mis-parse them as keywords or headings.
+      (mapconcat #'emagent-chat--escape-reasoning-line
+                 (split-string text "\n") "\n"))))
 
 ;;;###autoload
 (defun emagent-chat--demote-response-headings (text)
@@ -298,9 +338,14 @@ its own headings must nest beneath it rather than starting new turns."
    (emagent-chat--normalize-response-spacing
     (emagent-chat--convert-markdown-tables
      (emagent-chat--normalize-elisp-src-tags
-      (emagent-chat--convert-code-fences
-       (emagent-chat--fix-org-src-citations
-        (emagent-chat--unwrap-outer-org-src text))))))))
+      ;; Convert single-backtick inline code `foo` → =foo= after triple-backtick
+      ;; fences are already converted to #+BEGIN_SRC blocks, so this only affects
+      ;; inline code spans that are not inside any block.
+      (replace-regexp-in-string
+       "`\\([^`\n]+\\)`" "=\\1="
+       (emagent-chat--convert-code-fences
+        (emagent-chat--fix-org-src-citations
+         (emagent-chat--unwrap-outer-org-src text)))))))))
 
 (defvar-local emagent-chat--font-lock-deferred-p nil
   "When non-nil, defer org font-lock until the emagent buffer is active.")
