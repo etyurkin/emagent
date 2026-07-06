@@ -399,8 +399,55 @@ start of the string, so both absolute (/Users/...) and relative
    "\\1=\\2=" text))
 
 (defun emagent-chat--format-tool-line (label)
-  "Return a Thinking-block tool line for LABEL, safe in org-mode."
-  (format "→ %s" (emagent-chat--org-verbatim-paths label)))
+  "Return a Thinking-block tool line for LABEL, safe in org-mode.
+The decision annotation (Allow/Deny/Emacs) is placed before the file path
+so it is visible without scrolling on long paths."
+  (let* ((annotation (emagent-chat--tool-label-annotation label))
+         (base (if annotation
+                   (string-trim
+                    (replace-regexp-in-string
+                     (concat " *" (regexp-quote annotation) "\\'")
+                     "" label))
+                 label))
+         ;; Reorder: insert annotation between operation and first path token.
+         (reordered
+          (if annotation
+              (let* ((parts (split-string base " " t))
+                     (path-idx (cl-position-if
+                                (lambda (s) (string-match-p "/" s))
+                                parts)))
+                (if path-idx
+                    (let ((pre (string-join (seq-take parts path-idx) " "))
+                          (post (string-join (seq-drop parts path-idx) " ")))
+                      (concat (if (string-empty-p pre) "" (concat pre " "))
+                              annotation " " post))
+                  ;; No path: append annotation at end as usual
+                  (concat base " " annotation)))
+            base)))
+    (format "→ %s" (emagent-chat--org-verbatim-paths reordered))))
+
+(defun emagent-chat--combined-arrow-label (label code)
+  "Return the arrow-line label for a combined arrow + block display.
+When LABEL (minus annotation) equals the block CODE, abbreviate to the first
+word so the command is not shown twice (once on the arrow, once in the block)."
+  (let* ((annotation (emagent-chat--tool-label-annotation label))
+         (base (if annotation
+                   (string-trim
+                    (replace-regexp-in-string
+                     (concat " *" (regexp-quote annotation) "\\'")
+                     "" label))
+                 label))
+         (code-trimmed (string-trim-right (or code "")))
+         (summary-base
+          (if (and (not (string-empty-p code-trimmed))
+                   (or (string= (string-trim-right base) code-trimmed)
+                       (string-prefix-p base code-trimmed)))
+              ;; Label IS the command → use just the verb/first word
+              (car (split-string base " " t))
+            base)))
+    (if annotation
+        (concat summary-base " " annotation)
+      summary-base)))
 
 (defconst emagent-chat--tool-annotation-re
   " ?\\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\|(Emacs)\\)\\'"
@@ -463,8 +510,9 @@ without leaving a dangling line beneath the block."
     (insert "\n")))
 
 (defconst emagent-chat--tool-decision-re
-  " \\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\)$"
-  "Regexp matching the permission decision suffix on a tool-call line.")
+  " \\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\)"
+  "Regexp matching a permission decision annotation on a tool-call line.
+No end-anchor: the annotation may appear before a path on the same line.")
 
 (defun emagent-chat--repair-tool-line-faces (start end)
   "Re-apply path and decision faces after org font-lock on tool-call lines."
@@ -515,14 +563,14 @@ fontifies with the comment face natively.")
 
 (defun emagent-chat--separate-before-tool ()
   "Ensure point starts a fresh line, with a blank line before tool prose.
-Consecutive tool lines/blocks and the `** Thinking' headline stay adjacent, so
-only prose gets the extra blank line of separation."
+Consecutive plain arrow lines stay adjacent; anything following #+end_src
+(i.e. the end of a src block) gets a blank line so blocks don't run together."
   (unless (bolp) (insert "\n"))
   (unless (or (bobp)
               (save-excursion
                 (forward-line -1)
                 (or (looking-at-p "[ \t]*$")
-                    (looking-at-p "\\(?:→ \\|#\\+end_src\\)")
+                    (looking-at-p "→ ")
                     (looking-at emagent-chat--thinking-headline-re))))
     (insert "\n")))
 
@@ -553,11 +601,11 @@ line, with LABEL's trailing decision/(Emacs) annotation beneath."
                  (let ((line-start (line-beginning-position))
                        (blockp (and code (not (string-empty-p code)))))
                    (insert (if blockp
-                               (emagent-chat--format-tool-block
-                                code lang
-                                (if (equal lang "text")
-                                    (emagent-chat--tool-label-title-annotation label)
-                                  (emagent-chat--tool-label-annotation label)))
+                               ;; Annotation on the arrow; abbreviate if label==code.
+                               (concat (emagent-chat--format-tool-line
+                                        (emagent-chat--combined-arrow-label label code))
+                                       "\n"
+                                       (emagent-chat--format-tool-block code lang nil))
                              (emagent-chat--format-tool-line label)))
                    (let ((line-end (line-end-position)))
                      (when id
@@ -592,18 +640,11 @@ Return non-nil when a span was updated."
                                         (not was-arrow-only)))
              (display (cond
                        ((and blockp (or was-arrow-only was-arrow-with-block))
-                        ;; Keep the → summary line; replace (or add) the block.
-                        (let* ((arrow-line (if was-arrow-with-block
-                                               (substring current 0
-                                                          (string-match "\n" current))
-                                             current))
-                               (block-annotation
-                                (if (equal lang "text")
-                                    (emagent-chat--tool-label-title-annotation label)
-                                  annotation)))
-                          (concat arrow-line "\n"
-                                  (emagent-chat--format-tool-block
-                                   code lang block-annotation))))
+                        ;; Arrow carries annotation; abbreviate if label==code.
+                        (concat (emagent-chat--format-tool-line
+                                 (emagent-chat--combined-arrow-label label code))
+                                "\n"
+                                (emagent-chat--format-tool-block code lang nil)))
                        (blockp
                         (emagent-chat--format-tool-block
                          code lang

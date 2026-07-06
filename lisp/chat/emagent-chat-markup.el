@@ -192,10 +192,15 @@ a block), so a leading `*' or `#' must be neutralized with a leading space."
 
 ;;;###autoload
 (defun emagent-chat--escape-reasoning-text (text)
-  "Escape agent reasoning TEXT before inserting it under `** Thinking'."
+  "Escape agent reasoning TEXT before inserting it under `** Thinking'.
+Converts markdown inline code (`code`) to org verbatim (=code=) so single-
+backtick references render properly in the org buffer."
   (if (string-empty-p (or text ""))
       ""
-    (mapconcat #'emagent-chat--escape-reasoning-line (split-string text "\n") "\n")))
+    (let ((converted (replace-regexp-in-string
+                      "`\\([^`\n]+\\)`" "=\\1=" text)))
+      (mapconcat #'emagent-chat--escape-reasoning-line
+                 (split-string converted "\n") "\n"))))
 
 ;;;###autoload
 (defun emagent-chat--demote-response-headings (text)
