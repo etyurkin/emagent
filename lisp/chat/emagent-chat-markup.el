@@ -198,15 +198,26 @@ must not be escaped — they need to remain valid org src block delimiters."
 
 ;;;###autoload
 (defun emagent-chat--escape-reasoning-text (text)
-  "Escape agent reasoning TEXT before inserting it under `** Thinking'.
-Converts markdown inline code (`code`) to org verbatim (=code=) so single-
-backtick references render properly in the org buffer."
+  "Convert markdown markup in reasoning TEXT to org before inserting it.
+Applied once per flush (text is already outside any code fence at this point).
+Order matters: heading and bold conversions run before escape-reasoning-line
+so the escape pass never sees raw # / ** markers."
   (if (string-empty-p (or text ""))
       ""
-    (let ((converted (replace-regexp-in-string
-                      "`\\([^`\n]+\\)`" "=\\1=" text)))
+    (let* (;; Markdown headings → bold text (not org sub-headings, which
+           ;; would break the ** Thinking block structure).
+           (text (replace-regexp-in-string
+                  "^#\\{1,6\\} \\(.*\\)$" "*\\1*" text))
+           ;; Markdown bold **text** → org bold *text*
+           (text (replace-regexp-in-string
+                  "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*" text))
+           ;; Markdown inline code `code` → org verbatim =code=
+           (text (replace-regexp-in-string
+                  "`\\([^`\n]+\\)`" "=\\1=" text)))
+      ;; Finally escape any remaining # / * at line starts so org
+      ;; does not mis-parse them as keywords or headings.
       (mapconcat #'emagent-chat--escape-reasoning-line
-                 (split-string converted "\n") "\n"))))
+                 (split-string text "\n") "\n"))))
 
 ;;;###autoload
 (defun emagent-chat--demote-response-headings (text)
