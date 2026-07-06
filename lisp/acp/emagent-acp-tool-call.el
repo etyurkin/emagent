@@ -363,6 +363,60 @@ read/write/search tools are not treated as shell commands."
          (word (car (split-string title "[^a-z0-9.+-]+" t))))
     (and word (member word emagent-acp--shell-tool-names) word)))
 
+(defconst emagent-acp--cli-tool-arg-order
+  '(("grep" pattern path glob)
+    ("rg" pattern path glob)
+    ("ripgrep" pattern path glob)
+    ("ag" pattern path glob)
+    ("find" path name glob pattern)
+    ("fd" pattern path)
+    ("sed" pattern file path)
+    ("awk" pattern file path)
+    ("cat" path file)
+    ("head" path file)
+    ("tail" path file)
+    ("ls" path directory dir))
+  "Ordered rawInput fields used to reconstruct a CLI tool command line.
+The car of each entry is the tool word; the rest name structured arguments
+in the order they should appear after it, so e.g. grep renders both its
+pattern and path rather than a single field.")
+
+(defun emagent-acp--tool-call-display-quote (value)
+  "Wrap VALUE in double quotes for shell-command display when it needs quoting.
+Only embedded double quotes are escaped; regexp backslashes are preserved so
+the displayed pattern matches what the agent actually searched for."
+  (if (and (stringp value)
+           (not (string-empty-p value))
+           (string-match-p "[][[:space:]\"'`$|&;<>()*?{}]" value))
+      (concat "\"" (replace-regexp-in-string "\"" "\\\\\"" value) "\"")
+    value))
+
+(defun emagent-acp--cli-command-args (data order)
+  "Return quoted argument strings for the ORDER fields present in DATA."
+  (delq nil
+        (mapcar
+         (lambda (key)
+           (when-let ((v (emagent-acp--tool-call-value-string
+                          (emagent-acp--tool-call-data-get data key))))
+             (let ((s (string-trim v)))
+               (unless (string-empty-p s)
+                 (emagent-acp--tool-call-display-quote s)))))
+         order)))
+
+(defun emagent-acp--tool-call-cli-command (update cli)
+  "Reconstruct a full command line for CLI tool word CLI from UPDATE, or nil.
+Unlike a single-field detail, this includes every recognized structured
+argument (e.g. grep's pattern and path) in a natural order so the rendered
+command is complete."
+  (when-let* ((raw (emagent-acp--tool-call-input update))
+              (data (emagent-acp--tool-call-normalize-data raw))
+              (order (cdr (assoc cli emagent-acp--cli-tool-arg-order))))
+    (let* ((nested (emagent-acp--tool-call-nested-raw-input data))
+           (args (or (and nested (emagent-acp--cli-command-args nested order))
+                     (emagent-acp--cli-command-args data order))))
+      (when args
+        (string-join (cons cli args) " ")))))
+
 
 (defun emagent-acp--tool-call-block-spec (update)
   "Return (LANG . CODE) when UPDATE should render as an Org src block, else nil.
@@ -380,7 +434,8 @@ details such as file paths stay as compact arrow lines."
     (cond
      (command (cons "sh" command))
      (form (cons "elisp" form))
-     (cli (cons "sh" (format "%s %s" cli detail)))
+     (cli (cons "sh" (or (emagent-acp--tool-call-cli-command update cli)
+                         (format "%s %s" cli detail))))
      ((and detail (or (string-match-p "\n" detail)
                       (> (length detail) emagent-acp--tool-call-detail-limit))
            ;; Don't create a text block for an absolute path when the title
