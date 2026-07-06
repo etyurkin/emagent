@@ -174,6 +174,12 @@
            "\\([^[:space:]\n|]\\)\n\\(|\\)"
            "\\1\n\n\\2"
            result))
+    ;; Markdown links [text](url) → [[url][text]] org links.
+    (setq result
+          (replace-regexp-in-string
+           "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
+           "[[\\2][\\1]]"
+           result))
     ;; Insert a space when sentence-ending punctuation is immediately followed
     ;; by a capital letter.  Bind case-fold-search=nil so [A-Z] only matches
     ;; true uppercase — without this, domain names like github.corp get spaces.
@@ -213,8 +219,11 @@ Order matters: heading and bold conversions run before escape-reasoning-line
 so the escape pass never sees raw # / ** markers."
   (if (string-empty-p (or text ""))
       ""
-    (let* (;; Markdown headings → bold text (not org sub-headings, which
-           ;; would break the ** Thinking block structure).
+    (let* (;; Markdown links [text](url) → [[url][text]]
+           (text (replace-regexp-in-string
+                  "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
+                  "[[\\2][\\1]]" text))
+           ;; Markdown headings → bold text
            (text (replace-regexp-in-string
                   "^#\\{1,6\\} \\(.*\\)$" "*\\1*" text))
            ;; Markdown bold **text** → org bold *text*

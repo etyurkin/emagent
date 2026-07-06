@@ -945,7 +945,10 @@ buffer shows formatted org while the response is still arriving."
                               "`\\([^`\n]+\\)`" "=\\1="
                               (replace-regexp-in-string
                                "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*"
-                               (car result)))))
+                               (replace-regexp-in-string
+                                "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
+                                "[[\\2][\\1]]"
+                                (car result))))))
                      (existing (emagent-chat--response-body-bounds))
                      (insert-at
                       (cond
