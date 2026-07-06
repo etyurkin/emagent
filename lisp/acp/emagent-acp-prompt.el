@@ -290,6 +290,24 @@ and will recover without aborting the session."
        (string-match-p "timed out\\|timeout\\|failed with status\\|ApiError\\|\\[31merror"
                        message)))
 
+(defun emagent-acp--retriable-prompt-error-p (message)
+  "Return non-nil when a failed prompt MESSAGE is a transient network error.
+
+Covers Cursor's own RetriableError wrapper and the common DNS/connection
+failures underneath it (getaddrinfo ENOTFOUND api2.cursor.sh, connection
+resets, timeouts).  These usually recover on a second attempt, so emagent
+retries them before surfacing the error (`emagent-acp-prompt-retry-attempts')."
+  (and (stringp message)
+       (string-match-p
+        (concat "RetriableError\\|getaddrinfo\\|ENOTFOUND\\|EAI_AGAIN"
+                "\\|ECONNRESET\\|ECONNREFUSED\\|ETIMEDOUT\\|EPIPE"
+                "\\|\\[unavailable\\]\\|socket hang up\\|network error")
+        message)))
+
+(defun emagent-acp--prompt-retry-delay (attempt)
+  "Return backoff seconds to wait before the next retry after ATTEMPT (1-based)."
+  (* emagent-acp-prompt-retry-base-delay (expt 2 (max 0 (1- attempt)))))
+
 (defun emagent-acp--abort-prompt (state message)
   "Abort the in-flight prompt for STATE and show MESSAGE."
   (when (or (map-elt state :busy) (map-elt state :prompt-finishing))

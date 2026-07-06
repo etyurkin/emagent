@@ -881,6 +881,20 @@
   (should (emagent-acp--fatal-agent-error-p "failed with status 500"))
   (should-not (emagent-acp--fatal-agent-error-p "still working")))
 
+(ert-deftest emagent-acp-session-test-retriable-prompt-error-p ()
+  (should (emagent-acp--retriable-prompt-error-p
+           "Error: RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh"))
+  (should (emagent-acp--retriable-prompt-error-p "read ECONNRESET"))
+  (should (emagent-acp--retriable-prompt-error-p "socket hang up"))
+  (should-not (emagent-acp--retriable-prompt-error-p "failed with status 400"))
+  (should-not (emagent-acp--retriable-prompt-error-p nil)))
+
+(ert-deftest emagent-acp-session-test-prompt-retry-delay ()
+  (let ((emagent-acp-prompt-retry-base-delay 1.5))
+    (should (= (emagent-acp--prompt-retry-delay 1) 1.5))
+    (should (= (emagent-acp--prompt-retry-delay 2) 3.0))
+    (should (= (emagent-acp--prompt-retry-delay 3) 6.0))))
+
 (ert-deftest emagent-acp-session-test-tool-call-displayable-p ()
   (let* ((state (emagent-test--make-acp-state))
          (emagent-acp--tool-call-weak-details '("tool" "Tool" "running" "pending")))
