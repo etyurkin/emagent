@@ -351,7 +351,11 @@ fences in `emagent-chat--fence-state' until the closing ``` arrives."
                 (hide-at (emagent-chat--open-reasoning-begin)))
             (emagent-chat--writable)
             (when-let ((tail (emagent-chat--reasoning-block-tail)))
-              (setq emagent-chat--assistant-marker (copy-marker tail nil)))
+              ;; Only reset assistant-marker to the reasoning tail when response
+              ;; text hasn't started yet.  If the Response section already exists
+              ;; (streaming started), keep the marker tracking the response content.
+              (unless (emagent-chat--response-body-bounds)
+                (setq emagent-chat--assistant-marker (copy-marker tail nil))))
             (setq emagent-chat--thought-open-p nil
                   emagent-chat--thought-marker nil)
             (emagent-chat--maybe-font-lock-flush)
