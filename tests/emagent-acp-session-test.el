@@ -244,7 +244,7 @@
       (should (string= "Edit File: foo.rs (Allow: Session)" shown)))))
 
 (ert-deftest emagent-acp-session-test-emagent-tool-tagged-emacs ()
-  "Tools from emagent's own MCP server render with an (Emacs) tag."
+  "Tools from emagent's own MCP server render with an (Allow: Emacs) tag."
   (let* ((state (emagent-test--make-acp-state))
          (merged '((toolCallId . "rf1") (title . "mcp_emagent_read_file")))
          (shown nil))
@@ -261,10 +261,12 @@
           (lambda (_) (current-buffer))))
       (emagent-acp--emit-tool-call-display
        state "rf1" 'read merged "read_file: foo.el" "completed")
-      (should (string= "read_file: foo.el (Emacs)" shown)))))
+      (should (string= "read_file: foo.el (Allow: Emacs)" shown)))))
 
 (ert-deftest emagent-acp-session-test-agent-tool-not-tagged-emacs ()
-  "Native agent tools (no emagent MCP origin) get no (Emacs) tag."
+  "Native agent tools (no emagent MCP origin) are tagged (Allow: Agent), not Emacs.
+A completed tool that never hit the ACP permission path was allowed by the
+agent's own allow-list, so the inferred decision is (Allow: Agent)."
   (let* ((state (emagent-test--make-acp-state))
          (merged '((toolCallId . "g1") (title . "Grep")))
          (shown nil))
@@ -281,7 +283,7 @@
           (lambda (_) (current-buffer))))
       (emagent-acp--emit-tool-call-display
        state "g1" 'search merged "Grep: pattern" "completed")
-      (should (string= "Grep: pattern" shown)))))
+      (should (string= "Grep: pattern (Allow: Agent)" shown)))))
 
 (defun emagent-test--run-at-time-immediately (_time _repeat fn)
   "Test helper: invoke FN synchronously instead of scheduling."
@@ -613,10 +615,17 @@
     (should (equal '("sh" . "cargo add foo")
                    (emagent-acp--tool-call-block-spec update))))
   ;; A structured grep tool carries only a pattern; reconstruct a grep command
-  ;; line so it reads naturally and gets shell highlighting.
+  ;; line so it reads naturally and gets shell highlighting.  Patterns with
+  ;; whitespace/metacharacters are quoted so they read unambiguously.
   (let ((update '((title . "grep")
                   (rawInput . "{\"pattern\":\"Edge \\\\{\"}"))))
-    (should (equal '("sh" . "grep Edge \\{")
+    (should (equal '("sh" . "grep \"Edge \\{\"")
+                   (emagent-acp--tool-call-block-spec update))))
+  ;; grep with both a pattern and a path reconstructs the full command line so
+  ;; the search term is not dropped in favor of the path.
+  (let ((update '((title . "Grep")
+                  (rawInput . "{\"pattern\":\"TODO\",\"path\":\"/Users/me/src/App.java\"}"))))
+    (should (equal '("sh" . "grep TODO /Users/me/src/App.java")
                    (emagent-acp--tool-call-block-spec update))))
   ;; File read stays a compact arrow line (no block spec).
   (let ((update '((title . "Read")
@@ -901,8 +910,10 @@
     (puthash :provider 'cursor state)
     (should (emagent-acp--tool-call-displayable-p
              state '((title . "compile") (rawInput . "{\"command\":\"make test\"}"))))
-    (should-not (emagent-acp--tool-call-displayable-p
-                 state '((title . "git_log") (rawInput . "{\"args\":\"git_log\"}"))))
+    ;; A meaningful detail is displayable even when it duplicates the title;
+    ;; redundancy is collapsed later in label-building, not hidden here.
+    (should (emagent-acp--tool-call-displayable-p
+             state '((title . "git_log") (rawInput . "{\"args\":\"git_log\"}"))))
     (should (emagent-acp--tool-call-displayable-p
              state '((title . "compile") (rawInput . "{}"))))
     (should-not (emagent-acp--tool-call-displayable-p
