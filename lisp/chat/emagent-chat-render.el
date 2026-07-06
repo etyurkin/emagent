@@ -471,7 +471,7 @@ Abbreviates to the operation verb when the block already carries the detail."
       summary-base)))
 
 (defconst emagent-chat--tool-annotation-re
-  " ?\\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\|(Emacs)\\)\\'"
+  " ?\\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\)\\'"
   "Regexp matching a trailing decision / (Emacs) annotation on a tool label.")
 
 (defun emagent-chat--tool-label-annotation (label)
@@ -531,7 +531,7 @@ without leaving a dangling line beneath the block."
     (insert "\n")))
 
 (defconst emagent-chat--tool-decision-re
-  " \\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\|(Emacs)\\)"
+  " \\((Allow: [^)\n]+)\\|(Allow)\\|(Denied)\\)"
   "Regexp matching a permission decision or source annotation on a tool-call line.
 No end-anchor: the annotation may appear before a path on the same line.")
 

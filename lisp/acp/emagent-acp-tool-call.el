@@ -106,7 +106,7 @@ because generic names like `grep' collide with agent-native tools."
                    ((or (null label) (string-empty-p label)) label)
                    (decision (emagent-acp--permission-decision-label label decision))
                    ((emagent-acp--tool-call-emagent-tool-p merged)
-                    (format "%s (Emacs)" label))
+                    (format "%s (Allow: Emacs)" label))
                    ;; Tool completed without ACP permission: the agent's own
                    ;; allow-list permitted it directly — infer the decision.
                    (completed (format "%s (Allow: Agent)" label))
