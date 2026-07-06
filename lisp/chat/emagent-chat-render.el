@@ -441,7 +441,7 @@ so it is visible without scrolling on long paths."
             base)))
     (format "→ %s" (emagent-chat--org-verbatim-paths reordered))))
 
-(defun emagent-chat--combined-arrow-label (label code &optional lang)
+(defun emagent-chat--combined-arrow-label (label code)
   "Return the arrow-line label for a combined arrow + block display.
 Abbreviates to the operation verb when the block already carries the detail."
   (let* ((annotation (emagent-chat--tool-label-annotation label))
@@ -640,7 +640,7 @@ line, with LABEL's trailing decision/(Emacs) annotation beneath."
                                      (emagent-chat--format-tool-line full-label))
                                  ;; Non-text blocks: arrow + block.
                                  (concat (emagent-chat--format-tool-line
-                                          (emagent-chat--combined-arrow-label label code lang))
+                                          (emagent-chat--combined-arrow-label label code))
                                          "\n"
                                          (emagent-chat--format-tool-block code lang nil)))
                              (emagent-chat--format-tool-line label)))
@@ -696,7 +696,7 @@ Return non-nil when a span was updated."
                        ((and blockp (or was-arrow-only was-arrow-with-block))
                         ;; Arrow carries annotation; abbreviate if label==code.
                         (concat (emagent-chat--format-tool-line
-                                 (emagent-chat--combined-arrow-label label code lang))
+                                 (emagent-chat--combined-arrow-label label code))
                                 "\n"
                                 (emagent-chat--format-tool-block code lang nil)))
                        (blockp
