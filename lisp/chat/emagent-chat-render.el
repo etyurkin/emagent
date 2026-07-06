@@ -421,8 +421,10 @@ start of the string, so both absolute (/Users/...) and relative
 
 (defun emagent-chat--format-tool-line (label)
   "Return a Thinking-block tool line for LABEL, safe in org-mode.
-The decision annotation (Allow/Deny/Emacs) is placed before the file path
-so it is visible without scrolling on long paths."
+The decision annotation (Allow/Deny) is placed before the file path so it
+is visible without scrolling on long paths.  When there is no path but the
+label has a `tool: detail' separator, the annotation goes between them so
+the result reads `tool (Allow: X): detail' rather than appending at the end."
   (let* ((annotation (emagent-chat--tool-label-annotation label))
          (base (if annotation
                    (string-trim
@@ -430,7 +432,6 @@ so it is visible without scrolling on long paths."
                      (concat " *" (regexp-quote annotation) "\\'")
                      "" label))
                  label))
-         ;; Reorder: insert annotation between operation and first path token.
          (reordered
           (if annotation
               (let* ((parts (split-string base " " t))
@@ -442,8 +443,14 @@ so it is visible without scrolling on long paths."
                           (post (string-join (seq-drop parts path-idx) " ")))
                       (concat (if (string-empty-p pre) "" (concat pre " "))
                               annotation " " post))
-                  ;; No path: append annotation at end as usual
-                  (concat base " " annotation)))
+                  ;; No path: insert annotation between "Tool" and ": detail"
+                  ;; → "Tool (Allow: X): detail" instead of "Tool: detail (Allow: X)".
+                  (let ((colon-pos (string-match ": " base)))
+                    (if colon-pos
+                        (concat (substring base 0 colon-pos)
+                                " " annotation
+                                (substring base colon-pos))
+                      (concat base " " annotation)))))
             base)))
     (format "→ %s" (emagent-chat--org-verbatim-paths reordered))))
 
