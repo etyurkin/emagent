@@ -1,7 +1,7 @@
 ;;; emagent-consult.el --- Optional consult integration for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Version: 1.0.1
+;; Version: 1.0.2
 ;; Package-Requires: ((emacs "29.1"))
 
 ;;; Commentary:
