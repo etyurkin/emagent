@@ -952,6 +952,36 @@ the emagent gate can show what was edited instead of a bare arrow line."
     (puthash :compress-pending t state)
     (should-not (emagent-acp--agent-error-only-response-p state))))
 
+(ert-deftest emagent-acp-session-test-turn-did-no-work-p ()
+  (let ((state (emagent-test--make-acp-state)))
+    (puthash :assistant-text "" state)
+    (should (emagent-acp--turn-did-no-work-p state))
+    ;; A tool call means side effects may have happened.
+    (puthash "call-1" "shell" (map-elt state :tool-call-titles))
+    (should-not (emagent-acp--turn-did-no-work-p state))
+    (clrhash (map-elt state :tool-call-titles))
+    ;; Substantial content also counts as work.
+    (puthash :assistant-text (make-string 500 ?x) state)
+    (should-not (emagent-acp--turn-did-no-work-p state))))
+
+(ert-deftest emagent-acp-session-test-turn-hit-transient-error-p ()
+  (let ((state (emagent-test--make-acp-state)))
+    ;; Detected even when the turn also ran tool calls (unlike error-only).
+    (puthash :assistant-text
+             "Committed and pushed.\n\nError: RetriableError: WritableIterable is closed"
+             state)
+    (puthash "call-1" "shell" (map-elt state :tool-call-titles))
+    (should (emagent-acp--turn-hit-transient-error-p state))
+    ;; This work-turn must NOT be treated as safe-to-replay.
+    (should-not (emagent-acp--agent-error-only-response-p state))
+    ;; A clean answer is not a transient error.
+    (puthash :assistant-text "All done, pushed successfully." state)
+    (should-not (emagent-acp--turn-hit-transient-error-p state))
+    ;; Compression turns are excluded.
+    (puthash :assistant-text "RetriableError: socket hang up" state)
+    (puthash :compress-pending t state)
+    (should-not (emagent-acp--turn-hit-transient-error-p state))))
+
 (ert-deftest emagent-acp-session-test-prompt-retry-delay ()
   (let ((emagent-acp-prompt-retry-base-delay 1.5))
     (should (= (emagent-acp--prompt-retry-delay 1) 1.5))

@@ -300,27 +300,46 @@ retries them before surfacing the error (`emagent-acp-prompt-retry-attempts')."
 (defconst emagent-acp--agent-error-signature-re
   (concat "RetriableError\\|getaddrinfo\\|ENOTFOUND\\|EAI_AGAIN"
           "\\|ECONNRESET\\|ECONNREFUSED\\|ETIMEDOUT\\|EPIPE"
-          "\\|\\[unavailable\\]\\|socket hang up")
+          "\\|\\[unavailable\\]\\|socket hang up\\|WritableIterable is closed")
   "Machine-generated markers of a transient error emitted as agent output.
 Deliberately stricter than `emagent-acp--retriable-prompt-error-p': it must
 not match prose such as \"network error\" or \"timeout\" that can legitimately
 appear inside a real answer.")
+
+(defun emagent-acp--turn-did-no-work-p (state)
+  "Return non-nil when STATE's turn ran no tool calls and produced little text.
+Such a turn has no side effects, so replaying its prompt is safe."
+  (let ((text (string-trim (or (map-elt state :assistant-text) "")))
+        (titles (map-elt state :tool-call-titles)))
+    (and (or (null titles) (zerop (hash-table-count titles)))
+         (< (length text) 400))))
 
 (defun emagent-acp--agent-error-only-response-p (state)
   "Return non-nil when STATE's finished turn is only a transient agent error.
 
 Some agents (e.g. cursor-agent-acp) accept the prompt, then hit a transient
 network failure and emit the error as the whole turn's output instead of
-failing the request.  Such a turn carries no real content and no tool calls,
-so it is safe for emagent to re-issue the prompt with backoff rather than
-surface the error.  Matching uses `emagent-acp--agent-error-signature-re',
-which only recognises machine-generated error markers."
-  (let ((text (string-trim (or (map-elt state :assistant-text) "")))
-        (titles (map-elt state :tool-call-titles)))
+failing the request.  Such a turn carries no real content and no tool calls
+\(`emagent-acp--turn-did-no-work-p'), so it is safe for emagent to re-issue the
+prompt with backoff rather than surface the error.  Matching uses
+`emagent-acp--agent-error-signature-re', which only recognises
+machine-generated error markers."
+  (let ((text (string-trim (or (map-elt state :assistant-text) ""))))
     (and (not (map-elt state :compress-pending))
+         (emagent-acp--turn-did-no-work-p state)
          (not (string-empty-p text))
-         (or (null titles) (zerop (hash-table-count titles)))
-         (< (length text) 400)
+         (string-match-p emagent-acp--agent-error-signature-re text))))
+
+(defun emagent-acp--turn-hit-transient-error-p (state)
+  "Return non-nil when STATE's finished turn ended on a transient error marker.
+
+Unlike `emagent-acp--agent-error-only-response-p' this does not require the
+turn to be empty: it is true even when tool calls ran or real content was
+produced.  Such a turn must NOT be replayed (that would repeat side effects
+like commits or pushes); instead emagent resumes it by sending \"continue\",
+mirroring what a user does by hand."
+  (let ((text (or (map-elt state :assistant-text) "")))
+    (and (not (map-elt state :compress-pending))
          (string-match-p emagent-acp--agent-error-signature-re text))))
 
 (defun emagent-acp--abort-prompt (state message)
