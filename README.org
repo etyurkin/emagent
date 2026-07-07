@@ -168,8 +168,10 @@ Agent responses appear as Org subsections under the =* user>= heading:
   response finishes.  With Cursor, file paths are read from =store.db=.  Shell
   commands, =eval= forms, and CLI tools (=grep=, =cat=, …) render as Org src
   blocks (=sh= / =elisp=) instead of a =→= line, with any permission decision
-  shown as a leading comment inside the block (=# (Allow: Always)=).  Read,
-  write, and other file-path tools stay as compact =→= lines.
+  shown as a leading comment inside the block (=# (Allow: Always)=).  Edits
+  render the same unified diff a permission prompt shows — even when
+  auto-allowed — so you always see what changed.  Read and other file-path
+  tools stay as compact =→= lines.
 - =** Response= — the final assistant answer (Markdown converted to Org).
 
 ** Side notes while the agent is thinking (/btw/)
