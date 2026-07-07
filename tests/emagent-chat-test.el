@@ -832,6 +832,59 @@ newlines, growing the Thinking tail one blank line per tool cycle."
                  (thinking (substring text start)))
             (should-not (string-match-p "\n\n\n" thinking)))))))))
 
+(ert-deftest emagent-chat-test-thought-close-reopen-cycles-do-not-pile-up ()
+  "Thought close/reopen cycles neither glue thoughts nor grow a blank tail.
+On reopen the stream marker re-syncs by skipping back over the previous
+thought's trailing newlines; the resumed text used to be inserted before
+that stranded run, gluing onto the previous thought while the tail grew
+two newlines per cycle."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (dotimes (i 4)
+            (emagent-chat-append-thought (format "Thought %d.\n\n" i))
+            (emagent-chat-close-thought)
+            (emagent-chat-begin-thought))
+          (let* ((text (substring-no-properties (buffer-string)))
+                 (start (string-match "^\\*\\* Thinking" text))
+                 (thinking (substring text start)))
+            (should (string-match-p "Thought 0\\.\n\nThought 1\\." thinking))
+            (should-not (string-match-p "Thought 0\\.Thought 1\\." thinking))
+            (should-not (string-match-p "\n\n\n" thinking)))))))))
+
+(ert-deftest emagent-chat-test-interleaved-thought-and-response ()
+  "Alternating thought and assistant chunks keep both sections clean.
+Each assistant chunk closes the thought, so an interleaving agent reopens
+the Thinking block many times per turn; resumed thoughts used to glue
+together while a blank run grew before the `** Response' headline, and the
+run stranded at the reasoning tail leaked blank lines into the Response
+body when the headline was created."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "Thought one.\n\n")
+          (emagent-chat-append-assistant "Answer part one. ")
+          (emagent-chat-append-thought "Thought two.\n\n")
+          (emagent-chat-append-assistant "Answer part two.")
+          (let* ((text (substring-no-properties (buffer-string)))
+                 (start (string-match "^\\*\\* Thinking" text))
+                 (body (substring text start)))
+            (should (string-match-p "Thought one\\.\n\nThought two\\." body))
+            (should (string-match-p
+                     "Thought two\\.\n\n\\*\\* Response\nAnswer part one\\. Answer part two\\."
+                     body))
+            (should-not (string-match-p "\n\n\n" body)))))))))
+
 (ert-deftest emagent-chat-test-thought-inline-code-split-across-chunks ()
   "A `code' span split across streaming chunks converts to =verbatim=.
 The opening backtick arrives in one delta and the closing backtick in the
