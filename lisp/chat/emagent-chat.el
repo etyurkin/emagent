@@ -1,8 +1,7 @@
 ;;; emagent-chat.el --- Org scratch buffer UI for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Version: 1.0.2
-;; Package-Requires: ((emacs "29.1"))
+;; Version: 1.1.0
 
 ;;; Code:
 
@@ -54,21 +53,29 @@
 
 ;; emagent-mode-map was created by `define-derived-mode' in
 ;; emagent-chat-mode.el (inheriting from org-mode-map).  Add
-;; emagent-specific bindings here.
+;; emagent-specific bindings here.  Per Emacs conventions `C-c <letter>'
+;; is reserved for users, so emagent commands live under the `C-c C-e'
+;; prefix map.
+(defvar emagent-command-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "u") #'emagent-chat-new-prompt)
+    (define-key map (kbd "p") #'emagent-set-project-directory)
+    (define-key map (kbd "a") #'emagent-chat-attach-buffer)
+    (define-key map (kbd "b") #'emagent-btw)
+    (define-key map (kbd "d") #'emagent-chat-attach-files)
+    (define-key map (kbd "e") #'emagent-chat-attach-error-context)
+    (define-key map (kbd "i") #'emagent-chat-attach-image)
+    (define-key map (kbd "m") #'emagent-set-model)
+    (define-key map (kbd "l") #'emagent-log-view)
+    map)
+  "Keymap for emagent commands, bound to the `C-c C-e' prefix.")
+
 (define-key emagent-mode-map (kbd "C-c C-c") #'emagent-chat-send-or-babel)
-(define-key emagent-mode-map (kbd "C-c a")   #'emagent-chat-attach-buffer)
-(define-key emagent-mode-map (kbd "C-c b")   #'emagent-btw)
-(define-key emagent-mode-map (kbd "C-c d")   #'emagent-chat-attach-files)
-(define-key emagent-mode-map (kbd "C-c e")   #'emagent-chat-attach-error-context)
-(define-key emagent-mode-map (kbd "C-c i")   #'emagent-chat-attach-image)
-(define-key emagent-mode-map (kbd "C-c m")   #'emagent-set-model)
-(define-key emagent-mode-map (kbd "C-c p")   #'emagent-set-project-directory)
-(define-key emagent-mode-map (kbd "C-c l")   #'emagent-log-view)
+(define-key emagent-mode-map (kbd "C-c C-e") emagent-command-map)
 (define-key emagent-mode-map (kbd "C-y")     #'emagent-chat-yank)
 (define-key emagent-mode-map (kbd "TAB")     #'emagent-chat-tab)
 (define-key emagent-mode-map (kbd "<backtab>") #'org-shifttab)
 (define-key emagent-mode-map (kbd "ESC ESC") #'emagent-chat-interrupt)
-(define-key emagent-mode-map (kbd "C-c u")   #'emagent-chat-new-prompt)
 (define-key emagent-mode-map (kbd "C-c ?")   #'emagent-dispatch)
 (define-key emagent-mode-map (kbd "C-a")     #'emagent-chat-beginning-of-line)
 
@@ -247,20 +254,20 @@ Only used when terminal-notifier is installed."
 # This buffer is a scratch pad for chatting with emagent.
 #
 # Type after '* username> ' and press C-c C-c to send.
-# C-c C-c send (on a src block: execute with org-babel instead)
-# C-c u   insert a new '* username>' prompt heading
-# C-c a   attach buffer context to the next send
-# C-c b   send a btw side note while the agent is thinking
-# C-c d   pick project files to attach
-# C-c e   attach compilation/flymake errors to the next send
-# C-y     paste text normally; if clipboard has image, inserts [[file:...]] link
-# C-c i   pick an image file and insert [[file:...]] link at point
-# C-c l   show emagent log (*Emagent Log*)
-# C-c m   set ACP model
-# C-c p   change project directory (moves session, reconnects)
-# C-c ?   command palette (transient menu)
-# ESC ESC interrupt agent response
-# C-x k   kill buffer and disconnect agent
+# C-c C-c   send (on a src block: execute with org-babel instead)
+# C-c C-e u insert a new '* username>' prompt heading
+# C-c C-e a attach buffer context to the next send
+# C-c C-e b send a btw side note while the agent is thinking
+# C-c C-e d pick project files to attach
+# C-c C-e e attach compilation/flymake errors to the next send
+# C-y       paste text normally; if clipboard has image, inserts [[file:...]] link
+# C-c C-e i pick an image file and insert [[file:...]] link at point
+# C-c C-e l show emagent log (*Emagent Log*)
+# C-c C-e m set ACP model
+# C-c C-e p change project directory (moves session, reconnects)
+# C-c ?     command palette (transient menu)
+# ESC ESC   interrupt agent response
+# C-x k     kill buffer and disconnect agent
 # M-x emagent-mode to reconnect a saved session
 
 ")

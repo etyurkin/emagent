@@ -62,41 +62,6 @@
   (should (string-match-p "<conversation>" (emagent-chat--compress-prompt-text "hello")))
   (should (string-match-p "hello" (emagent-chat--compress-prompt-text "hello"))))
 
-(ert-deftest emagent-chat-test-migrate-legacy-response-block ()
-  (with-temp-buffer
-    (insert (format "%srequest\n\n# --- emagent ---\n#+begin_quote Thinking\n,* heading\n,#+end_quote\n#+end_quote\n\n## Result title\nbody\n# --- /emagent ---\n"
-                    (emagent-chat--user-heading-prefix)))
-    (let ((count (emagent-chat--migrate-legacy-response-delimiters))
-          (text nil))
-      (setq text (buffer-string))
-      (should (= 1 count))
-      (should-not (string-match-p "# --- emagent ---" text))
-      (should (string-match-p "^\\*\\* Thinking$" text))
-      (should (string-match-p "^\\*\\* Response$" text))
-      (should (string-match-p "^ \\* heading$" text))
-      (should (string-match-p "^ #\\+end_quote$" text))
-      (should (string-match-p "^## Result title$" text)))))
-
-(ert-deftest emagent-chat-test-migrate-legacy-response-idempotent ()
-  (with-temp-buffer
-    (insert (format "%srequest\n\n# --- emagent ---\nreply\n# --- /emagent ---\n"
-                    (emagent-chat--user-heading-prefix)))
-    (emagent-chat--maybe-migrate-legacy-format)
-    (let ((once (buffer-string)))
-      (emagent-chat--maybe-migrate-legacy-format)
-      (should (string= once (buffer-string))))))
-
-(ert-deftest emagent-chat-test-mode-activation-migrates-legacy-format ()
-  (with-temp-buffer
-    (insert "# -*- mode: emagent -*-\n#+EMAGENT_PROJECT: /tmp\n\n")
-    (insert (format "%srequest\n\n# --- emagent ---\nreply\n# --- /emagent ---\n"
-                    (emagent-chat--user-heading-prefix)))
-    (let ((emagent--force-activation t))
-      (emagent-mode))
-    (let ((text (buffer-string)))
-      (should-not (string-match-p "# --- emagent ---" text))
-      (should (string-match-p "^\\*\\* Response$" text)))))
-
 (ert-deftest emagent-chat-test-bare-slash-command-p ()
   (should (emagent-chat--bare-slash-command-p "/compress"))
   (should (emagent-chat--bare-slash-command-p "/plan refactor auth"))

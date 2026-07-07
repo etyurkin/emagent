@@ -38,7 +38,6 @@
 (declare-function emagent-chat--user-heading-re "emagent-chat")
 (declare-function cl-position-if "cl-lib")
 
-;;;###autoload
 (defun emagent-chat--bare-slash-command-p (text)
   "Return non-nil when TEXT is a single-line slash command."
   (let ((trimmed (string-trim text)))
@@ -51,7 +50,6 @@
            (and (> (length cmd) 0)
                 (string-match-p "\\`[-a-z0-9:]+\\'" cmd))))))
 
-;;;###autoload
 (defun emagent-chat--compress-command-p (text)
   "Return non-nil when TEXT is a conversation compression slash command."
   (let ((trimmed (string-trim text)))
@@ -64,7 +62,6 @@
 (defconst emagent-chat--compress-history-limit 200000
   "Maximum conversation chars included in a /compress request.")
 
-;;;###autoload
 (defun emagent-chat--compress-boundary ()
   "Return point at the user heading before an open response, or nil."
   (save-excursion
@@ -73,7 +70,6 @@
       (when (re-search-backward (emagent-chat--user-heading-re) nil t)
         (line-beginning-position)))))
 
-;;;###autoload
 (defun emagent-chat--conversation-history-text ()
   "Return prior conversation text for /compress, or \"\"."
   (save-excursion
@@ -82,7 +78,6 @@
       (when (and end (> end zone))
         (string-trim (buffer-substring-no-properties zone end))))))
 
-;;;###autoload
 (defun emagent-chat--compress-prompt-text (history)
   "Return a summarization prompt for compression using HISTORY."
   (let ((body (if (> (length history) emagent-chat--compress-history-limit)
