@@ -76,8 +76,5 @@
     (format "Summarize the conversation below for context compression. Preserve key decisions, file paths, errors, and open tasks. Output only the summary.\n\n<conversation>\n%s\n</conversation>"
             body)))
 
-;;;###autoload
-
-
 (provide 'emagent-chat-compress)
 ;;; emagent-chat-compress.el ends here

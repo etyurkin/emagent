@@ -8,6 +8,7 @@
 (require 'emagent-acp-state)
 (require 'emagent-acp-provider)
 (require 'emagent-acp-protocol)
+(require 'emagent-chat-compress)
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 
@@ -77,6 +78,28 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
         (funcall cb "No conversation to compress"))))
   (emagent-acp--refresh-mode-line state))
 
+(defun emagent-acp--schedule-prompt-retry (state session-id blocks images gen attempt reason)
+  "Re-dispatch the in-flight prompt after exponential backoff.
+
+REASON is a short human-readable phrase describing why the retry fires; it is
+shown to the user together with the attempt count.  The GEN guard prevents a
+stale retry from firing after the prompt was superseded or interrupted."
+  (let ((delay (emagent-acp--prompt-retry-delay attempt)))
+    (emagent-acp--notify-user
+     state
+     (format "emagent: %s; retrying (%d/%d) in %.1fs"
+             reason attempt emagent-acp-prompt-retry-attempts delay))
+    (emagent-acp--schedule-prompt-watchdog state)
+    (run-with-timer
+     delay nil
+     (lambda ()
+       (when (and (eq (map-elt state :prompt-generation) gen)
+                  (map-elt state :busy))
+         (emagent-acp--dispatch-prompt-request
+          :state state :session-id session-id
+          :blocks blocks :images images
+          :gen gen :attempt (1+ attempt)))))))
+
 (cl-defun emagent-acp--dispatch-prompt-request (&key state session-id blocks images gen attempt)
   "Send the session/prompt request, retrying transient network failures.
 
@@ -84,7 +107,11 @@ ATTEMPT is the 1-based try count.  A failure whose message matches
 `emagent-acp--retriable-prompt-error-p' is retried with exponential
 backoff until `emagent-acp-prompt-retry-attempts' is reached; only then is
 the error surfaced via `emagent-acp--abort-prompt'.  GEN guards against a
-stale retry firing after the prompt was superseded or interrupted."
+stale retry firing after the prompt was superseded or interrupted.
+
+Some agents accept the request and then emit a transient network error as the
+turn's whole output instead of failing the RPC; such a completion is detected
+by `emagent-acp--agent-error-only-response-p' and re-issued the same way."
   (emagent-acp--send-request
    :state state
    :request (emagent-acp-make-session-prompt-request
@@ -92,7 +119,18 @@ stale retry firing after the prompt was superseded or interrupted."
    :on-success
    (lambda (response)
      (when (eq (map-elt state :prompt-generation) gen)
-       (emagent-acp--complete-prompt state response)))
+       (if (and (map-elt state :busy)
+                (< attempt emagent-acp-prompt-retry-attempts)
+                (emagent-acp--agent-error-only-response-p state))
+           (let ((message (string-trim (or (map-elt state :assistant-text) ""))))
+             (map-put! state :assistant-text "")
+             (map-put! state :thought-text "")
+             (emagent-acp--clear-thought-buffer state)
+             (emagent-acp--cancel-prompt-render state)
+             (emagent-acp--schedule-prompt-retry
+              state session-id blocks images gen attempt
+              (format "agent returned a transient error (%s)" message)))
+         (emagent-acp--complete-prompt state response))))
    :on-failure
    (lambda (error _raw)
      (when (eq (map-elt state :prompt-generation) gen)
@@ -100,21 +138,9 @@ stale retry firing after the prompt was superseded or interrupted."
          (if (and (map-elt state :busy)
                   (< attempt emagent-acp-prompt-retry-attempts)
                   (emagent-acp--retriable-prompt-error-p message))
-             (let ((delay (emagent-acp--prompt-retry-delay attempt)))
-               (emagent-acp--notify-user
-                state
-                (format "emagent: prompt failed (%s); retrying (%d/%d) in %.1fs"
-                        message attempt emagent-acp-prompt-retry-attempts delay))
-               (emagent-acp--schedule-prompt-watchdog state)
-               (run-with-timer
-                delay nil
-                (lambda ()
-                  (when (and (eq (map-elt state :prompt-generation) gen)
-                             (map-elt state :busy))
-                    (emagent-acp--dispatch-prompt-request
-                     :state state :session-id session-id
-                     :blocks blocks :images images
-                     :gen gen :attempt (1+ attempt))))))
+             (emagent-acp--schedule-prompt-retry
+              state session-id blocks images gen attempt
+              (format "prompt failed (%s)" message))
            (emagent-acp--abort-prompt state (format "prompt failed: %s" message))
            (emagent-acp--notify-user
             state (format "emagent: prompt failed: %s" message))))))))

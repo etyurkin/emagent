@@ -297,6 +297,32 @@ retries them before surfacing the error (`emagent-acp-prompt-retry-attempts')."
   "Return backoff seconds to wait before the next retry after ATTEMPT (1-based)."
   (* emagent-acp-prompt-retry-base-delay (expt 2 (max 0 (1- attempt)))))
 
+(defconst emagent-acp--agent-error-signature-re
+  (concat "RetriableError\\|getaddrinfo\\|ENOTFOUND\\|EAI_AGAIN"
+          "\\|ECONNRESET\\|ECONNREFUSED\\|ETIMEDOUT\\|EPIPE"
+          "\\|\\[unavailable\\]\\|socket hang up")
+  "Machine-generated markers of a transient error emitted as agent output.
+Deliberately stricter than `emagent-acp--retriable-prompt-error-p': it must
+not match prose such as \"network error\" or \"timeout\" that can legitimately
+appear inside a real answer.")
+
+(defun emagent-acp--agent-error-only-response-p (state)
+  "Return non-nil when STATE's finished turn is only a transient agent error.
+
+Some agents (e.g. cursor-agent-acp) accept the prompt, then hit a transient
+network failure and emit the error as the whole turn's output instead of
+failing the request.  Such a turn carries no real content and no tool calls,
+so it is safe for emagent to re-issue the prompt with backoff rather than
+surface the error.  Matching uses `emagent-acp--agent-error-signature-re',
+which only recognises machine-generated error markers."
+  (let ((text (string-trim (or (map-elt state :assistant-text) "")))
+        (titles (map-elt state :tool-call-titles)))
+    (and (not (map-elt state :compress-pending))
+         (not (string-empty-p text))
+         (or (null titles) (zerop (hash-table-count titles)))
+         (< (length text) 400)
+         (string-match-p emagent-acp--agent-error-signature-re text))))
+
 (defun emagent-acp--abort-prompt (state message)
   "Abort the in-flight prompt for STATE and show MESSAGE."
   (when (or (map-elt state :busy) (map-elt state :prompt-finishing))
