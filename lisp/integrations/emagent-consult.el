@@ -1,8 +1,7 @@
 ;;; emagent-consult.el --- Optional consult integration for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Version: 1.0.2
-;; Package-Requires: ((emacs "29.1"))
+;; Version: 1.1.0
 
 ;;; Commentary:
 ;;
@@ -32,8 +31,14 @@
                                      (buffer-list)))))
   "Consult source listing active emagent session buffers.")
 
-(with-eval-after-load 'consult
-  (add-to-list 'consult-buffer-sources 'emagent-consult--source 'append))
+(defun emagent-consult--maybe-register ()
+  "Add the emagent source to `consult-buffer-sources' when consult is loaded."
+  (when (boundp 'consult-buffer-sources)
+    (add-to-list 'consult-buffer-sources 'emagent-consult--source 'append)))
+
+;; Register on first emagent buffer activation; by then consult is loaded
+;; if the user uses it.  Avoids configuring consult at load time.
+(add-hook 'emagent-mode-hook #'emagent-consult--maybe-register)
 
 (provide 'emagent-consult)
 

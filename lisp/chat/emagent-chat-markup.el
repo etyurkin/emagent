@@ -27,7 +27,6 @@
 (require 'cl-lib)
 (require 'org)
 
-;;;###autoload
 (defun emagent-chat--lang-from-filename (file)
   "Return an org babel language tag for FILE, or nil when unknown."
   (pcase (downcase (or (file-name-extension file) ""))
@@ -51,7 +50,6 @@
     ("mermaid" "mermaid")
     (_ nil)))
 
-;;;###autoload
 (defun emagent-chat--lang-from-src-tag (tag)
   "Return a normalized org babel language tag for TAG."
   (cond
@@ -60,7 +58,6 @@
    ((member tag '("elisp" "emacs-lisp")) "elisp")
    (t tag)))
 
-;;;###autoload
 (defun emagent-chat--table-row-p (line)
   "Return non-nil when LINE looks like an org/markdown table row."
   (let ((trimmed (string-trim line)))
@@ -68,7 +65,6 @@
          (string-prefix-p "|" trimmed)
          (string-suffix-p "|" trimmed))))
 
-;;;###autoload
 (defun emagent-chat--table-hline-p (line)
   "Return non-nil when LINE is a table separator row."
   (when (emagent-chat--table-row-p line)
@@ -77,24 +73,20 @@
            ;; Markdown |---|---| and org |---+---| hlines; reject data rows.
            (not (string-match-p "[^-+:|[:space:]]" inner))))))
 
-;;;###autoload
 (defun emagent-chat--table-ncols (line)
   "Return the number of columns in table row LINE."
   (length (split-string (substring (string-trim line) 1 -1) "|" t)))
 
-;;;###autoload
 (defun emagent-chat--org-table-hline (ncols)
   "Return an org table separator row for NCOLS columns."
   (concat "|" (mapconcat (lambda (_) "---------") (number-sequence 1 ncols) "+") "|"))
 
-;;;###autoload
 (defun emagent-chat--normalize-table-row (line)
   "Normalize spacing in a single table row."
   (let* ((trimmed (string-trim line))
          (cells (mapcar #'string-trim (split-string (substring trimmed 1 -1) "|" t))))
     (concat "|" (mapconcat (lambda (cell) (format " %s " cell)) cells "|") "|")))
 
-;;;###autoload
 (defun emagent-chat--fix-table-block (rows)
   "Convert markdown table ROWS into a valid org table block."
   (let* ((body (if (and (> (length rows) 1)
@@ -106,7 +98,6 @@
          (hline (emagent-chat--org-table-hline ncols)))
     (append (list (car normalized) hline) (cdr normalized))))
 
-;;;###autoload
 (defun emagent-chat--align-org-tables-in-region (start end)
   "Align every org table between START and END."
   (save-excursion
@@ -214,7 +205,6 @@ must not be escaped — they need to remain valid org src block delimiters."
     (concat " " line))
    (t line)))
 
-;;;###autoload
 (defun emagent-chat--escape-reasoning-text (text &optional mid-line)
   "Convert markdown markup in reasoning TEXT to org before inserting it.
 Applied once per flush (text is already outside any code fence at this point).
@@ -252,7 +242,6 @@ held across a streaming boundary)."
                                     (emagent-chat--escape-reasoning-line line)))
                  "\n"))))
 
-;;;###autoload
 (defun emagent-chat--demote-response-headings (text)
   "Demote every Org headline in TEXT to level >= 3.
 
@@ -346,7 +335,6 @@ its own headings must nest beneath it rather than starting new turns."
         (match-string 1 trimmed)
       text)))
 
-;;;###autoload
 (defun emagent-chat--convert-agent-markup (text)
   "Convert leftover markdown markup in agent responses to org."
   (emagent-chat--close-unclosed-org-src

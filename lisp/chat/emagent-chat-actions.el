@@ -44,7 +44,7 @@
     (point)))
 
 (defun emagent-btw (text)
-  "Send TEXT to the agent immediately as a btw side note (C-c b).
+  "Send TEXT to the agent immediately as a btw side note (C-c C-e b).
 
 When the agent is still thinking, cancels the in-flight turn, keeps any
 partial response, and sends `btw, TEXT' as a new prompt."

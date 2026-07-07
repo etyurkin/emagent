@@ -52,21 +52,18 @@ from ~/.cursor/commands and .cursor/commands/.")
   :type 'boolean
   :group 'emagent-chat)
 
-;;;###autoload
 (defun emagent-chat--slash-command-name (name)
   "Return slash command NAME without a leading \"/\"."
   (if (and (stringp name) (not (string-empty-p name)) (string-prefix-p "/" name))
       (substring name 1)
     name))
 
-;;;###autoload
 (defun emagent-chat--slash-command-plist (name description &optional hint)
   "Return a slash-command plist for NAME."
   `((name . ,(emagent-chat--slash-command-name name))
     (description . ,(or description ""))
     (hint . ,(or hint ""))))
 
-;;;###autoload
 (defun emagent-chat--normalize-slash-commands (commands)
   "Normalize COMMANDS from ACP JSON into slash-command plists."
   (let ((items (cond
@@ -80,7 +77,6 @@ from ~/.cursor/commands and .cursor/commands/.")
                (map-nested-elt cmd '(input hint))))
             items)))
 
-;;;###autoload
 (defun emagent-chat--merge-slash-commands (base extra)
   "Merge EXTRA into BASE by command name; EXTRA overrides BASE."
   (let ((table (make-hash-table :test 'equal)))

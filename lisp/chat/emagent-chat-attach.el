@@ -107,7 +107,7 @@ Returns the file path."
 
 ;;;###autoload
 (defun emagent-chat-attach-image ()
-  "Insert an image link at point for the next prompt (C-c i).
+  "Insert an image link at point for the next prompt (C-c C-e i).
 
 If the clipboard contains an image, saves it to a temp file under
 `emagent-chat--image-dir' and inserts a [[file:...]] org link at point.

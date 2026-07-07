@@ -263,7 +263,6 @@ buffer."
 (defvar-local emagent-chat--mode-line-refresh-timer nil
   "One-shot idle timer that coalesces mode-line recomputes for this buffer.")
 
-;;;###autoload
 (defun emagent-chat--refresh-mode-line ()
   "Recompute and invalidate the mode line in the current buffer immediately."
   (when emagent-chat--mode-line-refresh-timer
@@ -272,7 +271,6 @@ buffer."
   (emagent-chat--mode-line-recompute)
   (emagent-chat--maybe-force-mode-line-update))
 
-;;;###autoload
 (defun emagent-chat--refresh-mode-line-soon ()
   "Queue a single mode-line recompute for the current buffer."
   (let ((buf (current-buffer)))
@@ -295,7 +293,6 @@ buffer."
           (cancel-timer emagent-chat--mode-line-refresh-timer)
           (setq emagent-chat--mode-line-refresh-timer nil))))))
 
-;;;###autoload
 (defun emagent-chat--refresh-mode-line-on-focus ()
   "Recompute a stale or busy mode line after this buffer becomes active."
   (when (emagent-chat--buffer-active-p)
@@ -374,7 +371,6 @@ buffer."
   (emagent-chat--spinner-sync-frame)
   (emagent-chat--spinner-refresh-idle))
 
-;;;###autoload
 (defun emagent-chat--spinner-restart-timer ()
   "Restart the spinner timer using `emagent-chat-spinner-interval'."
   (when emagent-chat--spinner-timer
@@ -383,7 +379,6 @@ buffer."
         (run-with-timer 0 emagent-chat-spinner-interval
                         #'emagent-chat--spinner-tick)))
 
-;;;###autoload
 (defun emagent-chat--spinner-start ()
   "Start the spinner timer if not already running."
   (emagent-chat--spinner-ensure-running)
@@ -393,7 +388,6 @@ buffer."
     (when (emagent-chat--buffer-displayed-p)
       (redisplay t))))
 
-;;;###autoload
 (defun emagent-chat--mode-line-context-usage ()
   "Return a propertized context fill string, or nil.
 Shows a percentage when the provider reports context usage, `ctx:n/a' when a
@@ -461,16 +455,11 @@ connected provider (cursor) cannot report it, and nil otherwise."
     (when doom-modeline-mode
       (doom-modeline-set-modeline 'emagent-chat))))
 
-(with-eval-after-load 'doom-modeline
-  (emagent-chat--register-doom-modeline)
-  (add-hook 'emagent-mode-hook #'emagent-chat--setup-doom-modeline)
-  (dolist (buffer (buffer-list))
-    (with-current-buffer buffer
-      (when (derived-mode-p 'emagent-mode)
-        (emagent-chat--setup-doom-modeline)))))
-
-(when (featurep 'doom-modeline)
-  (emagent-chat--register-doom-modeline))
+;; Apply the emagent doom-modeline layout whenever an emagent buffer is
+;; activated.  `emagent-chat--setup-doom-modeline' registers the format and
+;; no-ops unless doom-modeline is loaded, so no `with-eval-after-load' hook
+;; on the optional dependency is needed.
+(add-hook 'emagent-mode-hook #'emagent-chat--setup-doom-modeline)
 
 (provide 'emagent-chat-mode-line)
 ;;; emagent-chat-mode-line.el ends here

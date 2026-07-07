@@ -30,7 +30,6 @@
 
 (declare-function project-root "project")
 
-;;;###autoload
 (defun emagent-chat--read-top-property (name)
   "Return the value of #+NAME at the top of the buffer."
   (save-excursion
@@ -38,7 +37,6 @@
     (when (re-search-forward (format "^#\\+%s:[ \t]*\\(.*\\)" name) nil t)
       (string-trim (match-string 1)))))
 
-;;;###autoload
 (defun emagent-chat--metadata-end ()
   "Return point after emagent comment and metadata header lines."
   (save-excursion
@@ -50,7 +48,6 @@
       (forward-line 1))
     (point)))
 
-;;;###autoload
 (defun emagent-chat--write-top-property (name value)
   "Insert or update #+NAME in the emagent metadata header."
   (let* ((inhibit-read-only t)
@@ -67,7 +64,6 @@
         (unless (bolp) (insert "\n"))
         (insert line "\n")))))
 
-;;;###autoload
 (defun emagent-chat--delete-top-property (name)
   "Delete #+NAME from the top of the buffer."
   (let ((inhibit-read-only t))
@@ -76,17 +72,14 @@
       (when (re-search-forward (format "^#\\+%s:.*\n?" name) nil t)
         (replace-match "")))))
 
-;;;###autoload
 (defun emagent-chat--read-project-property ()
   "Return the #+EMAGENT_PROJECT value at the top of the buffer."
   (emagent-chat--read-top-property "EMAGENT_PROJECT"))
 
-;;;###autoload
 (defun emagent-chat--read-model-property ()
   "Return the #+EMAGENT_MODEL value at the top of the buffer."
   (emagent-chat--read-top-property "EMAGENT_MODEL"))
 
-;;;###autoload
 (defun emagent-chat--canonical-model-id (model)
   "Return MODEL id in the form Cursor ACP expects (keep bracket suffixes)."
   (when model
@@ -94,7 +87,6 @@
         "default[]"
       model)))
 
-;;;###autoload
 (defun emagent-chat--normalize-model-id (model)
   "Return a short user-facing model label for display (mode line, prompts).
 Strips key=value annotations (e.g. [thinking=true]) and empty brackets ([]).
@@ -117,14 +109,12 @@ plus an optional parenthetical alias when NAME differs from the normalized id."
                             name)))
       (cons base (concat brackets (if short-name (format " (%s)" short-name) ""))))))
 
-;;;###autoload
 (defun emagent-chat--model-choice-label (id &optional name)
   "Return a completing-read label for model ID, showing the full canonical id.
 When NAME differs from the normalized ID (e.g. Auto vs default[]), append it."
   (let ((parts (emagent-chat--model-choice-label-parts id name)))
     (when parts (concat (car parts) (cdr parts)))))
 
-;;;###autoload
 (defun emagent-chat--model-choice-label-display (id &optional name)
   "Like `emagent-chat--model-choice-label', with theme faces for model and details."
   (let ((parts (emagent-chat--model-choice-label-parts id name)))
@@ -134,12 +124,10 @@ When NAME differs from the normalized ID (e.g. Auto vs default[]), append it."
                   ""
                 (propertize (cdr parts) 'face 'emagent-model-choice-detail))))))
 
-;;;###autoload
 (defun emagent-chat--read-session-property ()
   "Return the #+EMAGENT_SESSION value at the top of the buffer."
   (emagent-chat--read-top-property "EMAGENT_SESSION"))
 
-;;;###autoload
 (defun emagent-chat--read-agent-property ()
   "Return the #+EMAGENT_AGENT value at the top of the buffer."
   (emagent-chat--read-top-property "EMAGENT_AGENT"))
@@ -147,7 +135,6 @@ When NAME differs from the normalized ID (e.g. Auto vs default[]), append it."
 (defconst emagent-chat--allowed-tools-property "EMAGENT_ALLOWED_TOOLS")
 (defconst emagent-chat--allowed-permissions-property "EMAGENT_ALLOWED_PERMISSIONS")
 
-;;;###autoload
 (defun emagent-chat--read-allowed-tools-property ()
   "Return the #+EMAGENT_ALLOWED_TOOLS value as a list of tool symbols."
   (when-let* ((value (emagent-chat--read-top-property
@@ -155,7 +142,6 @@ When NAME differs from the normalized ID (e.g. Auto vs default[]), append it."
               ((not (string-empty-p value))))
     (mapcar #'intern (split-string value "[ ,]+" t))))
 
-;;;###autoload
 (defun emagent-chat--read-allowed-permissions-property ()
   "Return #+EMAGENT_ALLOWED_PERMISSIONS as a list of permission fingerprints."
   (when-let* ((value (emagent-chat--read-top-property
@@ -163,7 +149,6 @@ When NAME differs from the normalized ID (e.g. Auto vs default[]), append it."
               ((not (string-empty-p value))))
     (split-string value "[ ,]+" t)))
 
-;;;###autoload
 (defun emagent-chat--session-directory ()
   "Return the ACP working directory for the current emagent buffer.
 Reads #+EMAGENT_PROJECT from the buffer header if set, falling back to

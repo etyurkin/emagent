@@ -1,8 +1,7 @@
 ;;; emagent-embark.el --- Optional embark integration for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Version: 1.0.2
-;; Package-Requires: ((emacs "29.1"))
+;; Version: 1.1.0
 
 ;;; Commentary:
 ;;
@@ -59,12 +58,18 @@
   "Embark keymap for emagent src blocks.
 Actions: c=copy, i=insert into buffer, e=execute with org-babel.")
 
-(with-eval-after-load 'embark
-  (when (boundp 'embark-general-map)
-    (set-keymap-parent emagent-embark-src-block-map embark-general-map))
-  (add-to-list 'embark-target-finders #'emagent-embark--src-block-target)
-  (add-to-list 'embark-keymap-alist
-               '(emagent-src-block . emagent-embark-src-block-map)))
+(defun emagent-embark--maybe-register ()
+  "Register the emagent embark target and actions when embark is loaded."
+  (when (boundp 'embark-keymap-alist)
+    (when (boundp 'embark-general-map)
+      (set-keymap-parent emagent-embark-src-block-map embark-general-map))
+    (add-to-list 'embark-target-finders #'emagent-embark--src-block-target)
+    (add-to-list 'embark-keymap-alist
+                 '(emagent-src-block . emagent-embark-src-block-map))))
+
+;; Register on first emagent buffer activation; by then embark is loaded
+;; if the user uses it.  Avoids configuring embark at load time.
+(add-hook 'emagent-mode-hook #'emagent-embark--maybe-register)
 
 (provide 'emagent-embark)
 
