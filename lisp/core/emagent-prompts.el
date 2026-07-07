@@ -1,8 +1,7 @@
 ;;; emagent-prompts.el --- System prompt text for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Version: 1.0.2
-;; Package-Requires: ((emacs "29.1"))
+;; Version: 1.1.0
 
 ;;; Commentary:
 ;;
@@ -427,7 +426,7 @@ Write each binding on its own line:
 (file-name-directory \"/a/b/c.el\")          ;; \"/a/b/\"
 (file-name-nondirectory \"/a/b/c.el\")       ;; \"c.el\"
 (file-name-base \"/a/b/c.el\")               ;; \"c\"
-(expand-file-name \"~/.emacs.d\")            ;; absolute path
+(expand-file-name \"~/project\")            ;; absolute path
 (file-relative-name \"/a/b/c\" \"/a\")        ;; \"b/c\"
 (directory-files dir nil \".*\\\\.el$\")       ;; list .el files
 (directory-files-recursively dir \".*\\\\.java$\")

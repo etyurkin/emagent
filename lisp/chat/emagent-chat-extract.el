@@ -75,7 +75,6 @@
       (provider . ,provider)
       (position . ,(point)))))
 
-;;;###autoload
 (defun emagent-chat--bookmark-jump (bookmark)
   "Jump to an emagent BOOKMARK, reopening or reconnecting the session."
   (let* ((session-id (bookmark-prop-get bookmark 'session-id))
@@ -98,7 +97,6 @@
 ;;; Response extraction
 ;;; -------------------------------------------------------------------------
 
-;;;###autoload
 (defun emagent-chat--last-response-bounds ()
   "Return (BEG . END) for the last completed `** Response' body, or nil."
   (save-excursion
@@ -112,7 +110,6 @@
                    (point-max))))
         (cons beg end)))))
 
-;;;###autoload
 (defun emagent-chat--collect-src-blocks (beg end)
   "Return list of (LANG . CODE) for each src block between BEG and END."
   (let (blocks)

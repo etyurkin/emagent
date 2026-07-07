@@ -23,7 +23,6 @@
 (require 'map)
 (require 'emagent-log)
 (require 'emagent-chat-markup)
-(require 'emagent-chat-migrate)
 (require 'emagent-chat-header)
 (require 'emagent-context)
 (require 'emagent-chat-mode-line)
@@ -100,7 +99,6 @@ Run \\[emagent-mode] to reconnect a saved session."
   (require 'emagent)
   (setq-local buffer-read-only nil)
   (emagent-chat--writable)
-  (emagent-chat--maybe-migrate-legacy-format)
   (setq emagent-chat-project-directory
         (or emagent-chat-project-directory (emagent-chat--read-project-property))
         emagent-chat-session-id (or emagent-chat-session-id
@@ -182,7 +180,7 @@ buffers when `org-startup-with-inline-images' is enabled globally."
 (cl-defun emagent-chat-open (&key project-dir)
   "Open or create an emagent buffer for PROJECT-DIR.
 
-Buffer names look like *emagent .emacs.d* from a short cwd label.
+Buffer names look like *emagent myproj* from a short cwd label.
 PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
   (unless project-dir
     (user-error "PROJECT-DIR is required"))

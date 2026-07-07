@@ -1,8 +1,7 @@
 ;;; emagent-acp-protocol.el --- ACP protocol layer for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Version: 1.0.2
-;; Package-Requires: ((emacs "29.1"))
+;; Version: 1.1.0
 
 ;;; Commentary:
 ;;

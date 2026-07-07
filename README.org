@@ -88,15 +88,15 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =M-x emagent-set-project-directory=   | Change project directory (moves session, reconnects) |
 | =M-x emagent-reset-permissions=       | Reset stored permissions (project, session, or global) |
 | =C-c C-c=                             | Send =* user>= block; execute src block when inside one |
-| =C-c u=                               | Insert a new =* user>= prompt heading             |
-| =C-c p=                               | Change project directory (moves session, reconnects) |
-| =C-c a=                               | Attach current buffer summary to next prompt     |
-| =C-c b=                               | Send a btw side note while the agent is thinking     |
-| =C-c d=                               | Pick project files to attach to next prompt      |
-| =C-c e=                               | Attach compilation/flymake errors to next prompt |
-| =C-c i=                               | Attach image file (or clipboard image)           |
-| =C-c m=                               | Set ACP model                                    |
-| =C-c l=                               | Show emagent log (=*Emagent Log*=)                |
+| =C-c C-e u=                           | Insert a new =* user>= prompt heading             |
+| =C-c C-e p=                           | Change project directory (moves session, reconnects) |
+| =C-c C-e a=                           | Attach current buffer summary to next prompt     |
+| =C-c C-e b=                           | Send a btw side note while the agent is thinking     |
+| =C-c C-e d=                           | Pick project files to attach to next prompt      |
+| =C-c C-e e=                           | Attach compilation/flymake errors to next prompt |
+| =C-c C-e i=                           | Attach image file (or clipboard image)           |
+| =C-c C-e m=                           | Set ACP model                                    |
+| =C-c C-e l=                           | Show emagent log (=*Emagent Log*=)                |
 | =C-c ?=                               | Command palette (transient menu)                 |
 | =C-p= / =C-n= on =* user>= line         | Navigate prompt history (previous / next)        |
 | =M-x emagent-chat-insert-last-response= | Insert last response into another buffer        |
@@ -105,6 +105,10 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =TAB= elsewhere                       | =org-cycle= (headlines, =** Thinking=, =** Response=, etc.) |
 | =ESC ESC=                             | Interrupt agent response                         |
 | =C-x k=                               | Kill buffer and disconnect agent                 |
+
+Emagent commands live under the =C-c C-e= prefix, since Emacs reserves
+=C-c <letter>= for users.  Press =C-c C-e= then the mnemonic letter (e.g.
+=C-c C-e a= to attach a buffer), or use =C-c ?= for the command palette.
 
 ** Project directory and agent
 
@@ -115,9 +119,9 @@ a region — the entire heading block is captured automatically.
 
 To re-evaluate a previous prompt, edit its =* username>= heading and press
 =C-c C-c= again — the old response is removed and the agent is called with the
-updated text.  Use =C-c u= to insert a fresh heading if the stub was deleted.
+updated text.  Use =C-c C-e u= to insert a fresh heading if the stub was deleted.
 
-To switch the active project directory mid-session, use =C-c p= (=M-x
+To switch the active project directory mid-session, use =C-c C-e p= (=M-x
 emagent-set-project-directory=).  This updates =#+EMAGENT_PROJECT=, moves the
 session files to match the new location (so =session/load= keeps working), and
 reconnects the agent — preserving the full conversation context.  Do *not* edit
@@ -195,7 +199,7 @@ Agent responses appear as Org subsections under the =* user>= heading:
 
 ** Side notes while the agent is thinking (/btw/)
 
-Press =C-c b= while the agent is running to send a quick side note.  A
+Press =C-c C-e b= while the agent is running to send a quick side note.  A
 minibuffer opens — type your message, press Enter.  Emagent cancels the
 in-flight turn (keeping any partial response), then sends =btw, <your
 message>= as a new prompt — the same pattern Cursor and Claude use for
