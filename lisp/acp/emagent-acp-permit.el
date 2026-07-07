@@ -498,6 +498,19 @@ renders of the same line keep the decision suffix instead of dropping it."
                       (substring proposed 0 (min (length proposed) 4000))))
           (format "** Allow edit\n= %s =" resolved))))))
 
+(defun emagent-acp--tool-call-edit-block-spec (update)
+  "Return (\"diff\" . DIFF) when UPDATE is a write/edit whose change can be
+reconstructed as a diff, else nil.  Lets an auto-allowed edit render the
+same diff a permission prompt would, instead of a bare arrow line."
+  (when-let* ((kind (emagent-acp--tool-call-infer-kind update))
+              ((emagent-acp--tool-call-write-kind-p kind))
+              (raw (or (map-elt update 'rawInput) (map-elt update 'arguments)))
+              (path (emagent-acp--tool-call-write-path
+                     update raw (emagent-acp--tool-call-detail update)))
+              (data (emagent-acp--tool-call-normalize-data raw))
+              (diff (emagent-acp--tool-call-edit-diff-string path data)))
+    (cons "diff" diff)))
+
 (defun emagent-acp--tool-call-content-block (tool-call)
   "Return an org subsection string for the permission prompt, or nil.
 For eval, shell, and edit tool calls, return a code block with the payload.
@@ -514,7 +527,10 @@ Edit prompts prefer a unified diff; patch edits fall back to a hunk preview."
             (cond
              ((member kind '("execute" ""))
               (when command
-                (format "** Allow execute\n#+BEGIN_SRC sh\n%s\n#+END_SRC" command)))
+                (if-let ((heredoc (emagent-acp--tool-call-heredoc-script command)))
+                    (format "** Allow execute\n#+BEGIN_SRC %s\n%s\n#+END_SRC"
+                            (car heredoc) (cdr heredoc))
+                  (format "** Allow execute\n#+BEGIN_SRC sh\n%s\n#+END_SRC" command))))
              ((emagent-acp--tool-call-write-kind-p kind)
               (or (when-let ((path (emagent-acp--tool-call-write-path
                                     tool-call raw detail)))

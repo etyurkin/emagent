@@ -5,6 +5,7 @@
 (require 'ert)
 (require 'emagent-test-utils)
 (require 'emagent-chat)
+(require 'emagent-acp-tool-call)
 
 ;;;; Slugs and labels
 
@@ -738,6 +739,20 @@
     (should (string-match-p "#\\+END_SRC" out))
     (should-not (string-match-p "#\\+BEGIN_SRC shell\\n#!/bin/sh\\necho hi\\s-*\\'" out))))
 
+(ert-deftest emagent-chat-test-sentence-space-preserves-filenames ()
+  "An ALL-CAPS filename like VDUNGEON.DAT must not get a space inserted.
+Regression: the sentence-glue-space fix used to fire on any [.?!] followed
+by a capital letter, so `VDUNGEON.DAT' rendered as `VDUNGEON. DAT'."
+  (should (string= "VDUNGEON.DAT"
+                   (emagent-chat--convert-agent-markup "VDUNGEON.DAT")))
+  (should (string= "see TileRenderer.add() for details"
+                   (emagent-chat--convert-agent-markup
+                    "see TileRenderer.add() for details")))
+  ;; A genuinely glued sentence (lowercase word run into a capitalized one)
+  ;; still gets its space back.
+  (should (string= "Done. Next step"
+                   (emagent-chat--convert-agent-markup "Done.Next step"))))
+
 (ert-deftest emagent-chat-test-begin-response-no-eager-thinking ()
   "`begin-response' opens a response without inserting an empty Thinking block."
   (emagent-test--with-emagent-buffer
@@ -765,6 +780,139 @@
           (emagent-chat-show-tool-call "id1" "Read: foo.el")
           (let ((text (substring-no-properties (buffer-string))))
             (should (string-match-p "line one\nline two\n\n→ Read: foo.el" text)))))))))
+
+(ert-deftest emagent-chat-test-thought-blank-chunks-do-not-pile-up ()
+  "Repeated blank-only reasoning deltas collapse to one blank line.
+Some agents stream bare paragraph-break chunks (no other content) while
+still composing; each used to insert its newlines verbatim, so a long
+pause produced a growing run of blank lines at the end of the buffer."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "Actual reasoning text.")
+          (dotimes (_ 20)
+            (emagent-chat-append-thought "\n\n"))
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p
+                     "Actual reasoning text\\.\n\n\\'" text))
+            (should-not (string-match-p
+                         "Actual reasoning text\\.\n\n\n" text)))))))))
+
+(ert-deftest emagent-chat-test-thought-tool-cycles-do-not-pile-up ()
+  "Interleaved reasoning and tool cycles never grow a blank tail.
+After an in-place tool-call update the streaming marker sits before the tool
+line's trailing newline; blank-only reasoning deltas used to strand those
+newlines, growing the Thinking tail one blank line per tool cycle."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (dotimes (i 5)
+            (emagent-chat-append-thought (format "Reasoning paragraph %d." i))
+            (emagent-chat-append-thought "\n\n")
+            (let ((id (format "tool%d" i)))
+              (emagent-chat-show-tool-call id (format "Read: /file%d.el" i))
+              (emagent-chat-show-tool-call
+               id (format "Read: /file%d.el (Allow: Agent)" i)))
+            (emagent-chat-append-thought "\n")
+            (emagent-chat-append-thought "\n\n"))
+          ;; Inspect only the Thinking content (the scaffold above it keeps a
+          ;; blank line by design); it must never hold two blank lines in a row.
+          (let* ((text (substring-no-properties (buffer-string)))
+                 (start (string-match "^\\*\\* Thinking" text))
+                 (thinking (substring text start)))
+            (should-not (string-match-p "\n\n\n" thinking)))))))))
+
+(ert-deftest emagent-chat-test-thought-inline-code-split-across-chunks ()
+  "A `code' span split across streaming chunks converts to =verbatim=.
+The opening backtick arrives in one delta and the closing backtick in the
+next; a per-chunk conversion left both raw, so the fix holds the open span
+until it closes."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "I need no `anim_")
+          (emagent-chat-append-thought "right` layer here.")
+          (emagent-chat-close-thought)
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "=anim_right=" text))
+            (should-not (string-match-p "`anim_right`" text)))))))))
+
+(ert-deftest emagent-chat-test-thought-bold-split-across-chunks ()
+  "A `**bold**' span split across streaming chunks converts to org `*bold*'.
+The opener arrives in one delta and the closer in the next; holding the open
+span until it closes avoids raw `**' markers and keeps a single space before
+the resumed text rather than the leading space `escape-reasoning-line' would
+add to a `*'-initial line."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "use **anim")
+          (emagent-chat-append-thought "_right** here")
+          (emagent-chat-close-thought)
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "use \\*anim_right\\* here" text))
+            (should-not (string-match-p "\\*\\*anim" text)))))))))
+
+(ert-deftest emagent-chat-test-thought-link-split-across-chunks ()
+  "A markdown link split across streaming chunks converts to an org link.
+The boundary can fall inside the text, before the `(', or inside the URL; each
+partial state is held until the closing `)' arrives.  A bare bracket that is
+not a link (e.g. a `[1]' citation) must not stall the stream."
+  (dolist (case '(("see [docs](http://ex" "ample.com) now")
+                  ("see [do" "cs](http://example.com) now")
+                  ("see [docs]" "(http://example.com) now")))
+    (emagent-test--with-emagent-buffer
+     (lambda (buffer _dir)
+       (emagent-test--with-busy-session
+        (lambda ()
+          (with-current-buffer buffer
+            (goto-char (point-max))
+            (emagent-chat--begin-response (point))
+            (emagent-chat-begin-thought)
+            (dolist (chunk case) (emagent-chat-append-thought chunk))
+            (emagent-chat-close-thought)
+            (let ((text (substring-no-properties (buffer-string))))
+              (should (string-match-p
+                       "\\[\\[http://example.com\\]\\[docs\\]\\] now" text))
+              (should-not (string-match-p "](http" text))))))))))
+
+(ert-deftest emagent-chat-test-thought-bracket-citation-not-held ()
+  "A `[1]' citation followed by prose is not mistaken for an open link.
+Holding it would stall the stream until an unrelated `)' or newline, so the
+bracket must flush once the following non-`(' text confirms it is not a link."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "ref [1]")
+          (emagent-chat-append-thought " and more")
+          (emagent-chat-close-thought)
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "ref \\[1\\] and more" text)))))))))
 
 (ert-deftest emagent-chat-test-beginning-of-line-on-user-prompt ()
   (emagent-test--with-emagent-buffer
@@ -986,6 +1134,92 @@
             (should (string-match-p "#\\+BEGIN_SRC elisp\n(require 'emagent)\n#\\+END_SRC"
                                     layout))
             (should-not (string-match-p "\\? emagent-eval: eval" layout)))))))))
+
+(ert-deftest emagent-chat-test-permission-eval-content-block-dedup ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          ;; Same toolCallId as the permission request below: the pending
+          ;; tool-call line already shows the eval form as a src block.
+          (emagent-chat-show-tool-call "tool_eval" "emagent-eval: eval"
+                                       "elisp" "(require 'emagent)")
+          (let ((args (make-hash-table :test 'equal))
+                layout count start)
+            (puthash "form" "(require 'emagent)" args)
+            (emagent-chat-permission-prompt
+             "emagent-eval: eval"
+             '(("Allow once" . :allow-once))
+             (lambda (_choice) nil)
+             `((toolCallId . "tool_eval")
+               (title . "emagent-eval: eval")
+               (arguments . ,args)))
+            (setq layout (substring-no-properties (buffer-string)))
+            (setq count 0 start 0)
+            (while (string-match (regexp-quote "(require 'emagent)") layout start)
+              (setq count (1+ count) start (match-end 0)))
+            (should (= count 1))
+            (should-not (string-match-p "\\*\\* Allow eval" layout))
+            (should (string-match-p "\\[Allow once\\]" layout)))))))))
+
+(ert-deftest emagent-chat-test-permission-question-dedup ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          ;; Same toolCallId: the pending tool-call arrow line already
+          ;; shows the path, so the "? path" line would just repeat it.
+          (emagent-chat-show-tool-call "tool_read" "Read /tmp/l2r4.png")
+          (let (layout)
+            (emagent-chat-permission-prompt
+             "/tmp/l2r4.png"
+             '(("Allow once" . :allow-once))
+             (lambda (_choice) nil)
+             `((toolCallId . "tool_read")
+               (title . "Read /tmp/l2r4.png")))
+            (setq layout (substring-no-properties (buffer-string)))
+            (should-not (string-match-p "\\? " layout))
+            (should (string-match-p "\\[Allow once\\]" layout)))))))))
+
+(ert-deftest emagent-chat-test-permission-heredoc-dedup ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (let* ((cmd "python3 - <<'EOF'\nimport json\nprint(1)\nEOF")
+                 (args (make-hash-table :test 'equal))
+                 (tool-call `((toolCallId . "tool_py")
+                              (title . "python3")
+                              (arguments . ,args)))
+                 spec layout count start)
+            (puthash "command" cmd args)
+            ;; The pending tool-call preview also unwraps the heredoc, so it
+            ;; renders the same python body the permission block would show.
+            (setq spec (emagent-acp--tool-call-block-spec tool-call))
+            (should (equal (car spec) "python"))
+            (emagent-chat-show-tool-call "tool_py" "python3" (car spec) (cdr spec))
+            (emagent-chat-permission-prompt
+             "python3"
+             '(("Allow once" . :allow-once))
+             (lambda (_choice) nil)
+             tool-call)
+            (setq layout (substring-no-properties (buffer-string)))
+            (setq count 0 start 0)
+            (while (string-match (regexp-quote "import json") layout start)
+              (setq count (1+ count) start (match-end 0)))
+            (should (= count 1))
+            (should-not (string-match-p "\\*\\* Allow execute" layout))
+            (should-not (string-match-p "python3 - <<" layout))
+            (should (string-match-p "\\[Allow once\\]" layout)))))))))
 
 (ert-deftest emagent-chat-test-permission-edit-content-block ()
   (emagent-test--with-emagent-buffer
