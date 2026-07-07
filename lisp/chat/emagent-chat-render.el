@@ -260,6 +260,51 @@ are closed, or (lang . body-so-far) for the last unclosed fence."
       (push (substring text pos) parts))
     (cons (apply #'concat (nreverse parts)) incomplete)))
 
+(defun emagent-chat--count-substring (needle s end)
+  "Return the count of non-overlapping NEEDLE occurrences in S before END."
+  (let ((n 0) (pos 0) (len (length needle)) hit)
+    (while (setq hit (cl-search needle s :start2 pos :end2 end))
+      (setq n (1+ n)
+            pos (+ hit len)))
+    n))
+
+(defun emagent-chat--open-markup-start (text)
+  "Return the index in TEXT where a trailing, still-incomplete markdown span
+begins, or nil when TEXT ends on a complete boundary.
+
+Covers inline code `code', bold **text**, and links [text](url) whose closing
+delimiter may still arrive in a later streaming chunk.  Each pattern is
+anchored to the end of TEXT and forbids an interior newline, so a stray
+delimiter can never stall streaming past its own line; the earliest such span
+wins when several are open at once."
+  (let (starts)
+    ;; Inline code: a trailing unmatched opening backtick.
+    (when (and (string-match "`[^`\n]*\\'" text)
+               (cl-evenp (cl-count ?` text :end (match-beginning 0))))
+      (push (match-beginning 0) starts))
+    ;; Bold: a trailing `**' opener with no closing `**' yet.
+    (when (and (string-match "\\*\\*[^*\n]*\\'" text)
+               (cl-evenp (emagent-chat--count-substring "**" text
+                                                        (match-beginning 0))))
+      (push (match-beginning 0) starts))
+    ;; Link, in any partial state: `[text', `[text]', or `[text](url'.
+    (dolist (re '("\\[[^][\n]*\\'"
+                  "\\[[^][\n]+\\][ \t]*\\'"
+                  "\\[[^][\n]+\\][ \t]*([^)\n]*\\'"))
+      (when (string-match re text)
+        (push (match-beginning 0) starts)))
+    (when starts (apply #'min starts))))
+
+(defun emagent-chat--split-open-markup (text)
+  "Split TEXT before a trailing, still-incomplete markdown span.
+Return (EMIT . HOLD): HOLD begins at an inline code, bold, or link span whose
+closing delimiter may arrive in a later chunk, or \"\" when TEXT ends on a
+complete boundary.  Holding the partial span keeps markup that a streaming
+boundary split from rendering as raw `*', backtick, or bracket characters."
+  (if-let ((start (emagent-chat--open-markup-start text)))
+      (cons (substring text 0 start) (substring text start))
+    (cons text "")))
+
 (defun emagent-chat--schedule-thought-flush ()
   "Debounce reasoning inserts using `emagent-chat-thought-stream-delay'."
   (when emagent-chat--thought-flush-timer
@@ -288,10 +333,14 @@ are closed, or (lang . body-so-far) for the last unclosed fence."
                   emagent-chat--assistant-marker (point-marker)
                   emagent-chat--reasoning-streamed-p t)))))))
 
-(defun emagent-chat--flush-thought-pending ()
+(defun emagent-chat--flush-thought-pending (&optional final)
   "Insert any batched reasoning text into the open Thinking block.
 Converts complete markdown code fences to org src blocks; buffers incomplete
-fences in `emagent-chat--fence-state' until the closing ``` arrives."
+fences in `emagent-chat--fence-state' until the closing ``` arrives, and
+buffers a trailing partial inline span (code, bold, or link) in
+`emagent-chat--thought-pending' until its closing delimiter arrives, so markup
+split across streaming chunks never renders raw.  With FINAL non-nil (thought
+close or an interrupting tool call) everything buffered is emitted as-is."
   (when emagent-chat--thought-flush-timer
     (cancel-timer emagent-chat--thought-flush-timer)
     (setq emagent-chat--thought-flush-timer nil))
@@ -307,6 +356,13 @@ fences in `emagent-chat--fence-state' until the closing ``` arrives."
              (to-insert (car result))
              (new-fence (cdr result)))
         (setq emagent-chat--fence-state new-fence)
+        ;; With no open fence and more chunks still coming, hold back a
+        ;; trailing partial markup span (inline code, bold, or link) whose
+        ;; closing delimiter may arrive in the next chunk.
+        (unless (or final new-fence)
+          (let ((split (emagent-chat--split-open-markup to-insert)))
+            (setq to-insert (car split)
+                  emagent-chat--thought-pending (cdr split))))
         (when (not (string-empty-p to-insert))
           (emagent-chat--with-streaming-view
            (lambda ()
@@ -348,7 +404,7 @@ fences in `emagent-chat--fence-state' until the closing ``` arrives."
 
 (defun emagent-chat-close-thought ()
   "Close the open `** Thinking' subsection, if any, and schedule folding."
-  (emagent-chat--flush-thought-pending)
+  (emagent-chat--flush-thought-pending t)
   (emagent-chat--with-stable-view
     (lambda ()
       (with-current-buffer (current-buffer)
@@ -390,11 +446,32 @@ fences in `emagent-chat--fence-state' until the closing ``` arrives."
         (backward-char))
       n)))
 
+(defun emagent-chat--newlines-after-point ()
+  "Return the count of consecutive newlines immediately after point."
+  (save-excursion
+    (let ((n 0))
+      (while (eq (char-after) ?\n)
+        (setq n (1+ n))
+        (forward-char))
+      n)))
+
 (defun emagent-chat--insert-reasoning-text (text)
   "Insert TEXT at `emagent-chat--thought-marker' in the open Thinking content.
 Prose that resumes after a tool line or src block is separated from it by
-exactly one blank line, so the two never glue onto the same line."
-  (let ((safe (emagent-chat--escape-reasoning-text text)))
+exactly one blank line, so the two never glue onto the same line.  Some
+agents stream bare paragraph-break deltas (chunks that are only newlines)
+while still composing; a run of those is collapsed to at most one blank
+line rather than piling up as a growing blank tail.
+
+The streaming marker can sit before a tool line's trailing newline (see
+`emagent-chat--reasoning-stream-marker'), so any newlines already after point
+are consumed before separation is (re)inserted; leaving them behind is what
+let the blank tail grow one line per tool cycle."
+  (let* ((safe (replace-regexp-in-string
+                "\n\\{3,\\}" "\n\n"
+                (emagent-chat--escape-reasoning-text text (not (bolp)))))
+         (before (emagent-chat--newlines-before-point))
+         (after (emagent-chat--newlines-after-point)))
     (cond
      ;; Right after the `** Thinking' headline: drop any leading blank lines.
      ((save-excursion
@@ -403,11 +480,22 @@ exactly one blank line, so the two never glue onto the same line."
              (progn (forward-line -1) t)
              (looking-at emagent-chat--thinking-headline-re)))
       (setq safe (replace-regexp-in-string "\\`[\n\r]+" "" safe)))
-     ;; Resuming after a tool line/block: keep one blank line of separation.
+     ;; Resuming after a tool line/block: keep exactly one blank line of
+     ;; separation.  Consume the stranded trailing newlines first so repeated
+     ;; blank-only deltas cannot grow the tail.
      ((emagent-chat--reasoning-after-tool-artifact-p)
-      (let ((have (emagent-chat--newlines-before-point)))
-        (setq safe (concat (make-string (max 0 (- 2 have)) ?\n)
-                           (replace-regexp-in-string "\\`[\n\r]+" "" safe))))))
+      (let ((stripped (replace-regexp-in-string "\\`[\n\r]+" "" safe)))
+        (delete-char after)
+        (setq safe (concat (make-string (max 0 (- 2 before)) ?\n) stripped))))
+     ;; TEXT itself opens with blank line(s): only trim when that run,
+     ;; combined with newlines already around point, would exceed one blank
+     ;; line — a lone paragraph break is left untouched.
+     ((string-match "\\`\n+" safe)
+      (let ((leading (match-end 0)))
+        (when (> (+ before after leading) 2)
+          (delete-char after)
+          (setq safe (concat (make-string (max 0 (- 2 before)) ?\n)
+                             (substring safe leading)))))))
     (insert safe)))
 
 (defun emagent-chat--org-verbatim-paths (text)
@@ -544,6 +632,37 @@ without leaving a dangling line beneath the block."
   (when (and tool-call (fboundp 'emagent-acp--tool-call-content-block))
     (emagent-acp--tool-call-content-block tool-call)))
 
+(defun emagent-chat--tool-call-rendered-text (id)
+  "Return the buffer text already shown for tool-call ID's line, or nil."
+  (when-let* ((entry (gethash id emagent-chat--tool-call-lines))
+              (start (car entry)) (end (cdr entry)))
+    (when (and (markerp start) (marker-position start)
+               (markerp end) (marker-position end))
+      (buffer-substring-no-properties (marker-position start) (marker-position end)))))
+
+(defun emagent-chat--content-block-code (text)
+  "Return the code payload inside the first org src block in TEXT, or nil."
+  (let ((case-fold-search t))
+    (when (and text (string-match
+                      "#\\+begin_src[^\n]*\n\\(\\(?:.\\|\n\\)*?\\)\n#\\+end_src"
+                      text))
+      (match-string 1 text))))
+
+(defun emagent-chat--permission-redundant-p (tool-call content-block question)
+  "Return non-nil when CONTENT-BLOCK or QUESTION repeats TOOL-CALL's line.
+Covers a duplicated src-block payload (an eval/execute form already shown as
+the pending tool-call line) and a duplicated plain path/detail (a QUESTION
+that just restates what the tool-call line already displays)."
+  (when-let* ((id (and tool-call (map-elt tool-call 'toolCallId)))
+              (rendered (emagent-chat--tool-call-rendered-text id)))
+    (or (when-let* ((pending (emagent-chat--content-block-code content-block))
+                    (shown (emagent-chat--content-block-code rendered)))
+          (string= (string-trim pending) (string-trim shown)))
+        (and (not content-block)
+             (stringp question)
+             (not (string-empty-p (string-trim question)))
+             (string-match-p (regexp-quote (string-trim question)) rendered)))))
+
 (defun emagent-chat--insert-permission-newline-if-needed ()
   "Insert a separating newline unless point already starts a fresh line."
   (unless (bolp)
@@ -629,7 +748,9 @@ line, with LABEL's trailing decision/(Emacs) annotation beneath."
            (emagent-chat--writable)
            ;; Write any buffered reasoning first so the tool line lands after
            ;; the prose received so far, never splitting a pending sentence.
-           (emagent-chat--flush-thought-pending)
+           ;; Force a final flush so a held inline-code span is emitted before
+           ;; the tool line rather than stranded after it.
+           (emagent-chat--flush-thought-pending t)
            (emagent-chat--ensure-response-markers)
            (emagent-chat--ensure-reasoning-for-tool)
            (unless (and id (emagent-chat--update-tool-call-line id label lang code))
@@ -752,7 +873,8 @@ single → line."
 
 When TOOL-CALL carries a shell command or edit payload, inserts that content,
 then CHOICES as buttons.  Otherwise inserts a ? question line before the
-buttons.
+buttons.  Skips that content/question line when it would just repeat
+TOOL-CALL's already-rendered pending tool-call line.
 
 CHOICES is a list of (LABEL . VALUE) pairs.  Non-blocking: inserts the dialog
 and returns immediately.  CALLBACK is called with the chosen VALUE when a
@@ -763,13 +885,16 @@ Keyboard shortcuts (via keymap text property on the buttons line):
   w        — Allow always  a — Allow all (session)
   n        — Deny"
   (when (emagent-chat--open-response-p)
-    (let ((buf (current-buffer))
-          (content-block (emagent-chat--permission-content-block tool-call))
-          (responded nil)
-          btn-keymap
-          question-beg question-end
-          content-beg content-end
-          buttons-beg buttons-end)
+    (let* ((buf (current-buffer))
+           (raw-content-block (emagent-chat--permission-content-block tool-call))
+           (redundant (emagent-chat--permission-redundant-p
+                       tool-call raw-content-block question))
+           (content-block (unless redundant raw-content-block))
+           (responded nil)
+           btn-keymap
+           question-beg question-end
+           content-beg content-end
+           buttons-beg buttons-end)
       (let ((cleanup
              (lambda ()
                (with-current-buffer buf
@@ -814,7 +939,7 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                     (setq content-end (copy-marker (point) nil)))
                   (goto-char (or (and content-end (marker-position content-end))
                                  insert-at))
-                  (unless content-block
+                  (unless (or content-block redundant)
                     (setq question-beg (copy-marker (point) nil))
                     (emagent-chat--insert-permission-newline-if-needed)
                     (insert (emagent-chat--format-permission-line question))
@@ -889,8 +1014,7 @@ Keyboard shortcuts (via keymap text property on the buttons line):
               (setq question-beg nil content-beg nil buttons-beg nil))))
         (emagent-chat--notify-inactive-update)
         (if (not buttons-beg)
-            (let ((content-block (or content-block
-                                     (emagent-chat--permission-content-block tool-call)))
+            (let ((content-block (or content-block raw-content-block))
                   (preamble (concat
                              "\n** Request permissions\n"
                              (when content-block
