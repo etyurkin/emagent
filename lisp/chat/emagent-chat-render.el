@@ -463,15 +463,29 @@ agents stream bare paragraph-break deltas (chunks that are only newlines)
 while still composing; a run of those is collapsed to at most one blank
 line rather than piling up as a growing blank tail.
 
-The streaming marker can sit before a tool line's trailing newline (see
-`emagent-chat--reasoning-stream-marker'), so any newlines already after point
-are consumed before separation is (re)inserted; leaving them behind is what
-let the blank tail grow one line per tool cycle."
+The streaming marker re-syncs to the content tail by skipping back over
+trailing newlines (see `emagent-chat--reasoning-stream-marker'), which
+strands the previous chunk's own trailing newlines after point.  That run is
+folded into TEXT's leading separation, so a thought that resumes after a
+close/reopen cycle (each assistant chunk closes the thought) neither glues
+onto the previous one nor grows the blank tail two lines per cycle.  When
+the run separates the content from following text — the `** Response'
+headline, or a tool line's trailing newline — it is structural and is
+re-inserted after TEXT, leaving the marker at the true content end."
   (let* ((safe (replace-regexp-in-string
                 "\n\\{3,\\}" "\n\n"
                 (emagent-chat--escape-reasoning-text text (not (bolp)))))
          (before (emagent-chat--newlines-before-point))
-         (after (emagent-chat--newlines-after-point)))
+         (after (emagent-chat--newlines-after-point))
+         (tail-sep (when (> after 0)
+                     (save-excursion
+                       (forward-char after)
+                       (unless (eobp) (min after 2))))))
+    (when (> after 0)
+      (delete-char after)
+      (setq safe (replace-regexp-in-string
+                  "\\`\n\\{3,\\}" "\n\n"
+                  (concat (make-string after ?\n) safe))))
     (cond
      ;; Right after the `** Thinking' headline: drop any leading blank lines.
      ((save-excursion
@@ -481,22 +495,30 @@ let the blank tail grow one line per tool cycle."
              (looking-at emagent-chat--thinking-headline-re)))
       (setq safe (replace-regexp-in-string "\\`[\n\r]+" "" safe)))
      ;; Resuming after a tool line/block: keep exactly one blank line of
-     ;; separation.  Consume the stranded trailing newlines first so repeated
-     ;; blank-only deltas cannot grow the tail.
+     ;; separation.
      ((emagent-chat--reasoning-after-tool-artifact-p)
-      (let ((stripped (replace-regexp-in-string "\\`[\n\r]+" "" safe)))
-        (delete-char after)
-        (setq safe (concat (make-string (max 0 (- 2 before)) ?\n) stripped))))
+      (setq safe (concat (make-string (max 0 (- 2 before)) ?\n)
+                         (replace-regexp-in-string "\\`[\n\r]+" "" safe))))
      ;; TEXT itself opens with blank line(s): only trim when that run,
-     ;; combined with newlines already around point, would exceed one blank
-     ;; line — a lone paragraph break is left untouched.
+     ;; combined with the newlines already before point, would exceed one
+     ;; blank line — a lone paragraph break is left untouched.
      ((string-match "\\`\n+" safe)
       (let ((leading (match-end 0)))
-        (when (> (+ before after leading) 2)
-          (delete-char after)
+        (when (> (+ before leading) 2)
           (setq safe (concat (make-string (max 0 (- 2 before)) ?\n)
                              (substring safe leading)))))))
-    (insert safe)))
+    (if (not tail-sep)
+        (insert safe)
+      ;; Structural separation follows: share it with SAFE's own trailing
+      ;; newlines (a paragraph break at the tail and the separation are the
+      ;; same blank line) and keep point before it, at the content end.
+      (let ((trailing 0))
+        (when (string-match "\n+\\'" safe)
+          (setq trailing (- (match-end 0) (match-beginning 0))
+                safe (substring safe 0 (match-beginning 0))))
+        (insert safe)
+        (save-excursion
+          (insert (make-string (max tail-sep (min trailing 2)) ?\n)))))))
 
 (defun emagent-chat--org-verbatim-paths (text)
   "Wrap file paths in org =verbatim= to prevent /italic/ and =verbatim= glitches.
@@ -1047,6 +1069,11 @@ Keyboard shortcuts (via keymap text property on the buttons line):
               (goto-char tail)
               (skip-chars-backward "\n" (or (emagent-chat--open-response-begin)
                                             (point-min)))
+              ;; Replace whatever newline run the reasoning stream left at its
+              ;; tail with exactly one blank line — inserting the headline
+              ;; before the run used to push those stray blank lines into the
+              ;; Response body.
+              (delete-region (point) tail)
               (insert "\n\n" emagent-chat-response-headline "\n")
               (point))
           ;; No reasoning was rendered: place Response at the response body start.
