@@ -183,11 +183,14 @@
     ;; Insert a space when sentence-ending punctuation is immediately followed
     ;; by a capital letter.  Bind case-fold-search=nil so [A-Z] only matches
     ;; true uppercase — without this, domain names like github.corp get spaces.
+    ;; Require a lowercase letter right before the punctuation too, so an
+    ;; ALL-CAPS token like VDUNGEON.DAT or a CONSTANT.EXT filename is left
+    ;; alone — real glued sentences ("Done.Next step") end in lowercase.
     (setq result
           (let ((case-fold-search nil))
             (replace-regexp-in-string
-             "\\([.?!]\\)\\([A-Z]\\)"
-             "\\1 \\2"
+             "\\([a-z]\\)\\([.?!]\\)\\([A-Z]\\)"
+             "\\1\\2 \\3"
              result)))
     (setq result
           (replace-regexp-in-string
@@ -212,11 +215,17 @@ must not be escaped — they need to remain valid org src block delimiters."
    (t line)))
 
 ;;;###autoload
-(defun emagent-chat--escape-reasoning-text (text)
+(defun emagent-chat--escape-reasoning-text (text &optional mid-line)
   "Convert markdown markup in reasoning TEXT to org before inserting it.
 Applied once per flush (text is already outside any code fence at this point).
 Order matters: heading and bold conversions run before escape-reasoning-line
-so the escape pass never sees raw # / ** markers."
+so the escape pass never sees raw # / ** markers.
+
+With MID-LINE non-nil, TEXT continues an existing buffer line rather than
+starting one, so the first line's leading `*'/`#' is left unescaped: org only
+mis-parses such a marker at a real line start, and escaping it here would
+inject a spurious leading space after the resumed text (e.g. a `**bold**' span
+held across a streaming boundary)."
   (if (string-empty-p (or text ""))
       ""
     (let* (;; Markdown links [text](url) → [[url][text]]
@@ -231,11 +240,17 @@ so the escape pass never sees raw # / ** markers."
                   "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*" text))
            ;; Markdown inline code `code` → org verbatim =code=
            (text (replace-regexp-in-string
-                  "`\\([^`\n]+\\)`" "=\\1=" text)))
+                  "`\\([^`\n]+\\)`" "=\\1=" text))
+           (lines (split-string text "\n")))
       ;; Finally escape any remaining # / * at line starts so org
       ;; does not mis-parse them as keywords or headings.
-      (mapconcat #'emagent-chat--escape-reasoning-line
-                 (split-string text "\n") "\n"))))
+      (mapconcat #'identity
+                 (cl-loop for line in lines
+                          for first = t then nil
+                          collect (if (and mid-line first)
+                                      line
+                                    (emagent-chat--escape-reasoning-line line)))
+                 "\n"))))
 
 ;;;###autoload
 (defun emagent-chat--demote-response-headings (text)

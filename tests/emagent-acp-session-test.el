@@ -475,6 +475,19 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
                                (title . "compile")
                                (arguments . ,args)))))))
 
+(ert-deftest emagent-acp-session-test-tool-call-content-block-python-heredoc ()
+  (let* ((cmd "python3 - <<'EOF'\nimport json\nprint(1)\nEOF")
+         (args (make-hash-table :test 'equal)))
+    (puthash "command" cmd args)
+    (let ((block (emagent-acp--tool-call-content-block
+                  `((toolCallId . "tool_compile")
+                    (title . "compile")
+                    (arguments . ,args)))))
+      (should (string-match-p "\\*\\* Allow execute" block))
+      (should (string-match-p "#\\+BEGIN_SRC python" block))
+      (should (string-match-p "import json" block))
+      (should-not (string-match-p "python3 - <<" block)))))
+
 (ert-deftest emagent-acp-session-test-tool-call-content-block-eval ()
   (let ((args (make-hash-table :test 'equal)))
     (puthash "form" "(+ 1 2)" args)
@@ -644,6 +657,25 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
                   (rawInput . "{\"description\":\"line one\\nline two\"}"))))
     (should (equal '("text" . "line one\nline two")
                    (emagent-acp--tool-call-block-spec update)))))
+
+(ert-deftest emagent-acp-session-test-tool-call-block-spec-edit-diff ()
+  "An auto-allowed edit renders a diff block, like the permission prompt.
+The change is reconstructable from rawInput, so both the agent allow-list and
+the emagent gate can show what was edited instead of a bare arrow line."
+  (let* ((dir (emagent-test--temp-directory))
+         (path (expand-file-name "sample.py" dir)))
+    (unwind-protect
+        (progn
+          (write-region "old line\n" nil path)
+          (let ((spec (emagent-acp--tool-call-block-spec
+                       `((toolCallId . "tool_write")
+                         (title . "Edit File")
+                         (kind . "edit")
+                         (rawInput . ((path . ,path)
+                                      (content . "new line\n")))))))
+            (should (equal "diff" (car spec)))
+            (should (string-match-p "new line" (cdr spec)))))
+      (ignore-errors (delete-directory dir t)))))
 
 (ert-deftest emagent-acp-session-test-cursor-tool-call-deferred-until-detail ()
   (let ((state (emagent-test--make-acp-state))

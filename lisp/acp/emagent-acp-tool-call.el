@@ -32,6 +32,7 @@
 (declare-function emagent-chat-show-tool-call "emagent-chat")
 (declare-function emagent-acp--permission-decision-label "emagent-acp-permit")
 (declare-function emagent-acp--tool-call-eval-form "emagent-acp-permit")
+(declare-function emagent-acp--tool-call-edit-block-spec "emagent-acp-permit")
 
 (defun emagent-acp--tool-call-emagent-tool-p (update)
   "Return non-nil when UPDATE names a tool from emagent's own MCP server.
@@ -346,6 +347,27 @@ commands."
           (when-let ((nested (emagent-acp--tool-call-nested-raw-input data)))
             (cmd nested))))))
 
+(defconst emagent-acp--heredoc-lang-alist
+  '(("python3" . "python") ("python2" . "python") ("python" . "python")
+    ("node" . "js") ("nodejs" . "js")
+    ("ruby" . "ruby") ("perl" . "perl") ("php" . "php") ("lua" . "lua")
+    ("bash" . "sh") ("sh" . "sh") ("zsh" . "sh"))
+  "Map heredoc interpreter names to org-babel source block languages.")
+
+(defun emagent-acp--tool-call-heredoc-script (command)
+  "Return (LANG . BODY) when COMMAND is an interpreter heredoc, else nil."
+  (when (and (stringp command)
+             (string-match
+              (concat
+               "\\`[ \t]*\\([^ \t\n]+\\)\\(?:[ \t]+-\\)?[ \t]*<<-?[ \t]*"
+               "\\(?:'\\(?2:[^'\n]+\\)'\\|\"\\(?2:[^\"\n]+\\)\"\\|\\(?2:[A-Za-z_][A-Za-z0-9_]*\\)\\)"
+               "[ \t]*\n\\(?3:\\(?:.\\|\n\\)*?\\)\n[ \t]*\\2[ \t\n]*\\'")
+              command))
+    (let* ((interpreter (file-name-nondirectory (match-string 1 command)))
+           (lang (cdr (assoc interpreter emagent-acp--heredoc-lang-alist))))
+      (when lang
+        (cons lang (match-string 3 command))))))
+
 (defconst emagent-acp--shell-tool-names
   '("grep" "rg" "ripgrep" "ag" "cat" "ls" "find" "fd" "sed" "awk"
     "head" "tail")
@@ -421,21 +443,30 @@ command is complete."
 (defun emagent-acp--tool-call-block-spec (update)
   "Return (LANG . CODE) when UPDATE should render as an Org src block, else nil.
 Explicit shell commands render as `sh' and eval forms as `elisp' (their detail
-is real code).  A structured CLI tool (grep, cat, ...) renders as `sh' with its
-detail reconstructed into a command line (e.g. grep PATTERN).  Any other tool
-renders as a block when its detail spans multiple lines or exceeds
-`emagent-acp--tool-call-detail-limit' characters; shorter single-line
-details such as file paths stay as compact arrow lines."
+is real code).  A command that heredocs a script into a known interpreter
+(e.g. `python3 - <<EOF ... EOF') renders as that interpreter's language with
+just the script body, not the shell wrapper.  A structured CLI tool (grep,
+cat, ...) renders as `sh' with its detail reconstructed into a command line
+(e.g. grep PATTERN).  A write/edit tool renders as a `diff' block so an
+auto-allowed edit shows the same change a permission prompt would.  Any other
+tool renders as a block when its detail spans multiple lines or exceeds
+`emagent-acp--tool-call-detail-limit' characters; shorter single-line details
+such as file paths stay as compact arrow lines."
   (let* ((command (emagent-acp--tool-call-shell-command update))
+         (heredoc (and command (emagent-acp--tool-call-heredoc-script command)))
          (form (unless command (emagent-acp--tool-call-eval-form update)))
          (detail (unless (or command form)
                    (emagent-acp--tool-call-detail update)))
-         (cli (and detail (emagent-acp--tool-call-cli-tool update))))
+         (cli (and detail (emagent-acp--tool-call-cli-tool update)))
+         (edit (unless (or command form heredoc cli)
+                 (emagent-acp--tool-call-edit-block-spec update))))
     (cond
+     (heredoc heredoc)
      (command (cons "sh" command))
      (form (cons "elisp" form))
      (cli (cons "sh" (or (emagent-acp--tool-call-cli-command update cli)
                          (format "%s %s" cli detail))))
+     (edit edit)
      ((and detail (or (string-match-p "\n" detail)
                       (> (length detail) emagent-acp--tool-call-detail-limit))
            ;; Don't create a text block for an absolute path when the title
