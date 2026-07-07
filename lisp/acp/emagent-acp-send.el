@@ -100,18 +100,67 @@ stale retry from firing after the prompt was superseded or interrupted."
           :blocks blocks :images images
           :gen gen :attempt (1+ attempt)))))))
 
+(defun emagent-acp--log-transient-error (state &optional message)
+  "Log MESSAGE and STATE's partial assistant output to `emagent-log-buffer-name'.
+
+Used when a transient error ends an in-flight turn: the details are recorded in
+the log instead of the chat buffer, and the turn is then resumed with
+\"continue\" (see `emagent-acp--schedule-continue')."
+  (when (and message (not (string-empty-p message)))
+    (emagent-log "transient error: %s" message))
+  (let ((text (string-trim (or (map-elt state :assistant-text) ""))))
+    (unless (string-empty-p text)
+      (emagent-log "partial output before auto-continue:\n%s" text))))
+
+(defun emagent-acp--schedule-continue (state session-id images gen reason)
+  "Resume an errored in-flight turn by re-dispatching a \"continue\" prompt.
+
+Unlike `emagent-acp--schedule-prompt-retry' (which replays the ORIGINAL prompt
+and is only safe when the turn did no work), this sends a fresh \"continue\"
+turn so tool side effects such as commits or pushes are never repeated.  The
+open response block is kept, so the continued output renders into it; the
+transient error itself is only logged (see `emagent-acp--log-transient-error'),
+never rendered into the chat buffer.  REASON is logged with the attempt count;
+the `:continue-attempts' counter bounds the number of resumes and the GEN guard
+cancels a stale resume after an interrupt or new prompt."
+  (let* ((attempt (1+ (or (map-elt state :continue-attempts) 0)))
+         (delay (emagent-acp--prompt-retry-delay attempt)))
+    (map-put! state :continue-attempts attempt)
+    (emagent-acp--notify-user
+     state
+     (format "emagent: %s; auto-continuing (%d/%d) in %.1fs"
+             reason attempt emagent-acp-prompt-retry-attempts delay))
+    (emagent-acp--schedule-prompt-watchdog state)
+    (run-with-timer
+     delay nil
+     (lambda ()
+       (when (and (eq (map-elt state :prompt-generation) gen)
+                  (map-elt state :busy))
+         (emagent-acp--dispatch-prompt-request
+          :state state :session-id session-id
+          :blocks [((type . "text") (text . "continue"))]
+          :images images
+          :gen gen :attempt 1))))))
+
 (cl-defun emagent-acp--dispatch-prompt-request (&key state session-id blocks images gen attempt)
-  "Send the session/prompt request, retrying transient network failures.
+  "Send the session/prompt request, recovering from transient network failures.
 
-ATTEMPT is the 1-based try count.  A failure whose message matches
-`emagent-acp--retriable-prompt-error-p' is retried with exponential
-backoff until `emagent-acp-prompt-retry-attempts' is reached; only then is
-the error surfaced via `emagent-acp--abort-prompt'.  GEN guards against a
-stale retry firing after the prompt was superseded or interrupted.
+ATTEMPT is the 1-based try count.  Recovery depends on how the failure arrives
+and whether the turn already did work:
 
-Some agents accept the request and then emit a transient network error as the
-turn's whole output instead of failing the RPC; such a completion is detected
-by `emagent-acp--agent-error-only-response-p' and re-issued the same way."
+- Pure transient failure with no tool calls or content
+  (`emagent-acp--agent-error-only-response-p' /
+  `emagent-acp--turn-did-no-work-p') is replayed with exponential backoff up to
+  `emagent-acp-prompt-retry-attempts' via `emagent-acp--schedule-prompt-retry'.
+
+- A turn that already ran tool calls or produced content but ended on a
+  transient error (`emagent-acp--turn-hit-transient-error-p') is resumed by
+  auto-sending \"continue\" via `emagent-acp--schedule-continue', so side
+  effects such as commits or pushes are never repeated.  The error is logged to
+  `emagent-log-buffer-name' rather than rendered into the chat buffer.
+
+GEN guards against a stale retry firing after the prompt was superseded or
+interrupted."
   (emagent-acp--send-request
    :state state
    :request (emagent-acp-make-session-prompt-request
@@ -119,31 +168,58 @@ by `emagent-acp--agent-error-only-response-p' and re-issued the same way."
    :on-success
    (lambda (response)
      (when (eq (map-elt state :prompt-generation) gen)
-       (if (and (map-elt state :busy)
-                (< attempt emagent-acp-prompt-retry-attempts)
-                (emagent-acp--agent-error-only-response-p state))
-           (let ((message (string-trim (or (map-elt state :assistant-text) ""))))
-             (map-put! state :assistant-text "")
-             (map-put! state :thought-text "")
-             (emagent-acp--clear-thought-buffer state)
-             (emagent-acp--cancel-prompt-render state)
-             (emagent-acp--schedule-prompt-retry
-              state session-id blocks images gen attempt
-              (format "agent returned a transient error (%s)" message)))
-         (emagent-acp--complete-prompt state response))))
+       (cond
+        ((and (map-elt state :busy)
+              (< attempt emagent-acp-prompt-retry-attempts)
+              (emagent-acp--agent-error-only-response-p state))
+         (let ((message (string-trim (or (map-elt state :assistant-text) ""))))
+           (map-put! state :assistant-text "")
+           (map-put! state :thought-text "")
+           (emagent-acp--clear-thought-buffer state)
+           (emagent-acp--cancel-prompt-render state)
+           (emagent-acp--schedule-prompt-retry
+            state session-id blocks images gen attempt
+            (format "agent returned a transient error (%s)" message))))
+        ((and (map-elt state :busy)
+              (< (or (map-elt state :continue-attempts) 0)
+                 emagent-acp-prompt-retry-attempts)
+              (emagent-acp--turn-hit-transient-error-p state))
+         (emagent-acp--log-transient-error state)
+         (map-put! state :assistant-text "")
+         (map-put! state :thought-text "")
+         (emagent-acp--clear-thought-buffer state)
+         (emagent-acp--cancel-prompt-render state)
+         (emagent-acp--schedule-continue
+          state session-id images gen "agent turn ended on a transient error"))
+        (t
+         (emagent-acp--complete-prompt state response)))))
    :on-failure
    (lambda (error _raw)
      (when (eq (map-elt state :prompt-generation) gen)
        (let ((message (or (map-elt error 'message) (format "%s" error))))
-         (if (and (map-elt state :busy)
-                  (< attempt emagent-acp-prompt-retry-attempts)
-                  (emagent-acp--retriable-prompt-error-p message))
-             (emagent-acp--schedule-prompt-retry
-              state session-id blocks images gen attempt
-              (format "prompt failed (%s)" message))
+         (cond
+          ((and (map-elt state :busy)
+                (< attempt emagent-acp-prompt-retry-attempts)
+                (emagent-acp--retriable-prompt-error-p message)
+                (emagent-acp--turn-did-no-work-p state))
+           (emagent-acp--schedule-prompt-retry
+            state session-id blocks images gen attempt
+            (format "prompt failed (%s)" message)))
+          ((and (map-elt state :busy)
+                (emagent-acp--retriable-prompt-error-p message)
+                (< (or (map-elt state :continue-attempts) 0)
+                   emagent-acp-prompt-retry-attempts))
+           (emagent-acp--log-transient-error state message)
+           (map-put! state :assistant-text "")
+           (map-put! state :thought-text "")
+           (emagent-acp--clear-thought-buffer state)
+           (emagent-acp--cancel-prompt-render state)
+           (emagent-acp--schedule-continue
+            state session-id images gen (format "prompt interrupted (%s)" message)))
+          (t
            (emagent-acp--abort-prompt state (format "prompt failed: %s" message))
            (emagent-acp--notify-user
-            state (format "emagent: prompt failed: %s" message))))))))
+            state (format "emagent: prompt failed: %s" message)))))))))
 
 (cl-defun emagent-acp-send-prompt (user-text)
   "Send USER-TEXT to the current buffer's ACP session."
