@@ -37,6 +37,25 @@ to be on Emacs's own =exec-path= (e.g. =cursor-agent=, =claude-agent-acp=).
 
 * Install
 
+** From MELPA
+
+With [[https://melpa.org][MELPA]] in your =package-archives=:
+
+#+BEGIN_SRC emacs-lisp
+(use-package emagent
+  :ensure t
+  :commands (emagent emagent-cursor-start emagent-claude-start emagent-trust-workspace
+                     emagent-trust-claude-reconnect emagent-mode emagent-set-model
+                     emagent-reset-permissions)
+  :custom (emagent-default-provider (if (equal (getenv "EMAGENT_AGENT") "claude")
+                                       'claude
+                                     'cursor)))
+#+END_SRC
+
+Or without =use-package=: =M-x package-install RET emagent RET=.
+
+** From source (Elpaca)
+
 #+BEGIN_SRC emacs-lisp
 (use-package emagent
   :ensure (:host github :repo "etyurkin/emagent" :depth 1
