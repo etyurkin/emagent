@@ -930,6 +930,28 @@ the emagent gate can show what was edited instead of a bare arrow line."
   (should-not (emagent-acp--retriable-prompt-error-p "failed with status 400"))
   (should-not (emagent-acp--retriable-prompt-error-p nil)))
 
+(ert-deftest emagent-acp-session-test-agent-error-only-response-p ()
+  (let ((state (emagent-test--make-acp-state)))
+    ;; A turn whose whole output is a transient network error, with no
+    ;; content or tool calls, is safe to re-issue.
+    (puthash :assistant-text
+             "Error: RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh"
+             state)
+    (should (emagent-acp--agent-error-only-response-p state))
+    ;; A real answer is never re-issued, even if it mentions a network word.
+    (puthash :assistant-text
+             "I finished the task; there was no network error along the way."
+             state)
+    (should-not (emagent-acp--agent-error-only-response-p state))
+    ;; An error turn that also did tool work is left alone.
+    (puthash :assistant-text "RetriableError: socket hang up" state)
+    (puthash "call-1" "shell" (map-elt state :tool-call-titles))
+    (should-not (emagent-acp--agent-error-only-response-p state))
+    (clrhash (map-elt state :tool-call-titles))
+    ;; Compression turns are never treated as retriable errors.
+    (puthash :compress-pending t state)
+    (should-not (emagent-acp--agent-error-only-response-p state))))
+
 (ert-deftest emagent-acp-session-test-prompt-retry-delay ()
   (let ((emagent-acp-prompt-retry-base-delay 1.5))
     (should (= (emagent-acp--prompt-retry-delay 1) 1.5))
