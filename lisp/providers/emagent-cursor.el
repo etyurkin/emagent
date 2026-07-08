@@ -99,8 +99,9 @@ invocation to its own in-Emacs MCP session."
           (gethash (downcase str) data)))
      ((listp data)
       (or (alist-get key data)
-          (alist-get str data)
-          (alist-get (downcase str) data)))
+          ;; String keys need `equal'; the default `eq' never matches them.
+          (alist-get str data nil nil #'equal)
+          (alist-get (downcase str) data nil nil #'equal)))
      (t nil))))
 
 (defun emagent-cursor--tool-call-raw-empty-p (raw)

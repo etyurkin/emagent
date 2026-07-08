@@ -188,9 +188,9 @@ Follow these rules to avoid them:
    New file: structural_insert path __start__ with the first complete node, then __end__ or a symbol.
    Change node: structural_tree → structural_bounds → structural_replace.
 
-4. Use structural_find_errors or check_structural_file when tree-sitter reports problems.
+3. Use structural_find_errors or check_structural_file when tree-sitter reports problems.
 
-5. Complex multi-node refactors — one structural edit per node, never write_file:
+4. Complex multi-node refactors — one structural edit per node, never write_file:
    structural_tree → structural_replace / structural_insert per node
    (each validated before save) → check_structural_file on the whole file.
 
@@ -198,13 +198,13 @@ Follow these rules to avoid them:
      "2. lisp-sitter is not installed. For .el files use write_file + check_elisp.
    Keep each edit small and focused; validate with check_elisp before eval.
 
-4. After write_file on .el, run check_elisp on changed forms before eval.
+3. After write_file on .el, run check_elisp on changed forms before eval.
 
-5. Multi-node refactors without lisp-sitter: one small write_file per form,
+4. Multi-node refactors without lisp-sitter: one small write_file per form,
    check_elisp after each write — do not rewrite whole files from memory.
 
 ")
-   "3. Keep eval forms small: one logical operation per call (ideally under 15 lines).
+   "5. Keep eval forms small: one logical operation per call (ideally under 15 lines).
    Chain multiple eval calls rather than writing one monolithic form.
 
 6. Use let* for sequential work — avoid deep nesting:
