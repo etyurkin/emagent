@@ -15,6 +15,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'emagent-acp-state)
 (require 'map)
 
 (defvar emagent-acp--provider-specs (make-hash-table :test 'eq)
