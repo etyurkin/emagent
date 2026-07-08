@@ -51,13 +51,55 @@ that is dropped."
   "Shells whose `-c CMD' argument carries an inner command to inspect.")
 
 (defconst emagent-policy-match--prefix-wrappers
-  '("sudo" "doas" "env" "nice" "nohup" "setsid" "stdbuf" "command" "builtin")
+  '("sudo" "doas" "env" "nice" "nohup" "setsid" "stdbuf" "command" "builtin"
+    "eval" "exec")
   "Wrappers that run the remaining words as a command; the wrapper word (and, for
-`env', leading VAR=VALUE assignments) is stripped and the rest re-inspected.")
+`env', leading VAR=VALUE assignments) is stripped and the rest re-inspected.
+`eval'/`exec' work because the argument is unquoted by `--words' and rejoined.")
+
+(defconst emagent-policy-match--xargs-value-flags
+  '("-n" "-I" "-i" "-P" "-s" "-L" "-l" "-d" "-E" "-a" "-R" "-S")
+  "`xargs' options that consume a following value word.")
 
 (defun emagent-policy-match--inner-c-command (words)
   "Return the argument following `-c' in WORDS, or nil."
   (car (cdr (member "-c" words))))
+
+(defun emagent-policy-match--xargs-inner (words)
+  "Return the command WORDS following `xargs' and its options, or nil.
+Skips value-less flags (`-0', `-r') and the value of value-taking flags
+ (`-n N', `-I {}'); a flag with an embedded value (`-n1') is one token."
+  (let ((rest (cdr words)))
+    (while (and rest (string-prefix-p "-" (car rest)))
+      (if (member (car rest) emagent-policy-match--xargs-value-flags)
+          (setq rest (cddr rest))
+        (setq rest (cdr rest))))
+    rest))
+
+(defun emagent-policy-match--substitution-commands (command)
+  "Return inner command strings of $(...) and `...` substitutions in COMMAND.
+Substitutions can hide a dangerous argv where the whole-command and leaf-argv
+matchers only see it as an operand (`echo $(rm -rf ~)')."
+  (let ((results nil) (i 0) (len (length command)))
+    (while (< i len)
+      (cond
+       ((and (< (1+ i) len) (eq (aref command i) ?$) (eq (aref command (1+ i)) ?\())
+        (let ((depth 1) (j (+ i 2)) (start (+ i 2)))
+          (while (and (< j len) (> depth 0))
+            (pcase (aref command j)
+              (?\( (setq depth (1+ depth)))
+              (?\) (setq depth (1- depth))))
+            (setq j (1+ j)))
+          (push (substring command start (max start (1- j))) results)
+          (setq i j)))
+       ((eq (aref command i) ?`)
+        (let ((j (1+ i)))
+          (while (and (< j len) (not (eq (aref command j) ?`)))
+            (setq j (1+ j)))
+          (push (substring command (1+ i) (min j len)) results)
+          (setq i (1+ j))))
+       (t (setq i (1+ i)))))
+    (nreverse results)))
 
 (defun emagent-policy-match--strip-leading-assignments (words)
   "Drop leading VAR=VALUE assignments from WORDS (e.g. `FOO=1 rm' → `rm')."
@@ -69,9 +111,10 @@ that is dropped."
 (defun emagent-policy-shell-commands (command &optional depth)
   "Return the list of leaf shell commands within COMMAND.
 
-Splits on top-level separators and unwraps `sh -c'/`bash -c' and a leading
-`sudo'/`doas', recursively, so each dangerous argv is inspected on its own
-regardless of how it was composed.  DEPTH bounds recursion."
+Splits on top-level separators and unwraps `sh -c'/`bash -c', a leading
+`sudo'/`env'/`eval'/wrapper, and `xargs' options, recursively, so each dangerous
+argv is inspected on its own regardless of how it was composed.  Command
+substitutions ($(...) and `...`) are also decomposed.  DEPTH bounds recursion."
   (setq depth (or depth 0))
   (if (> depth 6)
       (list (string-trim command))
@@ -79,20 +122,31 @@ regardless of how it was composed.  DEPTH bounds recursion."
              for words = (emagent-policy-match--strip-leading-assignments
                           (emagent-policy-match--words segment))
              for head = (car words)
+             ;; A dangerous argv can hide inside a $(...)/`...` substitution
+             ;; where the leaf matchers only see it as an operand.
+             for subs = (cl-mapcan
+                         (lambda (s) (emagent-policy-shell-commands s (1+ depth)))
+                         (emagent-policy-match--substitution-commands segment))
              append
-             (cond
-              ((and (member head emagent-policy-match--shell-wrappers)
-                    (emagent-policy-match--inner-c-command words))
-               (emagent-policy-shell-commands
-                (emagent-policy-match--inner-c-command words) (1+ depth)))
-              ((member head emagent-policy-match--prefix-wrappers)
-               (emagent-policy-shell-commands
-                (mapconcat #'identity (cdr words) " ") (1+ depth)))
-              ;; No stripping applied → return the original segment (keeps
-              ;; quotes/spacing for the whole-command matchers upstream).
-              ((equal words (emagent-policy-match--words segment))
-               (list segment))
-              (t (list (mapconcat #'identity words " ")))))))
+             (append
+              (cond
+               ((and (member head emagent-policy-match--shell-wrappers)
+                     (emagent-policy-match--inner-c-command words))
+                (emagent-policy-shell-commands
+                 (emagent-policy-match--inner-c-command words) (1+ depth)))
+               ((member head emagent-policy-match--prefix-wrappers)
+                (emagent-policy-shell-commands
+                 (mapconcat #'identity (cdr words) " ") (1+ depth)))
+               ((and (equal head "xargs") (emagent-policy-match--xargs-inner words))
+                (emagent-policy-shell-commands
+                 (mapconcat #'identity (emagent-policy-match--xargs-inner words) " ")
+                 (1+ depth)))
+               ;; No stripping applied → return the original segment (keeps
+               ;; quotes/spacing for the whole-command matchers upstream).
+               ((equal words (emagent-policy-match--words segment))
+                (list segment))
+               (t (list (mapconcat #'identity words " "))))
+              subs))))
 
 (defun emagent-policy-match--argv-index-p (index expected words)
   "Return non-nil when the INDEXth word (1-based) equals EXPECTED."
