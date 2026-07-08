@@ -18,7 +18,6 @@
 (require 'emagent-log)
 (require 'emagent-acp-provider)
 
-(declare-function emagent-chat-show-tool-call "emagent-chat")
 (declare-function emagent-acp--permission-decision-label "emagent-acp-permit")
 (declare-function emagent-acp--tool-call-eval-form "emagent-acp-permit")
 (declare-function emagent-acp--tool-call-edit-block-spec "emagent-acp-permit")
@@ -115,10 +114,11 @@ because generic names like `grep' collide with agent-native tools."
       (when id (puthash id display labels))
       (unless completed
         (emagent-acp--notify-user state (format "emagent: tool %s" label)))
-      (when-let ((buf (emagent-acp--chat-buffer state)))
+      (when-let ((buf (emagent-acp--chat-buffer state))
+                 (cb (map-elt state :cb-tool-call)))
         (let ((spec (emagent-acp--tool-call-block-spec merged)))
           (with-current-buffer buf
-            (emagent-chat-show-tool-call id display (car spec) (cdr spec))))))
+            (funcall cb id display (car spec) (cdr spec))))))
     (if completed
         (progn
           (map-put! state :current-tool nil)

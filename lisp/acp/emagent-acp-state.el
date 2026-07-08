@@ -184,6 +184,8 @@ Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
     (puthash :cb-finish nil state)
     (puthash :cb-fail nil state)
     (puthash :cb-slash-commands nil state)
+    (puthash :cb-tool-call nil state)
+    (puthash :cb-permission nil state)
     (puthash :agent-rss nil state)
     (puthash :agent-rss-timer nil state)
     (puthash :on-reveal on-reveal state)
