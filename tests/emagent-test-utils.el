@@ -77,6 +77,8 @@
     (puthash :tool-resolve-queue nil state)
     (puthash :tool-resolve-worker nil state)
     (puthash :tool-resolve-attempts (make-hash-table :test 'equal) state)
+    (puthash :cb-tool-call 'emagent-chat-show-tool-call state)
+    (puthash :cb-permission 'emagent-chat-permission-prompt state)
     (puthash :permission-queue nil state)
     (puthash :permission-busy nil state)
     (puthash :permission-drain-timer nil state)
