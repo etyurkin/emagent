@@ -306,7 +306,7 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
        :blocks blocks :images images
        :gen (emagent-acp-state-prompt-generation state) :attempt 1)))))
 
-(defun emagent-acp--finalize-in-flight-prompt (&optional stop-notice)
+(cl-defun emagent-acp--finalize-in-flight-prompt (&optional stop-notice)
   "Finalize the in-flight prompt and cancel it on the agent side.
 
 When STOP-NOTICE is non-nil, append it to any partial assistant text

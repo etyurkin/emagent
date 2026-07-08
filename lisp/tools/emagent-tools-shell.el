@@ -423,7 +423,7 @@ Uses pure Emacs search when `emagent-acp-prefer-emacs' is non-nil."
         (string-join (sort files #'string<) "\n")
       "No matches")))
 
-(defun emagent-tools--run-git-async (callback &rest args)
+(cl-defun emagent-tools--run-git-async (callback &rest args)
   "Run git ARGS asynchronously; call CALLBACK with (output is-error)."
   (unless (executable-find "git")
     (funcall callback "git not found on PATH" t)
