@@ -229,6 +229,17 @@ interrupted."
            (emagent-acp--notify-user
             state (format "emagent: prompt failed: %s" message)))))))))
 
+(defun emagent-acp--reset-permission-gate (state)
+  "Cancel STATE's pending permission drain and clear the permission gate.
+Replies `cancelled' to any outstanding requests so the agent does not hang.
+Shared by the two turn-boundary owners (`--turn-begin' and finalize)."
+  (when-let ((timer (emagent-acp-state-permission-drain-timer state)))
+    (cancel-timer timer)
+    (setf (emagent-acp-state-permission-drain-timer state) nil))
+  (emagent-acp--cancel-outstanding-permissions state)
+  (setf (emagent-acp-state-permission-busy state) nil)
+  (setf (emagent-acp-state-deferred-complete-response state) nil))
+
 (defun emagent-acp--turn-begin (state)
   "Enter the streaming phase of a new turn for STATE.
 
@@ -251,12 +262,7 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
   (clrhash (emagent-acp-state-tool-call-decisions state))
   (clrhash (emagent-acp-state-tool-call-pending state))
   (emagent-acp--provider-reset-tool-resolve state)
-  (when-let ((timer (emagent-acp-state-permission-drain-timer state)))
-    (cancel-timer timer)
-    (setf (emagent-acp-state-permission-drain-timer state) nil))
-  (emagent-acp--cancel-outstanding-permissions state)
-  (setf (emagent-acp-state-permission-busy state) nil)
-  (setf (emagent-acp-state-deferred-complete-response state) nil)
+  (emagent-acp--reset-permission-gate state)
   (emagent-acp--cancel-prompt-render state)
   (emagent-acp--clear-thought-buffer state)
   (emagent-acp--schedule-prompt-watchdog state)
@@ -334,12 +340,7 @@ finalized."
          :client client
          :notification (emagent-acp-make-session-cancel-notification
                         :session-id session-id))))
-    (when-let ((timer (emagent-acp-state-permission-drain-timer state)))
-      (cancel-timer timer)
-      (setf (emagent-acp-state-permission-drain-timer state) nil))
-    (emagent-acp--cancel-outstanding-permissions state)
-    (setf (emagent-acp-state-permission-busy state) nil)
-    (setf (emagent-acp-state-deferred-complete-response state) nil)
+    (emagent-acp--reset-permission-gate state)
     (setf (emagent-acp-state-busy state) nil)
     (setf (emagent-acp-state-prompt-finishing state) t)
     (setf (emagent-acp-state-prompt-finalized state) nil)
