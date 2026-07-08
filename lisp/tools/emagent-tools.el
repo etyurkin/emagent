@@ -228,7 +228,7 @@ nil or dead, calling CALLBACK with the chosen value."
       (memq tool-name emagent-tools--session-allowed-tools)))
 
 
-(defun emagent-tools--write-diff-string-async (callback resolved new-content)
+(cl-defun emagent-tools--write-diff-string-async (callback resolved new-content)
   "Compare RESOLVED with NEW-CONTENT; call CALLBACK with (diff is-error)."
   (unless (executable-find "diff")
     (funcall callback nil nil)
@@ -809,7 +809,7 @@ Call this before writing non-trivial Elisp."
     (apply #'emagent-struct--call-async callback content "bounds" "-" symbol
            "--lang" (emagent-struct--lang-for file))))
 
-(defun emagent-tool-structural-replace-async (callback file symbol new-body)
+(cl-defun emagent-tool-structural-replace-async (callback file symbol new-body)
   "Replace top-level node SYMBOL in FILE with NEW-BODY asynchronously."
   (condition-case err
       (when-let ((guard (emagent-tools--eval-form-guard new-body)))
@@ -828,7 +828,7 @@ Call this before writing non-trivial Elisp."
                (funcall callback (format "Wrote %s" (expand-file-name file)) nil)))
            content "replace" "-" symbol "--body" new-body "--lang" lang)))
 
-(defun emagent-tool-structural-insert-async (callback file after-symbol node)
+(cl-defun emagent-tool-structural-insert-async (callback file after-symbol node)
   "Insert complete top-level NODE after AFTER-SYMBOL in FILE asynchronously."
   (condition-case err
       (when-let ((guard (emagent-tools--eval-form-guard node)))

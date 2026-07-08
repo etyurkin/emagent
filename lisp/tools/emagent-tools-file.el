@@ -139,7 +139,7 @@ Each call is recorded as a single undoable change in the target buffer."
                     resolved (error-message-string err))))
     resolved))
 
-(defun emagent-tools--unified-diff-async (callback old new label)
+(cl-defun emagent-tools--unified-diff-async (callback old new label)
   "Return unified diff between OLD and NEW for LABEL via CALLBACK."
   (if (string= old new)
       (funcall callback "" nil)
@@ -181,7 +181,7 @@ Each call is recorded as a single undoable change in the target buffer."
         (ignore-errors (delete-file old-file))
         (ignore-errors (delete-file new-file))))))
 
-(defun emagent-tool-write-file-async (callback path content)
+(cl-defun emagent-tool-write-file-async (callback path content)
   "Write CONTENT to PATH; call CALLBACK with (result is-error)."
   (condition-case err
       (when (emagent-struct-write-required-p path)
