@@ -44,9 +44,7 @@ With [[https://melpa.org][MELPA]] in your =package-archives=:
 #+BEGIN_SRC emacs-lisp
 (use-package emagent
   :ensure t
-  :commands (emagent emagent-cursor-start emagent-claude-start emagent-trust-workspace
-                     emagent-trust-claude-reconnect emagent-mode emagent-set-model
-                     emagent-reset-permissions)
+  :commands (emagent emagent-mode)
   :custom (emagent-default-provider (if (equal (getenv "EMAGENT_AGENT") "claude")
                                        'claude
                                      'cursor)))
@@ -60,9 +58,7 @@ Or without =use-package=: =M-x package-install RET emagent RET=.
 (use-package emagent
   :ensure (:host github :repo "etyurkin/emagent" :depth 1
            :files (:defaults ("lisp" . ("lisp/*/*.el"))))
-  :commands (emagent emagent-cursor-start emagent-claude-start emagent-trust-workspace
-                     emagent-trust-claude-reconnect emagent-mode emagent-set-model
-                     emagent-reset-permissions)
+  :commands (emagent emagent-mode)
   :custom (emagent-default-provider (if (equal (getenv "EMAGENT_AGENT") "claude")
                                        'claude
                                      'cursor)))
@@ -78,9 +74,7 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 
 | Key / command                       | Action                                           |
 |-------------------------------------+--------------------------------------------------|
-| =M-x emagent=                         | Start a session (infers cwd, selects agent)      |
-| =M-x emagent-cursor-start=            | Start with the Cursor provider                   |
-| =M-x emagent-claude-start=            | Start with the Claude ACP provider               |
+| =M-x emagent=                         | Start a session (infers cwd, probes and selects agent) |
 | =M-x emagent-trust-workspace=         | Record trust on disk (=C-u= = Claude and Cursor)   |
 | =M-x emagent-trust-claude-reconnect=  | New Claude session (trust after =emagent-trust-workspace=) |
 | =M-x emagent-mode=                    | Reconnect a saved buffer (agent + session)       |

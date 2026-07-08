@@ -85,7 +85,7 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
                  (emagent-acp--complete-prompt state nil))
              (emagent-acp--abort-prompt
               state
-              "prompt stalled — reconnect with M-x emagent-claude-start or kill and reopen the buffer"))))))))
+              "prompt stalled — reconnect with M-x emagent-mode or kill and reopen the buffer"))))))))
   (setf (emagent-acp-state-prompt-watchdog state) token)
   (setf (emagent-acp-state-prompt-watchdog-timer state) timer)))
 

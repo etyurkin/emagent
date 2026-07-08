@@ -14,8 +14,9 @@
 ;; external agents such as cursor-agent-acp or claude-agent-acp and executes
 ;; Emacs operations locally via org-mode scratch buffers.
 ;;
-;; Main entry points: `emagent', `emagent-cursor-start', `emagent-claude-start',
-;; `emagent-mode', and `emagent-set-model'.
+;; Entry points: `emagent' to start a session (it probes installed agents and
+;; prompts to pick one), and `emagent-mode' to reconnect a saved buffer.  Every
+;; other command is scoped to `emagent-mode' buffers via `C-c ?' / M-x.
 
 ;;; Code:
 
@@ -559,24 +560,6 @@ pick an agent, workspace trust is checked (`emagent-trust--configure'); see
 project directory instead."
   (interactive "P")
   (emagent--start-session (emagent--project-directory prompt-directory)))
-
-;;;###autoload
-(defun emagent-cursor-start (&optional prompt-directory)
-  "Start a new emagent session with the Cursor provider.
-
-The project directory is inferred from the current buffer; with a prefix
-argument PROMPT-DIRECTORY, read it interactively instead."
-  (interactive "P")
-  (emagent--start-session (emagent--project-directory prompt-directory) 'cursor))
-
-;;;###autoload
-(defun emagent-claude-start (&optional prompt-directory)
-  "Start a new emagent session with the Claude ACP provider.
-
-The project directory is inferred from the current buffer; with a prefix
-argument PROMPT-DIRECTORY, read it interactively instead."
-  (interactive "P")
-  (emagent--start-session (emagent--project-directory prompt-directory) 'claude))
 
 ;;;###autoload
 (defun emagent-set-project-directory (new-dir)
