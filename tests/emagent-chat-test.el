@@ -787,6 +787,19 @@ same markup outside the block is converted."
     (should (string-match-p "arr\\[i\\](fn)" out))
     (should (string-match-p "done.Next" out))))
 
+(ert-deftest emagent-chat-test-markup-normalizes-crlf ()
+  "CRLF output is normalized to LF so src blocks still segment and no ^M leaks."
+  (let ((out (emagent-chat--convert-agent-markup
+              (concat "Use `x` here.\r\n\r\n"
+                      "```python\r\n"
+                      "y = `z`\r\n"
+                      "```\r\n\r\n"
+                      "Done."))))
+    (should-not (string-match-p "\r" out))
+    (should (string-match-p "Use =x=" out))       ; prose converted
+    (should (string-match-p "#\\+BEGIN_SRC" out))  ; block recognized despite CRLF
+    (should (string-match-p "y = `z`" out))))      ; code interior preserved
+
 (ert-deftest emagent-chat-test-demote-preserves-code-stars ()
   "Heading demotion skips org-star lines inside src blocks."
   (let ((out (emagent-chat--demote-response-headings
