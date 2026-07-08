@@ -136,12 +136,36 @@ A prose-only transform: it is applied outside src blocks so a fenced
    "^## \\(.*\\)$" "** \\1"
    (replace-regexp-in-string "^###+ \\(.*\\)$" "* \\1" text)))
 
+(defun emagent-chat--convert-markdown-prose (text)
+  "Convert markdown links and glued sentences in prose TEXT.
+
+Prose-only transforms applied outside src blocks, so a fenced `arr[i](fn)' or
+`path.Join' is left as literal code."
+  (let ((result
+         ;; Markdown links [text](url) → [[url][text]] org links.
+         (replace-regexp-in-string
+          "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
+          "[[\\2][\\1]]"
+          text)))
+    ;; Insert a space when sentence-ending punctuation is immediately followed
+    ;; by a capital letter.  Bind case-fold-search=nil so [A-Z] only matches
+    ;; true uppercase — without this, domain names like github.corp get spaces.
+    ;; Require a lowercase letter right before the punctuation too, so an
+    ;; ALL-CAPS token like VDUNGEON.DAT or a CONSTANT.EXT filename is left
+    ;; alone — real glued sentences ("Done.Next step") end in lowercase.
+    (let ((case-fold-search nil))
+      (replace-regexp-in-string
+       "\\([a-z]\\)\\([.?!]\\)\\([A-Z]\\)"
+       "\\1\\2 \\3"
+       result))))
+
 (defun emagent-chat--normalize-response-spacing (text)
   "Normalize spacing around blocks and tables in agent responses.
 
-Heading conversion lives in `emagent-chat--convert-markdown-headings' (applied
-outside src blocks); this handles whole-text spacing that must see the block and
-table markers."
+Heading conversion lives in `emagent-chat--convert-markdown-headings' and
+link/sentence conversion in `emagent-chat--convert-markdown-prose' (both applied
+outside src blocks); this handles only whole-text spacing that must see the
+block and table markers."
   (let ((result (replace-regexp-in-string "\\`[\n\r]+" "" text)))
     (setq result
           (replace-regexp-in-string
@@ -163,24 +187,6 @@ table markers."
            "\\([^[:space:]\n|]\\)\n\\(|\\)"
            "\\1\n\n\\2"
            result))
-    ;; Markdown links [text](url) → [[url][text]] org links.
-    (setq result
-          (replace-regexp-in-string
-           "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
-           "[[\\2][\\1]]"
-           result))
-    ;; Insert a space when sentence-ending punctuation is immediately followed
-    ;; by a capital letter.  Bind case-fold-search=nil so [A-Z] only matches
-    ;; true uppercase — without this, domain names like github.corp get spaces.
-    ;; Require a lowercase letter right before the punctuation too, so an
-    ;; ALL-CAPS token like VDUNGEON.DAT or a CONSTANT.EXT filename is left
-    ;; alone — real glued sentences ("Done.Next step") end in lowercase.
-    (setq result
-          (let ((case-fold-search nil))
-            (replace-regexp-in-string
-             "\\([a-z]\\)\\([.?!]\\)\\([A-Z]\\)"
-             "\\1\\2 \\3"
-             result)))
     (setq result
           (replace-regexp-in-string
            "\\(|[^\n]*|\n\\)\\([^|\n#]\\)"
@@ -368,13 +374,14 @@ rewritten inside code."
                   (emagent-chat--convert-code-fences
                    (emagent-chat--fix-org-src-citations
                     (emagent-chat--unwrap-outer-org-src text)))))
-         ;; Prose-corrupting transforms (inline code, headings, tables) run only
-         ;; outside src blocks so code interiors survive verbatim.
+         ;; Prose-corrupting transforms (inline code, headings, tables, links,
+         ;; sentence spacing) run only outside src blocks so code survives verbatim.
          (prose (emagent-chat--map-outside-src-blocks
                  (lambda (s)
-                   (emagent-chat--convert-markdown-tables
-                    (emagent-chat--convert-markdown-headings
-                     (replace-regexp-in-string "`\\([^`\n]+\\)`" "=\\1=" s))))
+                   (emagent-chat--convert-markdown-prose
+                    (emagent-chat--convert-markdown-tables
+                     (emagent-chat--convert-markdown-headings
+                      (replace-regexp-in-string "`\\([^`\n]+\\)`" "=\\1=" s)))))
                  fenced)))
     ;; Whole-text spacing normalization needs to see the block/table markers.
     (emagent-chat--close-unclosed-org-src
