@@ -18,6 +18,7 @@
 (require 'emagent-log)
 (require 'emagent-acp-custom)
 (require 'emagent-acp-state)
+(require 'emagent-acp-provider)
 (require 'emagent-session)
 
 (declare-function emagent-chat--session-directory "emagent-chat-header")
@@ -69,7 +70,7 @@ to compute a percentage and the mode line shows `ctx:n/a' instead."
   (and emagent-acp--session
        (or (emagent-acp-state-busy emagent-acp--session)
            (emagent-acp-state-ready emagent-acp--session))
-       (eq (or (emagent-acp-state-provider emagent-acp--session) 'cursor) 'cursor)))
+       (emagent-acp--provider-context-usage-unavailable-p emagent-acp--session)))
 
 (defun emagent-acp-external-tool-gate-reasons ()
   "Return external tool-gate reason symbols for the current session, or nil.
@@ -149,7 +150,7 @@ layer (see `emagent-chat-set-status')."
                                 (size (map-elt usage :context-size)))
                        (cons used size))
           :ctx-unavailable (and (or (emagent-acp-state-busy state) (emagent-acp-state-ready state))
-                                (eq (or (emagent-acp-state-provider state) 'cursor) 'cursor)))))
+                                (emagent-acp--provider-context-usage-unavailable-p state)))))
 
 (defun emagent-acp--refresh-mode-line (state)
   (emagent-acp--maybe-recover-stall state)
