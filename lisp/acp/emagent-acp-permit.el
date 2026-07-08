@@ -149,12 +149,35 @@ so the request is cancelled (fail-closed) rather than escalated to allow_always.
           (when-let ((data (emagent-acp--tool-call-normalize-data raw)))
             (emagent-acp--tool-call-data-path data))))))
 
+(defconst emagent-acp--subcommand-programs
+  '("git" "npm" "npx" "pnpm" "yarn" "docker" "docker-compose" "kubectl"
+    "cargo" "go" "pip" "pip3" "gh" "brew" "apt" "apt-get" "systemctl"
+    "make" "gradle" "mvn" "terraform" "helm" "dotnet" "rustup")
+  "Programs whose first sub-verb changes what the command does.
+For these, an execute fingerprint includes the sub-verb so a grant for e.g.
+`git status' does not also auto-approve `git push --force'.")
+
+(defun emagent-acp--execute-fingerprint (command)
+  "Return the execute fingerprint for shell COMMAND.
+
+Keyed on the program name, plus the first sub-verb for
+`emagent-acp--subcommand-programs' (the first non-flag argument), so a grant is
+scoped to the actual operation rather than every invocation of the program."
+  (let* ((words (split-string (string-trim command) "[[:space:]]+" t))
+         (program (car words)))
+    (if (member program emagent-acp--subcommand-programs)
+        (if-let ((verb (seq-find (lambda (w) (not (string-prefix-p "-" w)))
+                                 (cdr words))))
+            (format "execute:%s:%s" program verb)
+          (format "execute:%s" program))
+      (format "execute:%s" program))))
+
 (defun emagent-acp--permission-fingerprint (tool-call)
   "Return a stable fingerprint string for auto-allowing similar TOOL-CALLs.
 
-Execute commands are keyed on the executable name only (first word), so
-approving `mvn test A' covers `mvn test B' in the same session.  Policy
-rules still block dangerous commands (rm, mv, etc.) regardless."
+Execute commands are keyed on the program name (and sub-verb for tools like
+git/npm/docker, see `emagent-acp--subcommand-programs').  Policy rules still
+block dangerous commands regardless."
   (when tool-call
     (let* ((kind    (downcase (or (emagent-acp--tool-call-infer-kind tool-call) "")))
            (command (emagent-acp--tool-call-command-text tool-call))
@@ -163,7 +186,7 @@ rules still block dangerous commands (rm, mv, etc.) regardless."
            (title   (or (map-elt tool-call 'title) "")))
       (cond
        ((and (string= kind "execute") (stringp command) (not (string-empty-p command)))
-        (format "execute:%s" (car (split-string command "[[:space:]]+" t))))
+        (emagent-acp--execute-fingerprint command))
        (form
         (format "eval:%s" (secure-hash 'sha1 form)))
        ((and (member kind '("read" "write")) path)
@@ -171,7 +194,7 @@ rules still block dangerous commands (rm, mv, etc.) regardless."
        ((not (string-empty-p title))
         (format "%s:%s" (if (string-empty-p kind) "tool" kind) title))
        (command
-        (format "execute:%s" (car (split-string command "[[:space:]]+" t))))
+        (emagent-acp--execute-fingerprint command))
        (t "unknown")))))
 
 (defun emagent-acp--tool-call-infer-kind (tool-call)

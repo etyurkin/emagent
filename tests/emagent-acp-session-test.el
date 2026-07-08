@@ -71,12 +71,27 @@ request is cancelled rather than escalated to a permanent agent-side grant."
                    ((optionId . "reject") (kind . "reject"))]))
     (should (null (emagent-acp--permission-acp-allow-id options)))))
 
-(ert-deftest emagent-acp-session-test-permission-fingerprint ()
+(defun emagent-test--exec-fingerprint (command)
+  "Return the execute fingerprint for shell COMMAND."
   (let ((args (make-hash-table :test 'equal)))
-    (puthash "command" "make test" args)
-    (should (string= "execute:make"
-                     (emagent-acp--permission-fingerprint
-                      `((kind . "execute") (arguments . ,args)))))))
+    (puthash "command" command args)
+    (emagent-acp--permission-fingerprint `((kind . "execute") (arguments . ,args)))))
+
+(ert-deftest emagent-acp-session-test-permission-fingerprint ()
+  ;; A non-subcommand program keys on the program name only.
+  (should (string= "execute:ls" (emagent-test--exec-fingerprint "ls -la /tmp")))
+  ;; A subcommand program keys on program:subverb, so different verbs get
+  ;; distinct grants but argument variations share one.
+  (should (string= "execute:make:test" (emagent-test--exec-fingerprint "make test")))
+  (should (string= "execute:git:status" (emagent-test--exec-fingerprint "git status")))
+  (should (string= "execute:git:push"
+                   (emagent-test--exec-fingerprint "git push --force origin main")))
+  ;; Leading short flags are skipped when finding the sub-verb.
+  (should (string= "execute:npm:install"
+                   (emagent-test--exec-fingerprint "npm install left-pad")))
+  ;; A grant for `git status' does not match `git push'.
+  (should-not (string= (emagent-test--exec-fingerprint "git status")
+                       (emagent-test--exec-fingerprint "git push"))))
 
 (ert-deftest emagent-acp-session-test-permission-validate-blocks-eval ()
   (let ((args (make-hash-table :test 'equal)))
@@ -142,8 +157,8 @@ request is cancelled rather than escalated to a permanent agent-side grant."
                (setq sent-id (map-nested-elt response '(:result outcome optionId)))))))
         (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
         (should (string= "allow_once" sent-id))
-        (should (member "execute:make" (emagent-permissions-global-fingerprints)))
-        (should-not (member "execute:make" (or (map-elt state :permission-auto-allow) nil)))))))
+        (should (member "execute:make:test" (emagent-permissions-global-fingerprints)))
+        (should-not (member "execute:make:test" (or (map-elt state :permission-auto-allow) nil)))))))
 
 (ert-deftest emagent-acp-session-test-permission-allow-session-persists-by-session-id ()
   (let ((perms-dir (emagent-test--temp-directory)))
