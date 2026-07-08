@@ -263,6 +263,32 @@
        state "rf1" 'read merged "read_file: foo.el" "completed")
       (should (string= "read_file: foo.el (Allow: Emacs)" shown)))))
 
+(ert-deftest emagent-acp-session-test-emagent-tool-pending-untagged ()
+  "A pending emagent tool call is untagged: it may await a permission prompt.
+Once it runs (in_progress), its permission was granted and the tag applies."
+  (let* ((state (emagent-test--make-acp-state))
+         (merged '((toolCallId . "ss1")
+                   (title . "mcp_emagent_structural_substitute")))
+         (shown nil))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-chat-show-tool-call)
+          (lambda (_id label &rest _) (setq shown label)))
+         ((symbol-function 'emagent-acp--detect-external-refusal-in-text)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--notify-user) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--schedule-prompt-watchdog)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--chat-buffer)
+          (lambda (_) (current-buffer))))
+      (emagent-acp--emit-tool-call-display
+       state "ss1" 'edit merged "substitute: foo.el" "pending")
+      (should (string= "substitute: foo.el" shown))
+      (setq shown nil)
+      (emagent-acp--emit-tool-call-display
+       state "ss1" 'edit merged "substitute: foo.el" "in_progress")
+      (should (string= "substitute: foo.el (Allow: Emacs)" shown)))))
+
 (ert-deftest emagent-acp-session-test-agent-tool-not-tagged-emacs ()
   "Native agent tools (no emagent MCP origin) are tagged (Allow: Agent), not Emacs.
 A completed tool that never hit the ACP permission path was allowed by the
@@ -282,7 +308,11 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
          ((symbol-function 'emagent-acp--chat-buffer)
           (lambda (_) (current-buffer))))
       (emagent-acp--emit-tool-call-display
-       state "g1" 'search merged "Grep: pattern" "completed")
+       state "g1" 'search merged "Grep: pattern" "pending")
+      (should (string= "Grep: pattern" shown))
+      (setq shown nil)
+      (emagent-acp--emit-tool-call-display
+       state "g1" 'search merged "Grep: pattern" "in_progress")
       (should (string= "Grep: pattern (Allow: Agent)" shown)))))
 
 (defun emagent-test--run-at-time-immediately (_time _repeat fn)
