@@ -252,7 +252,7 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
   "Return non-nil when FINGERPRINT is auto-approved for STATE or CHAT-BUFFER."
   (or (emagent-acp-state-session-auto-approve state)
       (and fingerprint
-           (or (member fingerprint (or (emagent-acp-state-permission-auto-allow state) nil))
+           (or (member fingerprint (emagent-acp-state-permission-auto-allow state))
                (member fingerprint (emagent-permissions-global-fingerprints))
                (member fingerprint
                        (emagent-permissions-session-fingerprints
@@ -281,7 +281,7 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
    ((and fingerprint (member fingerprint (emagent-permissions-global-fingerprints)))
     :allow-always)
    ((and fingerprint
-         (member fingerprint (or (emagent-acp-state-permission-auto-allow state) nil)))
+         (member fingerprint (emagent-acp-state-permission-auto-allow state)))
     :allow-session)
    ((and fingerprint
          (member fingerprint
@@ -363,7 +363,7 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
     (:allow-session
      (when fingerprint
        (setf (emagent-acp-state-permission-auto-allow state)
-                 (append (or (emagent-acp-state-permission-auto-allow state) nil)
+                 (append (emagent-acp-state-permission-auto-allow state)
                          (list fingerprint)))
        (when-let ((session-id (emagent-acp-state-session-id state)))
          (emagent-permissions-add-session-fingerprint session-id fingerprint))))
