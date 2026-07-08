@@ -27,8 +27,16 @@
   :type 'boolean
   :group 'emagent-elisp)
 
-(defcustom emagent-elisp-byte-compile-on-check t
-  "When non-nil, run `byte-compile-file' during .el file validation."
+(defcustom emagent-elisp-byte-compile-on-check nil
+  "When non-nil, run `byte-compile-file' during .el file validation.
+
+WARNING: byte-compiling expands macros, which EXECUTES arbitrary code from the
+validated content — a `(defmacro m () (delete-file …)) (m)' payload runs during
+the check.  Because this validation runs on agent-supplied file content (via
+`check_structural_file' and, with `emagent-elisp-validate-on-write', every .el
+write), enabling it lets a misbehaving or prompt-injected agent run code before
+any permission gate.  Leave nil unless you fully trust the content being
+validated; syntax and paren checks run regardless."
   :type 'boolean
   :group 'emagent-elisp)
 
