@@ -36,6 +36,11 @@ Thinking block."
             (if (re-search-forward (emagent-chat--user-heading-re) nil t)
                 (copy-marker (line-beginning-position) nil)
               'point-max))
+          ;; The Response headline / Thinking headline don't exist yet; clear
+          ;; their owned markers so a stale one from a prior turn can't mislocate
+          ;; inserted body text even if a reset was skipped.
+          emagent-chat--response-content-marker nil
+          emagent-chat--thinking-headline-marker nil
           emagent-chat--thought-marker nil
           emagent-chat--thought-open-p nil
           emagent-chat--reasoning-streamed-p nil)))
