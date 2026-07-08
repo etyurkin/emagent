@@ -250,6 +250,20 @@ held across a streaming boundary)."
   "^[ \t]*#\\+BEGIN_SRC\\(?:.*\n\\)*?[ \t]*#\\+END_SRC[ \t]*$"
   "Match a complete org src block from its BEGIN_SRC line to its END_SRC line.")
 
+(defun emagent-chat--escape-src-body (body)
+  "Comma-escape lines in BODY that Org would misread as src-block delimiters.
+
+A code block that documents Org can contain a literal `#+END_SRC' (or
+`#+BEGIN_SRC') line; left as-is it closes the generated block early for both
+Org's own parser and `emagent-chat--src-block-re', mangling everything after it.
+Prefixing the delimiter with a comma is Org's escape convention (stripped on
+export/edit), so the line stays part of the block body."
+  (let ((case-fold-search t))
+    (replace-regexp-in-string
+     "^\\([ \t]*\\)\\(#\\+\\(?:BEGIN\\|END\\)_SRC\\)"
+     "\\1,\\2"
+     body)))
+
 (defun emagent-chat--map-outside-src-blocks (fn text)
   "Return TEXT with FN applied to every span outside org src blocks.
 
@@ -298,7 +312,7 @@ inside src blocks are left alone."
                 (let ((body (substring text body-start)))
                   (push (format "#+BEGIN_SRC %s\n%s\n#+END_SRC"
                                 (emagent-chat--lang-from-src-tag tag)
-                                body)
+                                (emagent-chat--escape-src-body body))
                         parts)
                   (setq pos (length text)))
               (let* ((body-end (match-beginning 0))
@@ -306,7 +320,7 @@ inside src blocks are left alone."
                      (body (substring text body-start body-end)))
                 (push (format "#+BEGIN_SRC %s\n%s\n#+END_SRC"
                               (emagent-chat--lang-from-src-tag tag)
-                              body)
+                              (emagent-chat--escape-src-body body))
                       parts)
                 (setq pos close-end)))))))
     (push (substring text pos) parts)
