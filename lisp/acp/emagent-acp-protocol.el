@@ -175,18 +175,27 @@ redisplay are not starved during heavy agent output."
              (setq drain-pending nil)
              (unless message-queue-busy
                (setq message-queue-busy t)
+               ;; Pop each message BEFORE routing it and isolate the routing in
+               ;; condition-case, so a throwing/quitting handler can neither
+               ;; re-poison the queue head nor abort the whole batch.  The
+               ;; reschedule lives in the unwind-protect cleanup so it survives
+               ;; a non-local exit that escapes the loop entirely.
                (unwind-protect
                    (let ((batch 0)
                          (limit (max 1 emagent-acp-message-drain-batch-size)))
                      (while (and message-queue (< batch limit))
                        (setq batch (1+ batch))
-                       (route-parsed (car message-queue))
-                       (setq message-queue (cdr message-queue))
-                       (unless message-queue
-                         (setq message-queue-tail nil))))
-                 (setq message-queue-busy nil))
-               (when message-queue
-                 (unless drain-pending
+                       (let ((item (car message-queue)))
+                         (setq message-queue (cdr message-queue))
+                         (unless message-queue
+                           (setq message-queue-tail nil))
+                         (condition-case-unless-debug err
+                             (route-parsed item)
+                           ((error quit)
+                            (emagent-acp--log client "DRAIN ITEM ERROR"
+                                              "Dropped message: %S" err))))))
+                 (setq message-queue-busy nil)
+                 (when (and message-queue (not drain-pending))
                    (setq drain-pending t)
                    (run-with-timer 0 nil (lambda () (drain)))))))
            (enqueue (json-line)
@@ -408,8 +417,19 @@ request objects (when the agent initiates a request to emagent)."
   (unless message        (error ":message is required"))
   (unless on-notification (error ":on-notification is required"))
   (unless on-request      (error ":on-request is required"))
-  (let-alist (map-elt message :object)
+  ;; A syntactically valid but non-object JSON line (e.g. `42`, `[]`) parses to
+  ;; a non-alist; `let-alist' would signal on it.  Bind it to nil so routing
+  ;; treats it as an ignorable message instead of letting the signal unwind the
+  ;; drain and wedge the queue.
+  (let* ((obj (map-elt message :object))
+         (obj (and (listp obj) obj)))
+    (unless obj
+      (emagent-acp--log client nil "↳ Non-object message ignored: %s"
+                        (map-elt message :object)))
+    (let-alist obj
     (or
+     ;; Non-object payload already logged above; nothing to route.
+     (unless obj t)
      ;; Successful response to our outgoing request
      (when-let ((resp (and .id
                            (map-contains-key (map-elt message :object) 'result)
@@ -419,11 +439,15 @@ request objects (when the agent initiates a request to emagent)."
        (map-put! client :pending-requests
                  (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt resp :on-success)
-           (with-temp-buffer
-             (with-current-buffer (or (map-elt resp :buffer)
-                                      (map-elt client :context-buffer)
-                                      (current-buffer))
-               (funcall (map-elt resp :on-success) .result)))
+           (condition-case-unless-debug err
+               (with-temp-buffer
+                 (with-current-buffer (or (map-elt resp :buffer)
+                                          (map-elt client :context-buffer)
+                                          (current-buffer))
+                   (funcall (map-elt resp :on-success) .result)))
+             ((error quit)
+              (emagent-acp--log client "RESPONSE CALLBACK ERROR"
+                                "on-success failed: %S" err)))
          (emagent-acp--log client nil "Unhandled result: %s" message))
        t)
 
@@ -435,9 +459,13 @@ request objects (when the agent initiates a request to emagent)."
        (map-put! client :pending-requests
                  (map-delete (map-elt client :pending-requests) .id))
        (if (map-elt resp :on-failure)
-           (emagent-acp--call-request-failure
-            :client client :incoming-response resp
-            :error-data .error :message message)
+           (condition-case-unless-debug err
+               (emagent-acp--call-request-failure
+                :client client :incoming-response resp
+                :error-data .error :message message)
+             ((error quit)
+              (emagent-acp--log client "RESPONSE CALLBACK ERROR"
+                                "on-failure failed: %S" err)))
          (emagent-acp--log client nil "Unhandled error: %s" message))
        t)
 
@@ -454,7 +482,7 @@ request objects (when the agent initiates a request to emagent)."
        t)
 
      ;; Unrecognized
-     (emagent-acp--log client nil "↳ Unrecognized message: %s" (map-elt message :object)))))
+     (emagent-acp--log client nil "↳ Unrecognized message: %s" (map-elt message :object))))))
 
 (cl-defun emagent-acp--call-request-failure (&key client incoming-response error-data message)
   "Invoke the failure callback of INCOMING-RESPONSE with ERROR-DATA."
