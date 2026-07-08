@@ -111,8 +111,10 @@ agent is thinking."
   :type 'number
   :group 'emagent-chat)
 
-(defvar-local emagent-chat--tool-call-lines (make-hash-table :test 'equal)
-  "Map ACP toolCallId to (START . END) markers for displayed tool-call lines.")
+(defvar-local emagent-chat--tool-call-lines nil
+  "Map ACP toolCallId to (START . END) markers for displayed tool-call lines.
+Created per buffer in `emagent-mode'; must not use a shared mutable default,
+or concurrent chat buffers would alias one table.")
 
 (defvar-local emagent-chat--user-zone-start-marker nil
   "Position where the next user prompt may begin.")
