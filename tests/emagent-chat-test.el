@@ -650,6 +650,30 @@ session present (the UI no longer pulls from the ACP layer)."
             ;; but consecutive distinct tool lines stay adjacent.
             (should (string-match-p "→ Read: /a.el\n→ Read: /b.el" text)))))))))
 
+(ert-deftest emagent-chat-test-reasoning-headline-marker-owned ()
+  "Multi-chunk reasoning uses the owned `** Thinking' headline marker, and the
+marker points at the actual Thinking headline."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "first reasoning ")
+          (should (markerp emagent-chat--thinking-headline-marker))
+          (should (= (emagent-chat--open-reasoning-begin)
+                     (marker-position emagent-chat--thinking-headline-marker)))
+          (emagent-chat-append-thought "second reasoning")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "\\*\\* Thinking" text))
+            (should (string-match-p "first reasoning" text))
+            (should (string-match-p "second reasoning" text))
+            ;; The marker sits exactly at the Thinking headline.
+            (goto-char (marker-position emagent-chat--thinking-headline-marker))
+            (should (looking-at-p "\\*\\* Thinking")))))))))
+
 (ert-deftest emagent-chat-test-tool-call-block-then-thought-separated ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
