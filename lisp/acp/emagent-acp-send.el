@@ -355,9 +355,9 @@ request continues in the background but its result is ignored."
   (when emagent-mcp--token
     (emagent-mcp-deregister-session emagent-mcp--token))
   (when-let ((state emagent-acp--session))
-    (emagent-acp--stop-rss-timer state)
     (emagent-acp--clear-prompt-watchdog state)
     (emagent-acp--cancel-prompt-render state)
+    (emagent-acp--cancel-state-timers state)
     (when-let ((client (map-elt state :client)))
       (emagent-acp-shutdown :client client))
     (setq emagent-acp--session nil)))
