@@ -65,7 +65,12 @@ keyword arguments (`:content' or `:error')."
         (emagent-acp--fs-send client make request-id
                               :error (emagent-acp--fs-unavailable-response
                                       "fs/read_text_file"))
-      (let* ((emagent-tools--root-boundary (emagent-acp--fs-session-root state))
+      ;; Confine to the session root; fall back to the ambient project directory
+      ;; rather than nil (no confinement) when the chat buffer is gone, so a
+      ;; missing session root cannot open up unconfined filesystem access.
+      (let* ((emagent-tools--root-boundary
+              (or (emagent-acp--fs-session-root state)
+                  emagent-tools--project-directory))
              (emagent-tools--project-directory
               (or emagent-tools--root-boundary emagent-tools--project-directory))
              (verdict (emagent-guard-check 'read path)))
@@ -95,7 +100,12 @@ keyword arguments (`:content' or `:error')."
         (emagent-acp--fs-send client make request-id
                               :error (emagent-acp--fs-unavailable-response
                                       "fs/write_text_file"))
-      (let* ((emagent-tools--root-boundary (emagent-acp--fs-session-root state))
+      ;; Confine to the session root; fall back to the ambient project directory
+      ;; rather than nil (no confinement) when the chat buffer is gone, so a
+      ;; missing session root cannot open up unconfined filesystem access.
+      (let* ((emagent-tools--root-boundary
+              (or (emagent-acp--fs-session-root state)
+                  emagent-tools--project-directory))
              (emagent-tools--project-directory
               (or emagent-tools--root-boundary emagent-tools--project-directory))
              (verdict (emagent-guard-check 'write path)))
