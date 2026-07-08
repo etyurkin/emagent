@@ -30,12 +30,17 @@
 (defconst emagent-tools--group-containers-dir
   (expand-file-name "~/Library/Group Containers/"))
 
+(defun emagent-tools--protected-truename-p (truename)
+  "Return non-nil when TRUENAME (an absolute, symlink-resolved path) is in a
+protected macOS tree (iCloud or another app's container).  Pure predicate with
+no session resolution, so `emagent-tools--root-directory' can call it safely."
+  (or (string-prefix-p emagent-tools--icloud-dir truename)
+      (string-prefix-p emagent-tools--containers-dir truename)
+      (string-prefix-p emagent-tools--group-containers-dir truename)))
+
 (defun emagent-tools--protected-fs-path-p (path)
   "Return non-nil when PATH must not be accessed via Emacs on macOS."
-  (let ((resolved (file-truename (emagent-tools--root-directory path))))
-    (or (string-prefix-p emagent-tools--icloud-dir resolved)
-        (string-prefix-p emagent-tools--containers-dir resolved)
-        (string-prefix-p emagent-tools--group-containers-dir resolved))))
+  (emagent-tools--protected-truename-p (file-truename (expand-file-name path))))
 
 (defun emagent-tools--file-buffer (path)
   "Return a buffer visiting PATH, visiting it if the file exists."
