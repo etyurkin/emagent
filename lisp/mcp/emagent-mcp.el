@@ -29,16 +29,14 @@
 
 (require 'emagent-tools)
 (require 'emagent-mcp-structural)
+;; The per-buffer tool allow-list lives in the session model (below the UI), so
+;; the MCP server reads it without depending on the chat module.
+(require 'emagent-session)
 
 ;; Defined in emagent-acp.el; declared here to avoid a circular require.
 (defvar emagent-acp-prefer-emacs)
 
 (declare-function emagent-log "emagent-log")
-
-;; Defined in emagent-chat.el; declared to avoid a circular require.  The chat
-;; buffer owns the per-document tool allow-list (#+EMAGENT_ALLOWED_TOOLS).
-(declare-function emagent-chat-allowed-tools "emagent-chat")
-(declare-function emagent-chat-add-allowed-tool "emagent-chat")
 
 (require 'emagent-mcp-server)
 (require 'emagent-mcp-session)
@@ -436,17 +434,17 @@ Only includes tools whose :available predicate passes."
 
 (defun emagent-mcp--session-allowed-tools (buffer)
   "Return BUFFER's persisted tool allow-list, or nil."
-  (when (and (buffer-live-p buffer) (fboundp 'emagent-chat-allowed-tools))
+  (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (emagent-chat-allowed-tools))))
+      (emagent-session-allowed-tools))))
 
 (defun emagent-mcp--make-allow-all-fn (buffer)
   "Return a function that persists an \"allow all\" choice to BUFFER, or nil."
-  (when (and (buffer-live-p buffer) (fboundp 'emagent-chat-add-allowed-tool))
+  (when (buffer-live-p buffer)
     (lambda (tool)
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
-          (emagent-chat-add-allowed-tool tool))))))
+          (emagent-session-add-allowed-tool tool))))))
 
 (defun emagent-mcp--run-tool (name args session)
   "Run tool NAME with ARGS in SESSION's context; return a result string."

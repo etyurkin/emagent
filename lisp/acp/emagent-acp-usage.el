@@ -18,11 +18,10 @@
 (require 'emagent-log)
 (require 'emagent-acp-custom)
 (require 'emagent-acp-state)
+(require 'emagent-session)
 
 (declare-function emagent-chat--session-directory "emagent-chat-header")
 (declare-function emagent-chat-set-session-id "emagent-chat")
-(declare-function emagent-chat-session-id "emagent-chat")
-(declare-function emagent-chat-model "emagent-chat")
 (declare-function emagent-chat-set-model "emagent-chat")
 (declare-function emagent-chat--refresh-mode-line "emagent-chat-mode-line")
 (declare-function emagent-chat--refresh-mode-line-soon "emagent-chat-mode-line")
@@ -112,12 +111,12 @@ buffer signals \"Selecting deleted buffer\"."
 (defun emagent-acp--saved-session-id (state)
   (when-let ((buf (emagent-acp--chat-buffer state)))
     (with-current-buffer buf
-      (emagent-chat-session-id))))
+      (emagent-session-id))))
 
 (defun emagent-acp--saved-model-id (state)
   (when-let ((buf (emagent-acp--chat-buffer state)))
     (with-current-buffer buf
-      (emagent-chat-model))))
+      (emagent-session-model))))
 
 (defun emagent-acp--persist-model-id (state model-id)
   (when-let ((buf (emagent-acp--chat-buffer state)))

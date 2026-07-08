@@ -93,8 +93,6 @@
 
 
 (declare-function emagent-acp--read-labeled-choice "emagent-acp-model")
-(declare-function emagent-chat-session-id "emagent-chat")
-(declare-function emagent-chat-project-directory "emagent-chat")
 (declare-function emagent-permissions-reset-global "emagent-permissions")
 (declare-function emagent-permissions-reset-session "emagent-permissions")
 (declare-function emagent-permissions-reset-project "emagent-permissions")
@@ -111,8 +109,8 @@ Choices:
   (interactive)
   (unless (derived-mode-p 'emagent-mode)
     (user-error "Not in an emagent buffer"))
-  (let* ((session-id (emagent-chat-session-id))
-         (project-dir (emagent-chat-project-directory))
+  (let* ((session-id (emagent-session-id))
+         (project-dir (emagent-session-project-directory))
          (choices
           (delq nil
                 (list
