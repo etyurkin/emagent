@@ -95,8 +95,10 @@ KEEP-TAIL non-nil keeps the end of STRING visible."
           (insert "\n"))
         (insert (format-time-string "[%H:%M:%S] ") text)
         ;; A single entry's TEXT may span multiple lines (e.g. the model
-        ;; list); count them all so the buffer trims at the real limit.
-        (emagent-log--truncate buffer (length (split-string text "\n"))))
+        ;; list); count them all so the buffer trims at the real limit.  Count
+        ;; content lines, not a spurious extra for a trailing newline.
+        (emagent-log--truncate
+         buffer (1+ (cl-count ?\n (string-trim-right text "\n")))))
       (when-let ((window (get-buffer-window buffer t)))
         (with-selected-window window
           (goto-char (point-max))

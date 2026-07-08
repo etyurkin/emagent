@@ -23,16 +23,15 @@
   (require 'cl-lib))
 
 (defmacro emagent--this-file ()
-  "`.el' path for the file being loaded or byte-compiled."
-  `(let ((file (or load-file-name
-                   (when (boundp 'byte-compile-dest-file)
-                     (let ((dest byte-compile-dest-file))
-                       (when (string-match "\\.elc\\'" dest)
-                         (substring dest 0 -1)))))))
-     (when file
-       (if (string-match "\\.elc\\'" file)
-           (substring file 0 -1)
-         file))))
+  "`.el' path for the file being loaded or byte-compiled.
+Resolved at macroexpansion time via `macroexp-file-name', which works during
+both byte-compilation and loading (unlike `byte-compile-dest-file', which is a
+function, not a bound variable, on Emacs 29+)."
+  (let ((file (or (macroexp-file-name) load-file-name)))
+    (and file
+         (if (string-suffix-p ".elc" file)
+             (substring file 0 -1)
+           file))))
 
 (defmacro emagent--bootstrap-load-path ()
   "Load `emagent-load-path' and register grouped `lisp/' directories."
@@ -189,7 +188,7 @@ happens on first send via `emagent--send-prompt'."
            (widen)
            (goto-char (point-min))
            (let ((limit (min (+ (point-min) 4096) (point-max))))
-             (or (looking-at-p "# -*- mode: emagent -*-")
+             (or (looking-at-p "#[ \t]*-\\*-.*\\bmode:[ \t]*emagent\\b.*-\\*-")
                  (re-search-forward "^#\\+EMAGENT_SESSION:[ \t]*\\S-" limit t)))))))
 
 (defcustom emagent-activate-on-display t

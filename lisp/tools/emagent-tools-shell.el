@@ -454,7 +454,7 @@ Uses pure Emacs search when `emagent-acp-prefer-emacs' is non-nil."
       (apply #'emagent-tools--run-git-async
              (lambda (output is-error)
                (funcall callback (string-trim output) is-error))
-             "diff" (split-string args "[[:space:]]+" t))
+             "diff" (split-string-shell-command args))
     (emagent-tools--run-git-async
      (lambda (output is-error)
        (funcall callback (string-trim output) is-error))
@@ -470,7 +470,7 @@ Uses pure Emacs search when `emagent-acp-prefer-emacs' is non-nil."
       (apply #'emagent-tools--run-git-async
              (lambda (output is-error)
                (funcall callback (string-trim output) is-error))
-             "log" (split-string args "[[:space:]]+" t))
+             "log" (split-string-shell-command args))
     (emagent-tools--run-git-async
      (lambda (output is-error)
        (funcall callback (string-trim output) is-error))
