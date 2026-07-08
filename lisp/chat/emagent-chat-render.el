@@ -165,6 +165,7 @@ the hide when the response is fully complete and the session is idle."
         emagent-chat--response-content-marker nil
         emagent-chat--response-end-marker nil
         emagent-chat--thought-open-p nil
+        emagent-chat--thinking-headline-marker nil
         emagent-chat--thought-marker nil
         emagent-chat--reasoning-streamed-p nil
         emagent-chat--fence-state nil
