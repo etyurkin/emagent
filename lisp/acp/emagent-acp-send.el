@@ -228,6 +228,40 @@ interrupted."
            (emagent-acp--notify-user
             state (format "emagent: prompt failed: %s" message)))))))))
 
+(defun emagent-acp--turn-begin (state)
+  "Enter the streaming phase of a new turn for STATE.
+
+Mints a fresh turn generation (so a late response from a previous turn fails
+the GEN guard instead of finalizing this one) and resets all turn-scoped state:
+resume budget, streamed text, finalize flags, the tool-call display tables, the
+provider tool-resolve queue, and any outstanding permission requests.  This is
+the single entry point for turn start; the terminal paths (`--complete-prompt',
+`--abort-prompt', `--finalize-in-flight-prompt') own turn end."
+  (map-put! state :busy t)
+  (map-put! state :prompt-generation (1+ (or (map-elt state :prompt-generation) 0)))
+  (map-put! state :continue-attempts 0)
+  (when (fboundp 'emagent-chat--spinner-start)
+    (emagent-chat--spinner-start))
+  (map-put! state :assistant-text "")
+  (map-put! state :thought-text "")
+  (map-put! state :prompt-finalized nil)
+  (map-put! state :prompt-finishing nil)
+  (clrhash (map-elt state :tool-call-titles))
+  (clrhash (map-elt state :tool-call-inputs))
+  (clrhash (map-elt state :tool-call-labels))
+  (clrhash (map-elt state :tool-call-decisions))
+  (clrhash (map-elt state :tool-call-pending))
+  (emagent-acp--provider-reset-tool-resolve state)
+  (when-let ((timer (map-elt state :permission-drain-timer)))
+    (cancel-timer timer)
+    (map-put! state :permission-drain-timer nil))
+  (emagent-acp--cancel-outstanding-permissions state)
+  (map-put! state :permission-busy nil)
+  (map-put! state :deferred-complete-response nil)
+  (emagent-acp--cancel-prompt-render state)
+  (emagent-acp--clear-thought-buffer state)
+  (emagent-acp--schedule-prompt-watchdog state))
+
 (cl-defun emagent-acp-send-prompt (user-text)
   "Send USER-TEXT to the current buffer's ACP session."
   (let* ((state (emagent-acp--session))
@@ -265,34 +299,7 @@ interrupted."
           (emagent-log "compressing conversation"))
          (slash-command-p
           (emagent-log "send slash command: %s" user-text)))
-      (map-put! state :busy t)
-      ;; Mint a fresh turn identity so a late response from a previous turn
-      ;; (which carries the old generation) fails the GEN guard instead of
-      ;; finalizing this one, and reset the per-turn resume budget.  Both must
-      ;; happen at turn start; the normal completion path never bumps them.
-      (map-put! state :prompt-generation (1+ (or (map-elt state :prompt-generation) 0)))
-      (map-put! state :continue-attempts 0)
-      (when (fboundp 'emagent-chat--spinner-start)
-        (emagent-chat--spinner-start))
-      (map-put! state :assistant-text "")
-      (map-put! state :thought-text "")
-      (map-put! state :prompt-finalized nil)
-      (map-put! state :prompt-finishing nil)
-      (clrhash (map-elt state :tool-call-titles))
-      (clrhash (map-elt state :tool-call-inputs))
-      (clrhash (map-elt state :tool-call-labels))
-      (clrhash (map-elt state :tool-call-decisions))
-      (clrhash (map-elt state :tool-call-pending))
-      (emagent-acp--provider-reset-tool-resolve state)
-      (when-let ((timer (map-elt state :permission-drain-timer)))
-        (cancel-timer timer)
-        (map-put! state :permission-drain-timer nil))
-      (emagent-acp--cancel-outstanding-permissions state)
-      (map-put! state :permission-busy nil)
-      (map-put! state :deferred-complete-response nil)
-      (emagent-acp--cancel-prompt-render state)
-      (emagent-acp--clear-thought-buffer state)
-      (emagent-acp--schedule-prompt-watchdog state)
+      (emagent-acp--turn-begin state)
       (emagent-acp--dispatch-prompt-request
        :state state :session-id session-id
        :blocks blocks :images images

@@ -86,6 +86,24 @@
     (cancel-timer timer)
     (map-put! state :agent-rss-timer nil)))
 
+(defun emagent-acp--turn-phase (state)
+  "Return the lifecycle phase of STATE's current turn.
+
+One of:
+  `idle'        no turn in flight;
+  `streaming'   a prompt is in flight (`:busy'), receiving output and possibly
+                paused on a permission prompt;
+  `finalizing'  streaming ended, the response is being rendered;
+  `done'        the response has been fully rendered.
+
+This derives the phase from the turn flags so callers share one vocabulary for
+the turn state machine.  The flags remain the underlying representation for now."
+  (cond
+   ((map-elt state :busy) 'streaming)
+   ((map-elt state :prompt-finishing)
+    (if (map-elt state :prompt-finalized) 'done 'finalizing))
+   (t 'idle)))
+
 (defun emagent-acp--connected-p ()
   "Return non-nil when the current buffer has a live, ready ACP session."
   (and emagent-acp--session
