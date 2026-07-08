@@ -370,7 +370,8 @@ Code fences are converted to src blocks first; the remaining prose transforms
 (inline backticks, tables, heading/spacing normalization) then run only outside
 those blocks, so a fenced backtick span, `## heading', or table row is never
 rewritten inside code."
-  (let* ((fenced (emagent-chat--normalize-elisp-src-tags
+  (let* ((text (replace-regexp-in-string "\r\n?" "\n" text))
+         (fenced (emagent-chat--normalize-elisp-src-tags
                   (emagent-chat--convert-code-fences
                    (emagent-chat--fix-org-src-citations
                     (emagent-chat--unwrap-outer-org-src text)))))

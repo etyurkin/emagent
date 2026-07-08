@@ -1101,6 +1101,9 @@ the headline exists; otherwise the headline is located by search and cached."
   "Append streamed assistant TEXT under the `** Response' subsection.
 Each chunk is passed through the streaming markdown->org converter so the
 buffer shows formatted org while the response is still arriving."
+  ;; Normalize line endings so CRLF/CR output does not leave stray ^M in the
+  ;; buffer or defeat the LF-based fence/src-block segmentation below.
+  (setq text (replace-regexp-in-string "\r\n?" "\n" text))
   (when (not (string-empty-p text))
     (emagent-chat--with-stable-view
       (lambda ()
