@@ -52,6 +52,24 @@
   (should (string-match-p (emagent-tools--glob-to-regexp "**/*.el") "./dir/foo.el"))
   (should (string-match-p (emagent-tools--glob-to-regexp "foo?.el") "./foox.el")))
 
+(ert-deftest emagent-tools-test-find-files ()
+  "A name glob matches basenames recursively; a path glob (with `/') matches
+relative paths and does not cross directory boundaries on `*'."
+  (let ((dir (make-temp-file "emagent-find-" t)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "src" dir))
+          (write-region "" nil (expand-file-name "src/a.el" dir))
+          (write-region "" nil (expand-file-name "src/b.py" dir))
+          (write-region "" nil (expand-file-name "top.el" dir))
+          (let ((emagent-tools--project-directory dir))
+            (should (equal "src/a.el" (emagent-tool-find-files "src/*.el")))
+            (should (equal '("src/a.el" "top.el")
+                           (sort (split-string (emagent-tool-find-files "*.el") "\n")
+                                 #'string<)))
+            (should (equal "No matches" (emagent-tool-find-files "*.rb")))))
+      (delete-directory dir t))))
+
 ;;;; Write diff
 
 (ert-deftest emagent-tools-test-write-diff-string ()
