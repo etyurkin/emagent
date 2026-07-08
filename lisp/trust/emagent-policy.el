@@ -36,17 +36,40 @@
                         reason))))
     (emagent-policy--verdict-from-merge verdict)))
 
+(defun emagent-policy--verdict-rank (verdict)
+  "Return precedence rank for a permission VERDICT (:deny > :confirm > nil)."
+  (pcase (car-safe verdict) (:deny 2) (:confirm 1) (_ 0)))
+
+(defun emagent-policy--merge-plist-verdict (a b)
+  "Return the higher-precedence permission verdict between A and B."
+  (if (>= (emagent-policy--verdict-rank a) (emagent-policy--verdict-rank b))
+      (or a b)
+    b))
+
+(defun emagent-policy--check-one-shell (command)
+  "Check a single shell COMMAND string against shell and embedded-python rules."
+  (or (emagent-policy--check-rule-list
+       (emagent-policy--all-shell-rules)
+       (lambda (rule)
+         (and (emagent-policy-match--shell-rule-p rule command)
+              (plist-get rule :reason))))
+      (when-let ((code (emagent-policy-match--python-c-code command)))
+        (emagent-policy-check-python code))))
+
 (defun emagent-policy-check-shell (command)
   "Check shell COMMAND against shell and embedded-python rules.
-Return nil when ok, (:deny . REASON), or (:confirm . REASON)."
+Return nil when ok, (:deny . REASON), or (:confirm . REASON).
+
+Checks the whole command (so rules that span a pipeline, e.g. `curl | sh',
+still fire) AND each decomposed leaf command (so a dangerous argv hidden behind
+`&&'/`;'/`|' or inside `sh -c'/`sudo' is caught), keeping the worst verdict."
   (when (and (stringp command) (not (string-empty-p (string-trim command))))
-    (or (emagent-policy--check-rule-list
-         (emagent-policy--all-shell-rules)
-         (lambda (rule)
-           (and (emagent-policy-match--shell-rule-p rule command)
-                (plist-get rule :reason))))
-        (when-let ((code (emagent-policy-match--python-c-code command)))
-          (emagent-policy-check-python code)))))
+    (let ((worst (emagent-policy--check-one-shell command)))
+      (dolist (leaf (emagent-policy-shell-commands command))
+        (unless (string= leaf command)
+          (setq worst (emagent-policy--merge-plist-verdict
+                       worst (emagent-policy--check-one-shell leaf)))))
+      worst)))
 
 (defun emagent-policy-check-python (code)
   "Check python CODE against `emagent-policy-python-rules'.

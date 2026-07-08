@@ -11,17 +11,67 @@
 
 (require 'cl-lib)
 
-(declare-function split-string-shell-argument "subr")
-
 (defun emagent-policy-match--words (command)
-  "Split shell COMMAND into words, respecting simple quotes."
+  "Split shell COMMAND into words, unquoting shell single/double quotes.
+Falls back to a whitespace split when COMMAND cannot be shell-parsed."
   (condition-case nil
-      (split-string-shell-argument (string-trim command))
+      (split-string-shell-command (string-trim command))
     (error (split-string (string-trim command) "[[:space:]]+" t))))
 
 (defun emagent-policy-match--strip-quoted (command)
   "Remove single- and double-quoted spans from COMMAND."
   (replace-regexp-in-string "[\"'][^\"']*[\"']" "" command))
+
+(defun emagent-policy-match--split-commands (command)
+  "Split COMMAND into segments at top-level `;' `|' `&' and newlines.
+
+Separators inside single- or double-quoted spans are not split points, so a
+dangerous argv hidden behind `&&'/`;'/`|' (which the whole-command matchers
+miss) surfaces as its own segment.  `&&' and `||' yield an empty middle segment
+that is dropped."
+  (let ((segments nil) (current nil) (quote nil))
+    (dolist (c (append command nil))
+      (cond
+       (quote (push c current) (when (eq c quote) (setq quote nil)))
+       ((memq c '(?\" ?\')) (setq quote c) (push c current))
+       ((memq c '(?\; ?| ?& ?\n))
+        (push (apply #'string (nreverse current)) segments)
+        (setq current nil))
+       (t (push c current))))
+    (push (apply #'string (nreverse current)) segments)
+    (cl-remove-if #'string-empty-p
+                  (mapcar #'string-trim (nreverse segments)))))
+
+(defconst emagent-policy-match--shell-wrappers
+  '("sh" "bash" "zsh" "dash" "ksh")
+  "Shells whose `-c CMD' argument carries an inner command to inspect.")
+
+(defun emagent-policy-match--inner-c-command (words)
+  "Return the argument following `-c' in WORDS, or nil."
+  (car (cdr (member "-c" words))))
+
+(defun emagent-policy-shell-commands (command &optional depth)
+  "Return the list of leaf shell commands within COMMAND.
+
+Splits on top-level separators and unwraps `sh -c'/`bash -c' and a leading
+`sudo'/`doas', recursively, so each dangerous argv is inspected on its own
+regardless of how it was composed.  DEPTH bounds recursion."
+  (setq depth (or depth 0))
+  (if (> depth 6)
+      (list (string-trim command))
+    (cl-loop for segment in (emagent-policy-match--split-commands command)
+             for words = (emagent-policy-match--words segment)
+             for head = (car words)
+             append
+             (cond
+              ((and (member head emagent-policy-match--shell-wrappers)
+                    (emagent-policy-match--inner-c-command words))
+               (emagent-policy-shell-commands
+                (emagent-policy-match--inner-c-command words) (1+ depth)))
+              ((member head '("sudo" "doas"))
+               (emagent-policy-shell-commands
+                (mapconcat #'identity (cdr words) " ") (1+ depth)))
+              (t (list segment))))))
 
 (defun emagent-policy-match--argv-index-p (index expected words)
   "Return non-nil when the INDEXth word (1-based) equals EXPECTED."
