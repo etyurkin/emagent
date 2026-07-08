@@ -313,7 +313,9 @@ When STOP-NOTICE is non-nil, append it to any partial assistant text
 before closing the response block.  Returns non-nil when a prompt was
 finalized."
   (let ((state emagent-acp--session))
-    (unless (or (emagent-acp-state-busy state) (emagent-acp-state-prompt-finishing state))
+    (unless (and state
+                 (or (emagent-acp-state-busy state)
+                     (emagent-acp-state-prompt-finishing state)))
       (cl-return-from emagent-acp--finalize-in-flight-prompt nil))
     (emagent-acp--clear-prompt-watchdog state)
     (emagent-acp--cancel-prompt-render state)

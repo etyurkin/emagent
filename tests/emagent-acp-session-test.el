@@ -111,6 +111,10 @@ request is cancelled rather than escalated to a permanent agent-side grant."
   "Finalizing with nothing in flight returns nil, not a `no-catch' error: the
 function must be a cl-defun for its cl-return-from to have an enclosing block."
   (let ((emagent-acp--session (emagent-test--make-acp-state)))
+    (should (null (emagent-acp--finalize-in-flight-prompt))))
+  ;; And with NO session at all (buffer never connected): must not signal
+  ;; wrong-type-argument on a struct accessor of nil.
+  (let ((emagent-acp--session nil))
     (should (null (emagent-acp--finalize-in-flight-prompt)))))
 
 (ert-deftest emagent-acp-session-test-turn-phase ()
