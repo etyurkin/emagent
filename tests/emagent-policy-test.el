@@ -110,6 +110,24 @@
                      (emagent-acp--permission-validate tool-call)
                      "execute:rm" nil))))))
 
+(ert-deftest emagent-policy-test-safe-mode-only-read-write ()
+  "`safe' auto-approves read/write kinds but never eval or MCP `other' tools."
+  (emagent-test--with-mocks
+      (((symbol-function 'emagent-permissions-global-fingerprints) (lambda () nil))
+       ((symbol-function 'emagent-permissions-session-fingerprints) (lambda (_) nil))
+       ((symbol-function 'emagent-permissions-project-fingerprints) (lambda (_) nil)))
+    (let ((state (emagent-test--make-acp-state))
+          (emagent-acp-auto-approve-permissions 'safe))
+      ;; read is auto-approved
+      (should (emagent-acp--permission-gate-auto-approve-p
+               state '((kind . "read") (title . "read_file")) nil "read:/x" nil))
+      ;; eval is not
+      (should-not (emagent-acp--permission-gate-auto-approve-p
+                   state '((kind . "eval") (title . "eval")) nil "eval:abc" nil))
+      ;; an unknown/MCP "other" tool is not
+      (should-not (emagent-acp--permission-gate-auto-approve-p
+                   state '((title . "mcp__server__do")) nil "other:mcp__server__do" nil)))))
+
 (ert-deftest emagent-policy-test-stored-grant-does-not-silence-confirm ()
   "A stored fingerprint grant must not auto-approve a policy :confirm command:
 an `execute:rm' grant (e.g. from `rm foo.log') cannot auto-run `rm -rf /'."
