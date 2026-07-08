@@ -93,11 +93,22 @@
        (let ((client (map-elt emagent-acp--session :client)))
          (and client (emagent-acp--client-started-p client)))))
 
+(defun emagent-acp--cancel-state-timers (state)
+  "Cancel every timer stored in STATE and clear its slot.
+Prevents a reconnect or shutdown from leaving repeating/pending timers
+(RSS poll, watchdog, finish, permission drain) pointed at dead state."
+  (dolist (key '(:agent-rss-timer :prompt-watchdog-timer
+                 :finish-timer :permission-drain-timer))
+    (when-let ((timer (map-elt state key)))
+      (when (timerp timer) (cancel-timer timer))
+      (map-put! state key nil))))
+
 (defun emagent-acp--teardown-stale-session ()
   "Shut down a dead or incomplete ACP session without clearing persisted ids."
-  (when-let* ((state emagent-acp--session)
-              (client (map-elt state :client)))
-    (ignore-errors (emagent-acp-shutdown :client client)))
+  (when-let* ((state emagent-acp--session))
+    (emagent-acp--cancel-state-timers state)
+    (when-let ((client (map-elt state :client)))
+      (ignore-errors (emagent-acp-shutdown :client client))))
   (setq emagent-acp--session nil))
 
 (cl-defun emagent-acp--make-state (&key client chat-buffer on-reveal)

@@ -59,7 +59,13 @@
   (map-put! state :prompt-watchdog-timer nil))
 
 (defun emagent-acp--schedule-prompt-watchdog (state)
-  "Abort a prompt that stays busy without ACP progress."
+  "Abort a prompt that stays busy without ACP progress.
+
+Cancel any existing watchdog first: this is re-invoked on every displayed tool
+call and permission answer, and without the cancel each call would leak a live
+timer (token-guarded no-ops that still pin STATE for the whole timeout)."
+  (when-let ((old (map-elt state :prompt-watchdog-timer)))
+    (cancel-timer old))
   (let* ((token (cl-gensym "emagent-prompt-watchdog"))
          (timer (run-with-timer
      emagent-acp-watchdog-timeout nil
