@@ -26,8 +26,11 @@
 (defun emagent-acp--tool-call-emagent-tool-p (update)
   "Return non-nil when UPDATE names a tool from emagent's own MCP server.
 
-Such tools run inside Emacs and never reach the ACP permission path, so their
-Thinking lines are tagged (Emacs) instead of carrying an (Allow) decision.
+Such tools run inside Emacs; once one's permission is granted (it is
+running or finished) without a recorded ACP permission decision, its line
+is tagged (Allow: Emacs) instead of the inferred (Allow: Agent) used for
+agent-native tools.  A pending call stays untagged — it may still be
+awaiting a permission prompt.
 
 Detection relies on the emagent MCP namespace (e.g. `mcp_emagent_read_file'):
 an explicit `emagent-tool' flag set by provider enrichment, or the word
@@ -92,14 +95,17 @@ because generic names like `grep' collide with agent-native tools."
          (decision (and id (when-let ((d (map-elt state :tool-call-decisions)))
                              (gethash id d))))
          (completed (member status '("completed" "failed")))
+         ;; A running or finished call already had its permission granted;
+         ;; a pending call may still be awaiting a permission prompt.
+         (granted (or completed (equal status "in_progress")))
          (display (cond
                    ((or (null label) (string-empty-p label)) label)
                    (decision (emagent-acp--permission-decision-label label decision))
-                   ((emagent-acp--tool-call-emagent-tool-p merged)
+                   ((and granted (emagent-acp--tool-call-emagent-tool-p merged))
                     (format "%s (Allow: Emacs)" label))
-                   ;; Tool completed without ACP permission: the agent's own
+                   ;; Tool runs without ACP permission: the agent's own
                    ;; allow-list permitted it directly — infer the decision.
-                   (completed (format "%s (Allow: Agent)" label))
+                   (granted (format "%s (Allow: Agent)" label))
                    (t label)))
          (label-changed (and display (not (string-empty-p display))
                              (or (null prev) (not (string= prev display))))))
