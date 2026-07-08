@@ -21,8 +21,6 @@
 (require 'emagent-session)
 
 (declare-function emagent-chat--session-directory "emagent-chat-header")
-(declare-function emagent-chat-set-session-id "emagent-chat")
-(declare-function emagent-chat-set-model "emagent-chat")
 (declare-function emagent-acp--permission-pending-p "emagent-acp")
 (declare-function emagent-acp--maybe-complete-deferred-prompt "emagent-acp")
 (declare-function emagent-acp--drain-permission-queue "emagent-acp")
@@ -103,7 +101,7 @@ buffer signals \"Selecting deleted buffer\"."
     (with-current-buffer buf
       (let ((was-modified (buffer-modified-p)))
         (unwind-protect
-            (emagent-chat-set-session-id session-id)
+            (emagent-session-set-id session-id)
           (set-buffer-modified-p was-modified))))))
 
 (defun emagent-acp--saved-session-id (state)
@@ -121,8 +119,9 @@ buffer signals \"Selecting deleted buffer\"."
     (with-current-buffer buf
       (let ((was-modified (buffer-modified-p)))
         (unwind-protect
-            (emagent-chat-set-model model-id)
+            (emagent-session-set-model model-id)
           (set-buffer-modified-p was-modified)))))
+  ;; The status push from --refresh-mode-line re-renders the model label.
   (emagent-acp--refresh-mode-line state))
 
 (defun emagent-acp--maybe-recover-stall (state)

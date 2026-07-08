@@ -13,6 +13,7 @@
 ;; Defined in emagent-acp-prompt.el, which declares this file's functions the
 ;; same way; declaring here avoids a require cycle between the two modules.
 (declare-function emagent-acp--cancel-outstanding-permissions "emagent-acp-request")
+(declare-function emagent-acp--refresh-mode-line "emagent-acp-usage")
 (declare-function emagent-acp--agent-error-only-response-p "emagent-acp-prompt")
 (declare-function emagent-acp--turn-hit-transient-error-p "emagent-acp-prompt")
 (declare-function emagent-acp--turn-did-no-work-p "emagent-acp-prompt")
@@ -240,8 +241,6 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
   (map-put! state :busy t)
   (map-put! state :prompt-generation (1+ (or (map-elt state :prompt-generation) 0)))
   (map-put! state :continue-attempts 0)
-  (when (fboundp 'emagent-chat--spinner-start)
-    (emagent-chat--spinner-start))
   (map-put! state :assistant-text "")
   (map-put! state :thought-text "")
   (map-put! state :prompt-finalized nil)
@@ -260,7 +259,9 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
   (map-put! state :deferred-complete-response nil)
   (emagent-acp--cancel-prompt-render state)
   (emagent-acp--clear-thought-buffer state)
-  (emagent-acp--schedule-prompt-watchdog state))
+  (emagent-acp--schedule-prompt-watchdog state)
+  ;; Push the now-busy status; the mode line starts the spinner from it.
+  (emagent-acp--refresh-mode-line state))
 
 (cl-defun emagent-acp-send-prompt (user-text)
   "Send USER-TEXT to the current buffer's ACP session."
