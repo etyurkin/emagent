@@ -107,6 +107,12 @@ request is cancelled rather than escalated to a permanent agent-side grant."
                    `((kind . "execute") (arguments . ,args)))))
       (should (eq (car result) :confirm)))))
 
+(ert-deftest emagent-acp-session-test-finalize-no-prompt-returns-nil ()
+  "Finalizing with nothing in flight returns nil, not a `no-catch' error: the
+function must be a cl-defun for its cl-return-from to have an enclosing block."
+  (let ((emagent-acp--session (emagent-test--make-acp-state)))
+    (should (null (emagent-acp--finalize-in-flight-prompt)))))
+
 (ert-deftest emagent-acp-session-test-turn-phase ()
   "The turn phase derives idle/streaming/finalizing/done from the turn flags."
   (let ((state (emagent-test--make-acp-state)))
