@@ -20,6 +20,31 @@
     (should (string= (emagent-tools--root-directory "src/foo.el")
                      (expand-file-name "src/foo.el" "/tmp/project")))))
 
+(ert-deftest emagent-tools-test-boundary-rejects-symlink-escape ()
+  "A symlink inside the root pointing outside must not pass the boundary."
+  (let* ((root (file-truename (make-temp-file "emagent-root-" t)))
+         (outside (file-truename (make-temp-file "emagent-outside-" t)))
+         (link (expand-file-name "escape" root))
+         (emagent-tools--root-boundary root))
+    (unwind-protect
+        (progn
+          (make-symbolic-link outside link)
+          (should (emagent-tools--within-boundary-p
+                   (expand-file-name "real.el" root)))
+          (should-not (emagent-tools--within-boundary-p
+                       (expand-file-name "x.el" link))))
+      (ignore-errors (delete-file link))
+      (ignore-errors (delete-directory root t))
+      (ignore-errors (delete-directory outside t)))))
+
+(ert-deftest emagent-tools-test-protected-truename-p ()
+  "Protected macOS trees are detected on the resolved truename."
+  (should (emagent-tools--protected-truename-p
+           (expand-file-name "~/Library/Containers/com.example/x")))
+  (should (emagent-tools--protected-truename-p
+           (expand-file-name "~/Library/Mobile Documents/foo")))
+  (should-not (emagent-tools--protected-truename-p "/tmp/x")))
+
 ;;;; Glob conversion
 
 (ert-deftest emagent-tools-test-glob-to-regexp ()
