@@ -46,9 +46,12 @@ function, not a bound variable, on Emacs 29+)."
          (emagent--register-load-path root)
          (emagent--register-elpaca-recipe)))))
 
-(defun emagent--mode-p ()
-  "Return non-nil when `emagent-mode' is active in the current buffer."
-  (and (boundp 'emagent-mode) emagent-mode))
+(defun emagent--mode-p (_symbol buffer)
+  "Completion predicate: include the command only in `emagent-mode' buffers.
+Called by `command-completion-default-include-p' with the command SYMBOL and the
+target BUFFER (hence the two-argument signature)."
+  (provided-mode-derived-p
+   (buffer-local-value 'major-mode buffer) 'emagent-mode))
 
 (eval-and-compile (emagent--bootstrap-load-path))
 (emagent--bootstrap-load-path)
@@ -615,8 +618,6 @@ leaves the session files in the old location and causes session/load to fail."
 (dolist (sym '(emagent-trust-workspace
                emagent-trust-claude-reconnect
                emagent-set-project-directory
-               emagent-cursor-start
-               emagent-claude-start
                emagent-chat-send
                emagent-chat-send-or-babel
                emagent-chat-beginning-of-line
@@ -630,15 +631,23 @@ leaves the session files in the old location and causes session/load to fail."
                emagent-chat-attach-error-context
                emagent-chat-attach-files
                emagent-chat-interrupt
+               emagent-acp-interrupt
                emagent-chat-new-prompt
                emagent-chat-quit
                emagent-chat-tab
+               emagent-chat-history-next
+               emagent-chat-history-next-or-next-line
+               emagent-chat-history-previous
+               emagent-chat-history-previous-or-previous-line
+               emagent-chat-permission-prompt
                emagent-dispatch
                emagent-btw
+               emagent-reset-permissions
                emagent-log-view
                emagent-log-refresh
                emagent-set-model
                emagent-tool-eval
+               emagent-tools--buttons-prompt
                emagent-tool-org-move-subtree-to-parent
                emagent-embark-copy-src-block
                emagent-embark-insert-src-block))
