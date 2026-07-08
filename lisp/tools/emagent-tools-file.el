@@ -113,14 +113,25 @@ Each call is recorded as a single undoable change in the target buffer."
             (replace-buffer-contents content-buffer 1.0)
             (undo-boundary))
           (basic-save-buffer))))
-    (pcase emagent-tools-show-written-buffer
-      ('magit-diff
-       (with-current-buffer buffer
-         (if (and (fboundp 'magit-diff-buffer-file) (magit-toplevel))
-             (magit-diff-buffer-file)
-           (display-buffer buffer))))
-      ((pred identity)
-       (display-buffer buffer)))
+    ;; Showing the result is best-effort: the file is already saved, so a
+    ;; display failure must not surface as a write_file tool error.
+    (condition-case-unless-debug err
+        (pcase emagent-tools-show-written-buffer
+          ('magit-diff
+           (with-current-buffer buffer
+             ;; `magit-diff-buffer-file' is autoloaded, so `fboundp' alone
+             ;; doesn't prove magit is loaded; `magit-toplevel' has no
+             ;; autoload cookie and would be void.
+             (if (and (fboundp 'magit-diff-buffer-file)
+                      (fboundp 'magit-toplevel)
+                      (magit-toplevel))
+                 (magit-diff-buffer-file)
+               (display-buffer buffer))))
+          ((pred identity)
+           (display-buffer buffer)))
+      (error
+       (emagent-log "write_file: showing %s failed: %s"
+                    resolved (error-message-string err))))
     resolved))
 
 (defun emagent-tools--unified-diff-async (callback old new label)
