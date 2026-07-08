@@ -127,15 +127,22 @@
             (setq i (1+ i))))))
     (mapconcat #'identity (nreverse parts) "\n")))
 
+(defun emagent-chat--convert-markdown-headings (text)
+  "Convert markdown ### / ## headings in TEXT to org headings.
+
+A prose-only transform: it is applied outside src blocks so a fenced
+\"## Title\" is left as literal code."
+  (replace-regexp-in-string
+   "^## \\(.*\\)$" "** \\1"
+   (replace-regexp-in-string "^###+ \\(.*\\)$" "* \\1" text)))
+
 (defun emagent-chat--normalize-response-spacing (text)
-  "Normalize spacing and leftover markdown headings in agent responses."
+  "Normalize spacing around blocks and tables in agent responses.
+
+Heading conversion lives in `emagent-chat--convert-markdown-headings' (applied
+outside src blocks); this handles whole-text spacing that must see the block and
+table markers."
   (let ((result (replace-regexp-in-string "\\`[\n\r]+" "" text)))
-    (setq result
-          (replace-regexp-in-string
-           "^###+ \\(.*\\)$" "* \\1" result))
-    (setq result
-          (replace-regexp-in-string
-           "^## \\(.*\\)$" "** \\1" result))
     (setq result
           (replace-regexp-in-string
            "\\(\n[ \t]*\\)+#\\+END_SRC"
@@ -233,15 +240,39 @@ held across a streaming boundary)."
                                     (emagent-chat--escape-reasoning-line line)))
                  "\n"))))
 
+(defconst emagent-chat--src-block-re
+  "^[ \t]*#\\+BEGIN_SRC\\(?:.*\n\\)*?[ \t]*#\\+END_SRC[ \t]*$"
+  "Match a complete org src block from its BEGIN_SRC line to its END_SRC line.")
+
+(defun emagent-chat--map-outside-src-blocks (fn text)
+  "Return TEXT with FN applied to every span outside org src blocks.
+
+Src blocks (`#+BEGIN_SRC'…`#+END_SRC') are emitted verbatim, so markdown
+transforms run over prose only and never rewrite code-block interiors (a fenced
+\"## Title\" or backtick span must survive untouched)."
+  (let ((case-fold-search t) (pos 0) (len (length text)) (out nil))
+    (while (and (< pos len)
+                (string-match emagent-chat--src-block-re text pos))
+      (let ((mb (match-beginning 0)) (me (match-end 0)))
+        (push (funcall fn (substring text pos mb)) out)
+        (push (substring text mb me) out)
+        (setq pos me)))
+    (push (funcall fn (substring text pos)) out)
+    (apply #'concat (nreverse out))))
+
 (defun emagent-chat--demote-response-headings (text)
   "Demote every Org headline in TEXT to level >= 3.
 
 The assistant answer is rendered under the level-2 `** Response' subsection, so
-its own headings must nest beneath it rather than starting new turns."
-  (replace-regexp-in-string
-   "^\\*+ "
-   (lambda (m)
-     (if (< (1- (length m)) 3) "*** " m))
+its own headings must nest beneath it rather than starting new turns.  Headings
+inside src blocks are left alone."
+  (emagent-chat--map-outside-src-blocks
+   (lambda (s)
+     (replace-regexp-in-string
+      "^\\*+ "
+      (lambda (m)
+        (if (< (1- (length m)) 3) "*** " m))
+      s))
    text))
 
 (defun emagent-chat--convert-code-fences (text)
@@ -327,19 +358,27 @@ its own headings must nest beneath it rather than starting new turns."
       text)))
 
 (defun emagent-chat--convert-agent-markup (text)
-  "Convert leftover markdown markup in agent responses to org."
-  (emagent-chat--close-unclosed-org-src
-   (emagent-chat--normalize-response-spacing
-    (emagent-chat--convert-markdown-tables
-     (emagent-chat--normalize-elisp-src-tags
-      ;; Convert single-backtick inline code `foo` → =foo= after triple-backtick
-      ;; fences are already converted to #+BEGIN_SRC blocks, so this only affects
-      ;; inline code spans that are not inside any block.
-      (replace-regexp-in-string
-       "`\\([^`\n]+\\)`" "=\\1="
-       (emagent-chat--convert-code-fences
-        (emagent-chat--fix-org-src-citations
-         (emagent-chat--unwrap-outer-org-src text)))))))))
+  "Convert leftover markdown markup in agent responses to org.
+
+Code fences are converted to src blocks first; the remaining prose transforms
+(inline backticks, tables, heading/spacing normalization) then run only outside
+those blocks, so a fenced backtick span, `## heading', or table row is never
+rewritten inside code."
+  (let* ((fenced (emagent-chat--normalize-elisp-src-tags
+                  (emagent-chat--convert-code-fences
+                   (emagent-chat--fix-org-src-citations
+                    (emagent-chat--unwrap-outer-org-src text)))))
+         ;; Prose-corrupting transforms (inline code, headings, tables) run only
+         ;; outside src blocks so code interiors survive verbatim.
+         (prose (emagent-chat--map-outside-src-blocks
+                 (lambda (s)
+                   (emagent-chat--convert-markdown-tables
+                    (emagent-chat--convert-markdown-headings
+                     (replace-regexp-in-string "`\\([^`\n]+\\)`" "=\\1=" s))))
+                 fenced)))
+    ;; Whole-text spacing normalization needs to see the block/table markers.
+    (emagent-chat--close-unclosed-org-src
+     (emagent-chat--normalize-response-spacing prose))))
 
 (defvar-local emagent-chat--font-lock-deferred-p nil
   "When non-nil, defer org font-lock until the emagent buffer is active.")
