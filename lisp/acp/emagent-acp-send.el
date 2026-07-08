@@ -27,7 +27,7 @@
   "Attach TEXT to the next prompt in the current buffer."
   (let ((state (emagent-acp--session)))
     (setf (emagent-acp-state-extra-context state)
-              (append (or (emagent-acp-state-extra-context state) nil) (list text)))))
+              (append (emagent-acp-state-extra-context state) (list text)))))
 
 (defun emagent-acp--image-media-type (ext)
   "Return the MIME type string for image extension EXT, or nil if not an image."
