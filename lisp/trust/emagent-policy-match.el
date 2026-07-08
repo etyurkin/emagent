@@ -29,9 +29,13 @@ Separators inside single- or double-quoted spans are not split points, so a
 dangerous argv hidden behind `&&'/`;'/`|' (which the whole-command matchers
 miss) surfaces as its own segment.  `&&' and `||' yield an empty middle segment
 that is dropped."
-  (let ((segments nil) (current nil) (quote nil))
+  (let ((segments nil) (current nil) (quote nil) (escape nil))
     (dolist (c (append command nil))
       (cond
+       ;; A backslash-escaped char is literal — notably `\"' does NOT open a
+       ;; quote, so it cannot swallow a following top-level separator.
+       (escape (push c current) (setq escape nil))
+       ((and (eq c ?\\) (not (eq quote ?\'))) (push c current) (setq escape t))
        (quote (push c current) (when (eq c quote) (setq quote nil)))
        ((memq c '(?\" ?\')) (setq quote c) (push c current))
        ((memq c '(?\; ?| ?& ?\n))
@@ -46,9 +50,21 @@ that is dropped."
   '("sh" "bash" "zsh" "dash" "ksh")
   "Shells whose `-c CMD' argument carries an inner command to inspect.")
 
+(defconst emagent-policy-match--prefix-wrappers
+  '("sudo" "doas" "env" "nice" "nohup" "setsid" "stdbuf" "command" "builtin")
+  "Wrappers that run the remaining words as a command; the wrapper word (and, for
+`env', leading VAR=VALUE assignments) is stripped and the rest re-inspected.")
+
 (defun emagent-policy-match--inner-c-command (words)
   "Return the argument following `-c' in WORDS, or nil."
   (car (cdr (member "-c" words))))
+
+(defun emagent-policy-match--strip-leading-assignments (words)
+  "Drop leading VAR=VALUE assignments from WORDS (e.g. `FOO=1 rm' → `rm')."
+  (while (and words
+              (string-match-p "\\`[A-Za-z_][A-Za-z0-9_]*=" (car words)))
+    (setq words (cdr words)))
+  words)
 
 (defun emagent-policy-shell-commands (command &optional depth)
   "Return the list of leaf shell commands within COMMAND.
@@ -60,7 +76,8 @@ regardless of how it was composed.  DEPTH bounds recursion."
   (if (> depth 6)
       (list (string-trim command))
     (cl-loop for segment in (emagent-policy-match--split-commands command)
-             for words = (emagent-policy-match--words segment)
+             for words = (emagent-policy-match--strip-leading-assignments
+                          (emagent-policy-match--words segment))
              for head = (car words)
              append
              (cond
@@ -68,10 +85,14 @@ regardless of how it was composed.  DEPTH bounds recursion."
                     (emagent-policy-match--inner-c-command words))
                (emagent-policy-shell-commands
                 (emagent-policy-match--inner-c-command words) (1+ depth)))
-              ((member head '("sudo" "doas"))
+              ((member head emagent-policy-match--prefix-wrappers)
                (emagent-policy-shell-commands
                 (mapconcat #'identity (cdr words) " ") (1+ depth)))
-              (t (list segment))))))
+              ;; No stripping applied → return the original segment (keeps
+              ;; quotes/spacing for the whole-command matchers upstream).
+              ((equal words (emagent-policy-match--words segment))
+               (list segment))
+              (t (list (mapconcat #'identity words " ")))))))
 
 (defun emagent-policy-match--argv-index-p (index expected words)
   "Return non-nil when the INDEXth word (1-based) equals EXPECTED."

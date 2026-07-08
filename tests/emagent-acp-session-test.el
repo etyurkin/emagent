@@ -89,6 +89,18 @@ request is cancelled rather than escalated to a permanent agent-side grant."
   ;; Leading short flags are skipped when finding the sub-verb.
   (should (string= "execute:npm:install"
                    (emagent-test--exec-fingerprint "npm install left-pad")))
+  ;; A global flag WITH A VALUE (`git -C DIR', `kubectl -n NS') must not make
+  ;; the value masquerade as the subcommand — else push/status/delete/get
+  ;; collide and a grant for one auto-approves the others.
+  (should (string= "execute:git:push"
+                   (emagent-test--exec-fingerprint "git -C /tmp push --force")))
+  (should-not (string= (emagent-test--exec-fingerprint "git -C /tmp status")
+                       (emagent-test--exec-fingerprint "git -C /tmp push")))
+  (should-not (string= (emagent-test--exec-fingerprint "kubectl -n prod get")
+                       (emagent-test--exec-fingerprint "kubectl -n prod delete")))
+  ;; A value-less long flag is handled: the subcommand still resolves.
+  (should (string= "execute:git:status"
+                   (emagent-test--exec-fingerprint "git --no-pager status")))
   ;; A grant for `git status' does not match `git push'.
   (should-not (string= (emagent-test--exec-fingerprint "git status")
                        (emagent-test--exec-fingerprint "git push"))))

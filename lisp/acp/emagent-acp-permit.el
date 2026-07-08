@@ -156,19 +156,34 @@ so the request is cancelled (fail-closed) rather than escalated to allow_always.
 For these, an execute fingerprint includes the sub-verb so a grant for e.g.
 `git status' does not also auto-approve `git push --force'.")
 
+(defun emagent-acp--execute-subverb (args)
+  "Return the sub-verb in ARGS (a command's arguments), or nil.
+
+Skips flags and the value a single-dash short flag consumes, so a global option
+with a value (`git -C DIR', `kubectl -n NS', `docker -H HOST') does not make its
+value masquerade as the subcommand.  Best-effort: a `-X' short flag is assumed
+to take the next word as its value; a `--long' flag is assumed self-contained."
+  (let ((consume nil) result)
+    (cl-loop for w in args do
+             (cond
+              ((string-prefix-p "--" w) (setq consume nil))
+              ((string-prefix-p "-" w) (setq consume t))
+              (consume (setq consume nil))
+              (t (setq result w) (cl-return))))
+    result))
+
 (defun emagent-acp--execute-fingerprint (command)
   "Return the execute fingerprint for shell COMMAND.
 
-Keyed on the program name, plus the first sub-verb for
-`emagent-acp--subcommand-programs' (the first non-flag argument), so a grant is
-scoped to the actual operation rather than every invocation of the program."
+Keyed on the program name, plus the sub-verb for
+`emagent-acp--subcommand-programs', so a grant is scoped to the actual operation
+rather than every invocation of the program.  The sub-verb skips leading global
+flags and their values (see `emagent-acp--execute-subverb')."
   (let* ((words (split-string (string-trim command) "[[:space:]]+" t))
          (program (car words)))
-    (if (member program emagent-acp--subcommand-programs)
-        (if-let ((verb (seq-find (lambda (w) (not (string-prefix-p "-" w)))
-                                 (cdr words))))
-            (format "execute:%s:%s" program verb)
-          (format "execute:%s" program))
+    (if-let (((member program emagent-acp--subcommand-programs))
+             (verb (emagent-acp--execute-subverb (cdr words))))
+        (format "execute:%s:%s" program verb)
       (format "execute:%s" program))))
 
 (defun emagent-acp--permission-fingerprint (tool-call)
