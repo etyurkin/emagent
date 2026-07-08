@@ -16,6 +16,7 @@
 
 (require 'cl-lib)
 (require 'map)
+(require 'emagent-model)
 
 (declare-function project-root "project")
 
@@ -69,49 +70,13 @@
   "Return the #+EMAGENT_MODEL value at the top of the buffer."
   (emagent-chat--read-top-property "EMAGENT_MODEL"))
 
-(defun emagent-chat--canonical-model-id (model)
-  "Return MODEL id in the form Cursor ACP expects (keep bracket suffixes)."
-  (when model
-    (if (member model '("auto" "default"))
-        "default[]"
-      model)))
-
-(defun emagent-chat--normalize-model-id (model)
-  "Return a short user-facing model label for display (mode line, prompts).
-Strips key=value annotations (e.g. [thinking=true]) and empty brackets ([]).
-Maps Cursor default[] to auto."
-  (when model
-    (let ((stripped (replace-regexp-in-string
-                     "\\[\\([^]]*=[^]]*\\)?\\]" "" model)))
-      (if (member stripped '("default" "auto")) "auto" stripped))))
-
-(defun emagent-chat--model-choice-label-parts (id &optional name)
-  "Return (PRIMARY . SUFFIX) for model ID.
-PRIMARY is the base id without bracket annotations; SUFFIX is brackets
-plus an optional parenthetical alias when NAME differs from the normalized id."
-  (when id
-    (let* ((bracket (and (string-match "\\[" id) (match-beginning 0)))
-           (base (if bracket (substring id 0 bracket) id))
-           (brackets (if bracket (substring id bracket) ""))
-           (short-name (and name
-                            (not (string= name (emagent-chat--normalize-model-id id)))
-                            name)))
-      (cons base (concat brackets (if short-name (format " (%s)" short-name) ""))))))
-
-(defun emagent-chat--model-choice-label (id &optional name)
-  "Return a completing-read label for model ID, showing the full canonical id.
-When NAME differs from the normalized ID (e.g. Auto vs default[]), append it."
-  (let ((parts (emagent-chat--model-choice-label-parts id name)))
-    (when parts (concat (car parts) (cdr parts)))))
-
-(defun emagent-chat--model-choice-label-display (id &optional name)
-  "Like `emagent-chat--model-choice-label', with theme faces for model and details."
-  (let ((parts (emagent-chat--model-choice-label-parts id name)))
-    (when parts
-      (concat (propertize (car parts) 'face 'emagent-model-choice-model)
-              (if (string-empty-p (cdr parts))
-                  ""
-                (propertize (cdr parts) 'face 'emagent-model-choice-detail))))))
+;; Model-id helpers moved to the `emagent-model' leaf.  These aliases keep the
+;; historical `emagent-chat--*' names working for existing callers.
+(defalias 'emagent-chat--canonical-model-id #'emagent-model-canonical-id)
+(defalias 'emagent-chat--normalize-model-id #'emagent-model-normalize-id)
+(defalias 'emagent-chat--model-choice-label-parts #'emagent-model-choice-label-parts)
+(defalias 'emagent-chat--model-choice-label #'emagent-model-choice-label)
+(defalias 'emagent-chat--model-choice-label-display #'emagent-model-choice-label-display)
 
 (defun emagent-chat--read-session-property ()
   "Return the #+EMAGENT_SESSION value at the top of the buffer."
