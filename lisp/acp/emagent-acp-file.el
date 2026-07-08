@@ -21,6 +21,20 @@
 (declare-function emagent-acp--prepare-interactive-context "emagent-acp")
 (declare-function emagent-acp--notify-user "emagent-acp")
 (declare-function emagent-acp--chat-buffer "emagent-acp-usage")
+(declare-function emagent-chat-project-directory "emagent-chat")
+
+(defvar emagent-tools--root-boundary)
+(defvar emagent-tools--project-directory)
+
+(defun emagent-acp--fs-session-root (state)
+  "Return the project root ACP fs/* operations must stay within, or nil.
+
+Mirrors the boundary the MCP dispatcher binds for its tools; without it the
+fs/* handlers would resolve agent-supplied paths with no project confinement."
+  (when-let ((buf (emagent-acp--chat-buffer state)))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (ignore-errors (emagent-chat-project-directory))))))
 
 (defun emagent-acp--protected-fs-error (path)
   (emagent-acp-make-error
@@ -51,7 +65,10 @@
                       :request-id request-id
                       :error (emagent-acp--protected-fs-error path)))
         (condition-case err
-            (let* ((line (or (map-nested-elt emagent-acp-request '(params line)) 1))
+            (let* ((emagent-tools--root-boundary (emagent-acp--fs-session-root state))
+                   (emagent-tools--project-directory
+                    (or emagent-tools--root-boundary emagent-tools--project-directory))
+                   (line (or (map-nested-elt emagent-acp-request '(params line)) 1))
                    (limit (map-nested-elt emagent-acp-request '(params limit)))
                    (content (emagent-tools--read-file-content path line limit)))
               (emagent-acp-send-response
@@ -96,6 +113,9 @@
           (when emagent-acp-confirm-fs-writes
             (emagent-acp--prepare-interactive-context state))
           (condition-case err
+              (let* ((emagent-tools--root-boundary (emagent-acp--fs-session-root state))
+                     (emagent-tools--project-directory
+                      (or emagent-tools--root-boundary emagent-tools--project-directory)))
               (if (and emagent-acp-confirm-fs-writes
                        (not (emagent-tools--confirm-write
                              'emagent-tool-write-file resolved
@@ -115,7 +135,7 @@
                   (emagent-acp-send-response
                    :client client
                    :response (emagent-acp-make-fs-write-text-file-response
-                              :request-id request-id))))
+                              :request-id request-id)))))
             (error
              (emagent-acp-send-response
               :client client
