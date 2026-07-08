@@ -77,9 +77,12 @@
   "User-facing permission choices handled by emagent, not the external agent.")
 
 (defun emagent-acp--permission-acp-allow-id (options)
-  "Return a one-shot allow optionId from OPTIONS; never allow_always.
-When no one-shot option is available, falls back to allow_always as
-last resort so the permission can still be granted."
+  "Return a one-shot allow optionId from OPTIONS, or nil; never allow_always.
+
+emagent always answers the agent one-shot and remembers durable grants on its
+own side (~/.emagent), so a user's \"Allow once\" can never become a permanent
+agent-side whitelist.  If the agent offers no one-shot allow option, return nil
+so the request is cancelled (fail-closed) rather than escalated to allow_always."
   (or (map-elt (seq-find (lambda (opt)
                            (let ((id (downcase (or (map-elt opt 'optionId) ""))))
                              (and id (member id emagent-acp--permission-acp-allow-prefer))))
@@ -90,11 +93,10 @@ last resort so the permission can still be granted."
         (when (and fallback
                    (not (member (downcase fallback) '("allow_always" "allow-always"))))
           fallback))
-      ;; Last resort: use allow_always when no one-shot option exists.
-      (let ((always (emagent-acp--permission-option-always-id options)))
-        (when always
-          (emagent-log "permission: no one-shot allow option found, falling back to allow_always")
-          always))))
+      (progn
+        (when (emagent-acp--permission-option-always-id options)
+          (emagent-log "permission: agent offers only allow_always; refusing to escalate a one-shot grant, cancelling"))
+        nil)))
 
 (defun emagent-acp--permission-acp-deny-id (options)
   "Return a deny optionId from OPTIONS, or nil."
