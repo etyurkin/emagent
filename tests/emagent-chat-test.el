@@ -189,15 +189,35 @@ signal), so finalizing a response containing one does not crash."
      (puthash :busy t emagent-acp--session)
      (pop-to-buffer buffer)
      (with-current-buffer buffer
+       (emagent-test--sync-status)
        (let* ((parts (emagent-chat--mode-line-strings))
               (head (substring-no-properties (car parts))))
          (should (string-match-p "^Thinking " head))
          (should (string-match-p "●\\|○" head)))))))
 
+(ert-deftest emagent-chat-test-mode-line-renders-from-pushed-status ()
+  "The mode line renders purely from the pushed status snapshot, with no ACP
+session present (the UI no longer pulls from the ACP layer)."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (pop-to-buffer buffer)
+     (with-current-buffer buffer
+       (setq emagent-acp--session nil)
+       (emagent-chat-set-status '(:busy t))
+       (should (string-match-p "^Thinking " (car (emagent-chat--mode-line-strings))))
+       (emagent-chat-set-status '(:waiting-permission t :busy t))
+       (should (string-match-p "^emagent:Allow\\?"
+                               (car (emagent-chat--mode-line-strings))))
+       (should-not (emagent-chat--spinner-active-p))
+       (emagent-chat-set-status '(:ready t))
+       (should-not (string-match-p "Thinking"
+                                   (car (emagent-chat--mode-line-strings))))))))
+
 (ert-deftest emagent-chat-test-mode-line-allow-no-spinner ()
   (emagent-test--with-busy-session
    (lambda ()
      (puthash :permission-busy t emagent-acp--session)
+     (emagent-test--sync-status)
      (let* ((parts (emagent-chat--mode-line-strings))
             (head (substring-no-properties (car parts))))
        (should (string-match-p "^emagent:Allow\\?" head))
@@ -212,9 +232,11 @@ signal), so finalizing a response containing one does not crash."
      (puthash :ready t emagent-acp--session)
      (with-current-buffer buffer
        (pop-to-buffer buffer)
+       (emagent-test--sync-status)
        (emagent-chat--mode-line-recompute)
        (should (string-match-p "^Thinking " emagent-chat--mode-line-head))
        (puthash :busy nil emagent-acp--session)
+       (emagent-test--sync-status)
        (emagent-chat--refresh-mode-line)
        (should (string-match-p "Idle" emagent-chat--mode-line-head))))))
 
@@ -233,6 +255,7 @@ signal), so finalizing a response containing one does not crash."
          (should (string= "old" emagent-chat--mode-line-head)))
        (pop-to-buffer buffer)
        (with-current-buffer buffer
+         (emagent-test--sync-status)
          (emagent-chat--refresh-mode-line-on-focus)
          (should-not emagent-chat--mode-line-stale-p)
          (should (string-match-p "^Thinking" emagent-chat--mode-line-head)))))))
@@ -323,12 +346,15 @@ signal), so finalizing a response containing one does not crash."
            emagent-chat--spinner-start-time nil)
      (with-current-buffer buffer
        (pop-to-buffer buffer)
+       (emagent-test--sync-status)
        (emagent-chat--spinner-ensure-running)
        (should emagent-chat--spinner-timer)
        (puthash :permission-busy t emagent-acp--session)
+       (emagent-test--sync-status)
        (emagent-chat--spinner-refresh-idle)
        (should-not emagent-chat--spinner-timer)
        (puthash :permission-busy nil emagent-acp--session)
+       (emagent-test--sync-status)
        (emagent-chat--spinner-ensure-running)
        (should emagent-chat--spinner-timer)
        (emagent-chat--spinner-stop)))))
@@ -342,6 +368,7 @@ signal), so finalizing a response containing one does not crash."
      (with-temp-buffer
        (pop-to-buffer (current-buffer))
        (with-current-buffer buffer
+         (emagent-test--sync-status)
          (emagent-chat--mode-line-recompute)
          (should (string-match-p "^Thinking$" (substring-no-properties emagent-chat--mode-line-head)))
          (should-not (string-match-p "●\\|○" emagent-chat--mode-line-head))
@@ -374,6 +401,7 @@ signal), so finalizing a response containing one does not crash."
      (setq emagent-acp--session (make-hash-table :test 'eq))
      (puthash :busy t emagent-acp--session)
      (setq emagent-chat--spinner-timer nil)
+     (with-current-buffer buffer (emagent-test--sync-status))
      (let ((other (get-buffer-create "*emagent-other-window*")))
        (unwind-protect
            (progn
@@ -393,6 +421,7 @@ signal), so finalizing a response containing one does not crash."
      (setq emagent-acp--session (make-hash-table :test 'eq))
      (puthash :busy t emagent-acp--session)
      (with-current-buffer buffer
+       (emagent-test--sync-status)
        (setq emagent-chat--mode-line-head nil
              emagent-chat--mode-line-tail nil
              emagent-chat--mode-line-cache nil
