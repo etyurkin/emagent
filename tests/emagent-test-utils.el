@@ -34,11 +34,20 @@
               (list (cons "/tmp/proj"
                           (list (cons "hasTrustDialogAccepted" t)))))))
 
+(defun emagent-test--sync-status ()
+  "Push `emagent-acp--session' status into the current buffer's mode-line
+snapshot, mirroring the ACP layer's :cb-status push in production.  Call after
+setting up or mutating the session so the mode line reflects it."
+  (setq emagent-chat--status
+        (and emagent-acp--session
+             (emagent-acp--status-snapshot emagent-acp--session))))
+
 (defun emagent-test--with-busy-session (fn)
   "Run FN in a temp buffer with a busy ACP session."
   (with-temp-buffer
     (setq emagent-acp--session (make-hash-table :test 'eq))
     (puthash :busy t emagent-acp--session)
+    (emagent-test--sync-status)
     (funcall fn)))
 
 (defmacro emagent-test--with-mocks (bindings &rest body)

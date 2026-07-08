@@ -18,15 +18,6 @@
 
 (declare-function emagent-chat--open-response-p "emagent-chat")
 (declare-function emagent-chat-model-display "emagent-chat")
-(declare-function emagent-acp-busy-p "emagent-acp")
-(declare-function emagent-acp-waiting-permission-p "emagent-acp")
-(declare-function emagent-acp-ready-p "emagent-acp")
-(declare-function emagent-acp-current-tool "emagent-acp")
-(declare-function emagent-acp-current-tool-kind "emagent-acp")
-(declare-function emagent-acp-agent-rss "emagent-acp")
-(declare-function emagent-acp-prompt-finishing-p "emagent-acp")
-(declare-function emagent-acp-context-usage "emagent-acp")
-(declare-function emagent-acp-context-usage-unavailable-p "emagent-acp")
 (declare-function doom-modeline-set-modeline "ext:doom-modeline")
 
 ;;; -------------------------------------------------------------------------
@@ -173,9 +164,8 @@ When nil, the spinner inherits the mode-line height."
 
 (defun emagent-chat--spinner-active-p ()
   "Return non-nil when the mode-line thinking spinner should animate."
-  (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p)
-       (not (and (fboundp 'emagent-acp-waiting-permission-p)
-                 (emagent-acp-waiting-permission-p)))))
+  (and (emagent-chat--stat :busy)
+       (not (emagent-chat--stat :waiting-permission))))
 
 (defun emagent-chat--spinner-animate-p (&optional buffer)
   "Return non-nil when BUFFER is displayed and should animate the spinner.
@@ -233,6 +223,29 @@ buffer."
 (defvar-local emagent-chat--mode-line-stale-p nil
   "When non-nil, recompute the mode line when this buffer becomes active.")
 
+(defvar-local emagent-chat--status nil
+  "Plist snapshot of ACP session status, pushed by the ACP layer via :cb-status.
+
+Keys: :busy :waiting-permission :ready :prompt-finishing :tool :tool-kind :rss
+:ctx-usage (a (USED . SIZE) cons or nil) :ctx-unavailable.  The mode line
+renders from this snapshot so the UI never calls up into the ACP runtime.")
+
+(defun emagent-chat--stat (key)
+  "Return status field KEY from the pushed ACP snapshot."
+  (plist-get emagent-chat--status key))
+
+(defun emagent-chat-set-status (status)
+  "Store the ACP STATUS snapshot for this buffer and refresh the mode line.
+This is the ACP layer's downward entry point (wired as :cb-status); it replaces
+the mode line pulling session state back out of the ACP layer."
+  (setq emagent-chat--status status)
+  (when (and (emagent-chat--stat :busy)
+             (fboundp 'emagent-chat--spinner-ensure-running))
+    (emagent-chat--spinner-ensure-running))
+  (if (emagent-chat--stat :busy)
+      (emagent-chat--refresh-mode-line-soon)
+    (emagent-chat--refresh-mode-line)))
+
 (defun emagent-chat--spinner-refresh-buffer (buffer)
   "Refresh BUFFER's mode line when it is the active busy emagent buffer."
   (with-current-buffer buffer
@@ -286,7 +299,7 @@ buffer."
   "Recompute a stale or busy mode line after this buffer becomes active."
   (when (emagent-chat--buffer-active-p)
     (when (or emagent-chat--mode-line-stale-p
-              (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p)))
+              (emagent-chat--stat :busy))
       (emagent-chat--mode-line-recompute)
       (force-mode-line-update))))
 
@@ -296,13 +309,12 @@ buffer."
 
 (defun emagent-chat--mode-line-strings ()
   "Return (HEAD . TAIL) strings for the emagent mode line."
-  (let* ((busy  (and (fboundp 'emagent-acp-busy-p)  (emagent-acp-busy-p)))
-         (waiting-permission (and (fboundp 'emagent-acp-waiting-permission-p)
-                                  (emagent-acp-waiting-permission-p)))
-         (ready (and (fboundp 'emagent-acp-ready-p) (emagent-acp-ready-p)))
-         (tool  (and (fboundp 'emagent-acp-current-tool) (emagent-acp-current-tool)))
-         (kind  (and (fboundp 'emagent-acp-current-tool-kind) (emagent-acp-current-tool-kind)))
-         (rss   (and (fboundp 'emagent-acp-agent-rss) (emagent-acp-agent-rss)))
+  (let* ((busy  (emagent-chat--stat :busy))
+         (waiting-permission (emagent-chat--stat :waiting-permission))
+         (ready (emagent-chat--stat :ready))
+         (tool  (emagent-chat--stat :tool))
+         (kind  (emagent-chat--stat :tool-kind))
+         (rss   (emagent-chat--stat :rss))
          (connected (or busy ready))
          (spinner (when (emagent-chat--spinner-animate-p)
                     (emagent-chat--mode-line-spinner-suffix)))
@@ -312,8 +324,7 @@ buffer."
                  (propertize "emagent:Allow?" 'face 'warning))
                 ((and (not busy) ready
                       (emagent-chat--open-response-p)
-                      (not (and (fboundp 'emagent-acp-prompt-finishing-p)
-                                (emagent-acp-prompt-finishing-p))))
+                      (not (emagent-chat--stat :prompt-finishing)))
                  (propertize "emagent:stalled" 'face 'warning))
                 ((and busy tool (member kind '("write" "execute")))
                  (concat (propertize "Executing" 'face busy-face)
@@ -381,8 +392,7 @@ buffer."
   "Return a propertized context fill string, or nil.
 Shows a percentage when the provider reports context usage, `ctx:n/a' when a
 connected provider (cursor) cannot report it, and nil otherwise."
-  (if-let* ((pair (and (fboundp 'emagent-acp-context-usage)
-                       (emagent-acp-context-usage)))
+  (if-let* ((pair (emagent-chat--stat :ctx-usage))
             (used (car pair))
             (size (cdr pair))
             ((and (numberp used) (numberp size) (> size 0))))
@@ -392,8 +402,7 @@ connected provider (cursor) cannot report it, and nil otherwise."
                            ((>= pct 80) 'error)
                            ((>= pct 50) 'warning)
                            (t           'success))))
-    (when (and (fboundp 'emagent-acp-context-usage-unavailable-p)
-               (emagent-acp-context-usage-unavailable-p))
+    (when (emagent-chat--stat :ctx-unavailable)
       (propertize " ctx:n/a" 'face 'shadow))))
 
 ;;;###autoload
