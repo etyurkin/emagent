@@ -22,6 +22,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'emagent-model)
 (require 'emagent-chat-header)
 (require 'emagent-permissions)
 
@@ -85,7 +86,7 @@ New choices persist under `emagent-permissions-directory'.")
 (defun emagent-session-set-model (model)
   "Store ACP MODEL id in the current buffer.
 No UI side effects — callers that need a mode-line refresh add it themselves."
-  (setq model (emagent-chat--canonical-model-id model))
+  (setq model (emagent-model-canonical-id model))
   (unless (equal emagent-chat-model model)
     (setq emagent-chat-model model)
     (emagent-chat--write-top-property "EMAGENT_MODEL" model))
@@ -93,12 +94,12 @@ No UI side effects — callers that need a mode-line refresh add it themselves."
 
 (defun emagent-session-model ()
   "Return the ACP model id for the current emagent buffer."
-  (emagent-chat--canonical-model-id
+  (emagent-model-canonical-id
    (or emagent-chat-model (emagent-chat--read-model-property))))
 
 (defun emagent-session-model-display (&optional model)
   "Return MODEL as a short label for the mode line."
-  (emagent-chat--normalize-model-id
+  (emagent-model-normalize-id
    (or model (emagent-session-model))))
 
 (defun emagent-session-set-agent (agent)
