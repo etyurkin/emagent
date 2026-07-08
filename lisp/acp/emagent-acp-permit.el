@@ -23,9 +23,8 @@
 (require 'emagent-tools)
 (require 'emagent-policy)
 (require 'emagent-permissions)
+(require 'emagent-session)
 
-(declare-function emagent-chat-allowed-permissions "emagent-chat")
-(declare-function emagent-chat-project-directory "emagent-chat")
 (declare-function emagent-chat-show-tool-call "emagent-chat")
 (declare-function emagent-acp--chat-buffer "emagent-acp-usage")
 
@@ -221,10 +220,10 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
                         (map-elt state :session-id)))
                (and chat-buffer (buffer-live-p chat-buffer)
                     (with-current-buffer chat-buffer
-                      (or (member fingerprint (emagent-chat-allowed-permissions))
+                      (or (member fingerprint (emagent-session-allowed-permissions))
                           (member fingerprint
                                   (emagent-permissions-project-fingerprints
-                                   (emagent-chat-project-directory))))))))))
+                                   (emagent-session-project-directory))))))))))
 
 (defun emagent-acp--permission-choice-label (choice)
   "Return a short display label for permission CHOICE, or nil."
@@ -252,10 +251,10 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
     :allow-session)
    ((and fingerprint chat-buffer (buffer-live-p chat-buffer)
          (with-current-buffer chat-buffer
-           (or (member fingerprint (emagent-chat-allowed-permissions))
+           (or (member fingerprint (emagent-session-allowed-permissions))
                (member fingerprint
                        (emagent-permissions-project-fingerprints
-                        (emagent-chat-project-directory))))))
+                        (emagent-session-project-directory))))))
     :allow-session)
    (t nil)))
 

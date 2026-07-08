@@ -17,11 +17,11 @@
 (require 'emagent-tools)
 (require 'emagent-acp-custom)
 (require 'emagent-acp-protocol)
+(require 'emagent-session)
 
 (declare-function emagent-acp--prepare-interactive-context "emagent-acp")
 (declare-function emagent-acp--notify-user "emagent-acp")
 (declare-function emagent-acp--chat-buffer "emagent-acp-usage")
-(declare-function emagent-chat-project-directory "emagent-chat")
 
 (defvar emagent-tools--root-boundary)
 (defvar emagent-tools--project-directory)
@@ -34,7 +34,7 @@ fs/* handlers would resolve agent-supplied paths with no project confinement."
   (when-let ((buf (emagent-acp--chat-buffer state)))
     (when (buffer-live-p buf)
       (with-current-buffer buf
-        (ignore-errors (emagent-chat-project-directory))))))
+        (ignore-errors (emagent-session-project-directory))))))
 
 (defun emagent-acp--protected-fs-error (path)
   (emagent-acp-make-error
