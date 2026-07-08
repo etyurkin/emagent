@@ -257,7 +257,7 @@ are closed, or (lang . body-so-far) for the last unclosed fence."
                           body
                         (format "#+BEGIN_SRC %s\n%s\n#+END_SRC"
                                 (emagent-chat--lang-from-src-tag lang)
-                                body))
+                                (emagent-chat--escape-src-body body)))
                       parts)
                 (setq pos close-end))))))))
     (unless incomplete
