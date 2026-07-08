@@ -64,6 +64,13 @@
                    ((optionId . "allow_once") (kind . "allow_once"))]))
     (should (string= "allow_once" (emagent-acp--permission-acp-allow-id options)))))
 
+(ert-deftest emagent-acp-session-test-permission-acp-allow-id-fail-closed ()
+  "When the agent offers only allow_always (no one-shot), return nil so the
+request is cancelled rather than escalated to a permanent agent-side grant."
+  (let ((options `[((optionId . "allow_always") (kind . "allow_always"))
+                   ((optionId . "reject") (kind . "reject"))]))
+    (should (null (emagent-acp--permission-acp-allow-id options)))))
+
 (ert-deftest emagent-acp-session-test-permission-fingerprint ()
   (let ((args (make-hash-table :test 'equal)))
     (puthash "command" "make test" args)
