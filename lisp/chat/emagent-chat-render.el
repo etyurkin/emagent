@@ -163,7 +163,9 @@ the hide when the response is fully complete and the session is idle."
         emagent-chat--fence-state nil
         emagent-chat--response-fence-state nil
         emagent-chat--permission-pending nil)
-  (clrhash emagent-chat--tool-call-lines))
+  (if emagent-chat--tool-call-lines
+      (clrhash emagent-chat--tool-call-lines)
+    (setq-local emagent-chat--tool-call-lines (make-hash-table :test 'equal))))
 
 (defun emagent-chat--cancel-thought-flush ()
   "Flush any pending reasoning content and cancel the flush timer.
