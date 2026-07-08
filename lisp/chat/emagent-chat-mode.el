@@ -87,6 +87,7 @@ completes available commands.  Agent responses are inserted between
 Run \\[emagent-mode] to reconnect a saved session."
   (require 'emagent)
   (setq-local buffer-read-only nil)
+  (setq-local emagent-chat--tool-call-lines (make-hash-table :test 'equal))
   (emagent-chat--writable)
   (setq emagent-chat-project-directory
         (or emagent-chat-project-directory (emagent-chat--read-project-property))
