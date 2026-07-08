@@ -85,6 +85,18 @@
                    `((kind . "execute") (arguments . ,args)))))
       (should (eq (car result) :confirm)))))
 
+(ert-deftest emagent-acp-session-test-turn-phase ()
+  "The turn phase derives idle/streaming/finalizing/done from the turn flags."
+  (let ((state (emagent-test--make-acp-state)))
+    (should (eq 'idle (emagent-acp--turn-phase state)))
+    (map-put! state :busy t)
+    (should (eq 'streaming (emagent-acp--turn-phase state)))
+    (map-put! state :busy nil)
+    (map-put! state :prompt-finishing t)
+    (should (eq 'finalizing (emagent-acp--turn-phase state)))
+    (map-put! state :prompt-finalized t)
+    (should (eq 'done (emagent-acp--turn-phase state)))))
+
 (ert-deftest emagent-acp-session-test-permission-auto-allowed-session ()
   (emagent-test--with-mocks
       (((symbol-function 'emagent-permissions-global-fingerprints) (lambda () nil))
