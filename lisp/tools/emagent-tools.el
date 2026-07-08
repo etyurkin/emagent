@@ -80,13 +80,20 @@ behaviour for non-MCP call sites).")
   (setq emagent-tools--project-directory
         (and directory (expand-file-name directory))))
 
+(declare-function emagent-tools--protected-truename-p "emagent-tools-file")
+
 (defun emagent-tools--within-boundary-p (resolved)
-  "Return non-nil when RESOLVED is inside `emagent-tools--root-boundary'."
+  "Return non-nil when RESOLVED is inside `emagent-tools--root-boundary'.
+
+Compares symlink-resolved truenames so a symlink inside the root that points
+outside it cannot pass the check.  `file-truename' resolves the existing prefix
+of a not-yet-created path, so a symlinked parent directory is caught too."
   (or (null emagent-tools--root-boundary)
       (let ((root (file-name-as-directory
-                   (expand-file-name emagent-tools--root-boundary))))
-        (or (string-prefix-p root (file-name-as-directory resolved))
-            (string= (directory-file-name resolved)
+                   (file-truename (expand-file-name emagent-tools--root-boundary))))
+            (true (file-truename resolved)))
+        (or (string-prefix-p root (file-name-as-directory true))
+            (string= (directory-file-name true)
                      (directory-file-name root))))))
 
 (defun emagent-tools--root-directory (path)
@@ -94,12 +101,16 @@ behaviour for non-MCP call sites).")
 
 A relative PATH is resolved against the session project directory (not the
 process `default-directory'), and an omitted PATH yields that directory.
-Signal an error when the result escapes `emagent-tools--root-boundary'."
+Signal an error when the result escapes `emagent-tools--root-boundary' or lands
+in a protected macOS tree (iCloud or another app's container)."
   (let* ((base (or emagent-tools--project-directory default-directory))
          (resolved (expand-file-name (or path base) base)))
     (unless (emagent-tools--within-boundary-p resolved)
       (user-error "Path %s is outside the session root %s"
                   resolved emagent-tools--root-boundary))
+    (when (emagent-tools--protected-truename-p (file-truename resolved))
+      (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
+                  resolved))
     resolved))
 
 (defun emagent-tool-project-directory ()
