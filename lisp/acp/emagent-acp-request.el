@@ -41,7 +41,6 @@
 (declare-function emagent-acp--permission-stored-auto-choice "emagent-acp-permit")
 (declare-function emagent-acp--show-permission-decision "emagent-acp-permit")
 (declare-function emagent-acp--schedule-permission-drain "emagent-acp-permit")
-(declare-function emagent-chat-permission-prompt "emagent-chat-render" (question choices callback &optional tool-call))
 (declare-function emagent-tools--buttons-prompt "emagent-tools" (prompt choices chat-buffer callback &optional preamble))
 
 (defun emagent-acp--human-tool-detail-p (detail)
@@ -160,10 +159,12 @@ non-blockingly and returns; ON-COMPLETE is called after the user responds."
                  (emagent-acp--refresh-mode-line state)
                  (funcall respond (or choice :cancel)))))
           (if (and buf (buffer-live-p buf)
+                   (map-elt state :cb-permission)
                    (with-current-buffer buf (emagent-chat--open-response-p)))
               (with-current-buffer buf
-                (emagent-chat-permission-prompt
-                 question emagent-acp--permission-emagent-choices after-response tool-call))
+                (funcall (map-elt state :cb-permission)
+                         question emagent-acp--permission-emagent-choices
+                         after-response tool-call))
             (emagent-tools--buttons-prompt
              question emagent-acp--permission-emagent-choices buf after-response))))))))
 

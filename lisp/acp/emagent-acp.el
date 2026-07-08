@@ -75,8 +75,6 @@
 (declare-function emagent-chat--compress-command-p "emagent-chat-compress")
 (declare-function emagent-chat--conversation-history-text "emagent-chat-compress")
 (declare-function emagent-chat--compress-prompt-text "emagent-chat-compress")
-(declare-function emagent-chat-show-tool-call "emagent-chat")
-(declare-function emagent-chat-permission-prompt "emagent-chat")
 (declare-function emagent-chat--open-response-p "emagent-chat")
 (declare-function emagent-chat--refresh-mode-line-soon "emagent-chat-mode-line")
 (declare-function emagent-chat--spinner-start "emagent-chat-mode-line")
