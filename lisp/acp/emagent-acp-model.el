@@ -23,9 +23,7 @@
 `emagent-acp--read-labeled-choice'.")
 
 (declare-function emagent-acp--send-request "emagent-acp")
-(declare-function emagent-chat--canonical-model-id "emagent-chat-header")
-(declare-function emagent-chat--normalize-model-id "emagent-chat-header")
-(declare-function emagent-chat--model-choice-label-display "emagent-chat-header")
+(require 'emagent-model)
 (declare-function emagent-acp--saved-model-id "emagent-acp-usage")
 
 (defun emagent-acp--auto-model-candidate (state models)
@@ -178,7 +176,7 @@ over legacy `models'."
                           (emagent-acp--model-entry-id entry)))
                   (name (or (map-elt entry :name)
                             (emagent-acp--model-entry-name entry))))
-              (cons (emagent-chat--model-choice-label-display id name) id)))
+              (cons (emagent-model-choice-label-display id name) id)))
           (emagent-acp--get-available-models state models)))
 
 (defun emagent-acp--model-available-p (model-id state models)
@@ -192,7 +190,7 @@ over legacy `models'."
 (defun emagent-acp--match-model-id (model-id state models)
   "Return canonical MODEL-ID for set-config-option, matching by id or name."
   (when (and model-id (not (string-empty-p model-id)))
-    (let ((model-id (emagent-chat--canonical-model-id model-id)))
+    (let ((model-id (emagent-model-canonical-id model-id)))
       (or (and (emagent-acp--model-available-p model-id state models) model-id)
           (cl-loop for entry across (vconcat (emagent-acp--get-available-models state models))
                    for id = (or (map-elt entry :model-id)
@@ -202,8 +200,8 @@ over legacy `models'."
                    when (or (string= id model-id)
                             (string= name model-id)
                             (string= (downcase name) (downcase model-id))
-                            (string= (emagent-chat--normalize-model-id id)
-                                     (emagent-chat--normalize-model-id model-id)))
+                            (string= (emagent-model-normalize-id id)
+                                     (emagent-model-normalize-id model-id)))
                    return id)
           model-id))))
 
