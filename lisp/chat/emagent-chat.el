@@ -57,13 +57,19 @@
 ;; emagent-specific bindings here.  Per Emacs conventions `C-c <letter>'
 ;; is reserved for users, so emagent commands live under the `C-c C-e'
 ;; prefix map.
-;; Minimal keymap: only send and interrupt get direct keys; every other command
-;; lives in the `C-c ?' palette (`emagent-dispatch').  This keeps emagent from
-;; shadowing org-mode bindings (TAB, C-a, C-y, C-n/C-p, C-c C-e export, …),
-;; which stay available since emagent-mode derives from org-mode.
+;; Direct keys are kept minimal: send, interrupt, the palette, and a few
+;; input-aware overrides that fall through to their org/default behavior outside
+;; the prompt zone (TAB completes /slash commands then org-cycles; C-a, C-n/C-p,
+;; C-y).  Every other command lives in the `C-c ?' palette (`emagent-dispatch'),
+;; so emagent does not shadow the rest of the org-mode keymap.
 (define-key emagent-mode-map (kbd "C-c C-c") #'emagent-chat-send-or-babel)
 (define-key emagent-mode-map (kbd "ESC ESC") #'emagent-chat-interrupt)
 (define-key emagent-mode-map (kbd "C-c ?")   #'emagent-dispatch)
+(define-key emagent-mode-map (kbd "TAB")     #'emagent-chat-tab)
+(define-key emagent-mode-map (kbd "C-a")     #'emagent-chat-beginning-of-line)
+(define-key emagent-mode-map (kbd "C-y")     #'emagent-chat-yank)
+(define-key emagent-mode-map (kbd "C-p")     #'emagent-chat-history-previous-or-previous-line)
+(define-key emagent-mode-map (kbd "C-n")     #'emagent-chat-history-next-or-next-line)
 
 (defvar-local emagent-chat--assistant-marker nil
   "Insert position for the in-flight emagent response.")
