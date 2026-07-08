@@ -52,6 +52,21 @@ stripped so the dangerous leaf is isolated and confirmed."
                  (emagent-policy-shell-commands "env rm --recursive ~")))
   (should (emagent-policy-shell-needs-confirm-p "sudo env FOO=1 rm --recursive ~")))
 
+(ert-deftest emagent-policy-test-shell-substitution-and-runners ()
+  "Dangerous argv hidden in $(...)/`...` substitutions, behind `eval', or after
+`xargs' is surfaced and confirmed."
+  ;; Command substitution — even inside quotes / an assignment.
+  (should (emagent-policy-shell-needs-confirm-p "echo $(rm -rf ~)"))
+  (should (emagent-policy-shell-needs-confirm-p "foo \"$(rm --recursive ~)\""))
+  (should (emagent-policy-shell-needs-confirm-p "x=`rm -rf ~`"))
+  ;; eval unwrapping (quoted and unquoted).
+  (should (member "rm -rf ~" (emagent-policy-shell-commands "eval \"rm -rf ~\"")))
+  (should (emagent-policy-shell-needs-confirm-p "eval rm -rf ~"))
+  ;; xargs, with and without options that consume a value.
+  (should (member "rm -rf" (emagent-policy-shell-commands "find . | xargs rm -rf")))
+  (should (emagent-policy-shell-needs-confirm-p "find . | xargs -0 rm -rf"))
+  (should (emagent-policy-shell-needs-confirm-p "find . | xargs -n 1 rm -rf")))
+
 (ert-deftest emagent-policy-test-shell-rm-combined-rf ()
   (should (emagent-policy-rule-id-matches-p 'shell 'shell-rm-combined-rf "rm -rf /tmp"))
   (should (emagent-policy-test--confirm-p "rm -fr /tmp")))
