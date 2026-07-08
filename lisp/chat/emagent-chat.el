@@ -94,6 +94,13 @@
 Owned once the Response headline exists, so the body bounds are read from it
 instead of re-searching for the headline on every streamed chunk.")
 
+(defvar-local emagent-chat--response-end-marker nil
+  "End of the open response region.
+A live marker at the following exchange's user heading (re-evaluating an earlier
+prompt), the symbol `point-max' when the response is last in the buffer, or nil
+before a response is open.  Owning it avoids re-scanning to the next heading on
+every streamed chunk.")
+
 (defvar-local emagent-chat--thought-open-p nil
   "Non-nil while a Reasoning quote block is open in the in-flight response.")
 
@@ -287,15 +294,22 @@ finalized or failed; openness is tracked by the live body-start marker."
 (defun emagent-chat--response-region-end (begin)
   "Return the buffer position that ends the response region starting at BEGIN.
 
-That is the next user heading after BEGIN (the start of the following
-exchange), or `point-max' when this is the last exchange.  Bounding the region
-here instead of at `point-max' keeps finalizing a mid-buffer response — e.g.
-after re-evaluating an earlier prompt — from deleting the exchanges below it."
-  (save-excursion
-    (goto-char begin)
-    (if (re-search-forward (emagent-chat--user-heading-re) nil t)
-        (line-beginning-position)
-      (point-max))))
+Read from the owned `emagent-chat--response-end-marker' (set once when the
+response is opened): a live marker at the following exchange's user heading, or
+`point-max' when the response is last.  Falls back to a forward scan only when
+the marker was not set (e.g. a re-opened session).  Bounding the region here
+keeps finalizing a mid-buffer response from deleting the exchanges below it."
+  (cond
+   ((markerp emagent-chat--response-end-marker)
+    (marker-position emagent-chat--response-end-marker))
+   ((eq emagent-chat--response-end-marker 'point-max)
+    (point-max))
+   (t
+    (save-excursion
+      (goto-char begin)
+      (if (re-search-forward (emagent-chat--user-heading-re) nil t)
+          (line-beginning-position)
+        (point-max))))))
 
 (defun emagent-chat--open-response-body-bounds ()
   "Return (BEG . END) for the open response body.
