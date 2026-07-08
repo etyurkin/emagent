@@ -255,11 +255,17 @@ Use to revert `emagent-tool-write-file' changes."
       (user-error "No buffer for %s" resolved))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
-        (dotimes (_ steps)
-          (condition-case _
-              (progn (undo) (setq done (1+ done)))
-            (user-error
-             (user-error "Only %d undo step(s) available in %s" done resolved))))
+        (catch 'exhausted
+          (dotimes (i steps)
+            ;; `undo' only continues the previous undo chain when
+            ;; `last-command' is `undo'; inside this loop it is not, so bind it
+            ;; for every step after the first — otherwise repeated calls
+            ;; oscillate (undo then redo) instead of undoing further.
+            (condition-case _
+                (let ((last-command (if (> i 0) 'undo last-command)))
+                  (undo)
+                  (setq done (1+ done)))
+              (user-error (throw 'exhausted nil)))))
         (when (buffer-file-name)
           (basic-save-buffer))))
     (format "Undid %d change(s) in %s" done resolved)))
@@ -410,15 +416,22 @@ Uses pure Emacs search when `emagent-acp-prefer-emacs' is non-nil."
     (concat (file-name-as-directory "") (string-join (nreverse parts) ""))))
 
 (defun emagent-tool-find-files (glob &optional path)
-  "List files under PATH matching shell GLOB, one relative path per line."
+  "List files under PATH matching shell GLOB, one relative path per line.
+
+A GLOB with no `/' matches against each file's name; a GLOB with `/' matches
+against the file's path relative to the search root.  The glob regexp is
+`./'-prefixed, so candidates are compared as `./NAME' / `./REL-PATH'."
   (let* ((root (emagent-tools--root-directory path))
-         (regexp (if (string-match-p "/" glob)
-                     (emagent-tools--glob-to-regexp glob)
-                   (concat ".*" (emagent-tools--glob-to-regexp glob))))
+         (has-slash (string-match-p "/" glob))
+         (regexp (concat "\\`" (emagent-tools--glob-to-regexp glob) "\\'"))
          (files nil))
-    (dolist (file (directory-files-recursively root regexp nil t))
+    (dolist (file (directory-files-recursively root "[^.].*" nil t))
       (unless (string-match-p "/\\.git/" file)
-        (push (file-relative-name file root) files)))
+        (let* ((rel (file-relative-name file root))
+               (candidate (concat "./" (if has-slash rel
+                                         (file-name-nondirectory rel)))))
+          (when (string-match-p regexp candidate)
+            (push rel files)))))
     (if files
         (string-join (sort files #'string<) "\n")
       "No matches")))
