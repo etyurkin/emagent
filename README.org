@@ -95,9 +95,8 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =M-x emagent-chat-insert-src-block=   | Pick a src block from last response and insert  |
 
 Only =C-c C-c= (send) and =ESC ESC= (interrupt) are bound directly; every other
-command lives in the =C-c ?= palette.  This keeps emagent from shadowing the
-standard org-mode keys (=TAB=, =C-a=, =C-y=, =C-n=/=C-p=, =C-c C-e=, …), which
-work as usual since =emagent-mode= derives from =org-mode=.
+command lives in the =C-c ?= palette, so emagent leaves the org-mode keymap
+untouched.
 
 ** Project directory and agent
 
