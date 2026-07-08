@@ -15,12 +15,20 @@
 (require 'emagent-chat-markup)
 
 (defun emagent-chat--open-reasoning-begin ()
-  "Return point at the `** Thinking' headline in the open response body."
-  (when-let ((bounds (emagent-chat--open-response-body-bounds)))
-    (save-excursion
-      (goto-char (car bounds))
-      (when (re-search-forward emagent-chat--thinking-headline-re (cdr bounds) t)
-        (match-beginning 0)))))
+  "Return point at the `** Thinking' headline in the open response body.
+Read from the owned `emagent-chat--thinking-headline-marker' when set; otherwise
+locate the headline by search and cache it."
+  (if (and emagent-chat--thinking-headline-marker
+           (marker-position emagent-chat--thinking-headline-marker)
+           (emagent-chat--open-response-p))
+      (marker-position emagent-chat--thinking-headline-marker)
+    (when-let ((bounds (emagent-chat--open-response-body-bounds)))
+      (save-excursion
+        (goto-char (car bounds))
+        (when (re-search-forward emagent-chat--thinking-headline-re (cdr bounds) t)
+          (setq emagent-chat--thinking-headline-marker
+                (copy-marker (match-beginning 0) nil))
+          (match-beginning 0))))))
 
 (defun emagent-chat--thinking-content-end (begin limit)
   "Return where the Thinking content ends after BEGIN, before LIMIT.
@@ -37,6 +45,7 @@ That is the start of the `** Response' headline when present, otherwise LIMIT."
   (when (and emagent-chat--response-body-start
              (marker-position emagent-chat--response-body-start))
     (goto-char emagent-chat--response-body-start)
+    (setq emagent-chat--thinking-headline-marker (copy-marker (point) nil))
     (insert emagent-chat-thinking-headline "\n")
     (setq emagent-chat--thought-marker (point-marker)
           emagent-chat--thought-open-p t

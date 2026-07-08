@@ -104,6 +104,10 @@ every streamed chunk.")
 (defvar-local emagent-chat--thought-open-p nil
   "Non-nil while a Reasoning quote block is open in the in-flight response.")
 
+(defvar-local emagent-chat--thinking-headline-marker nil
+  "Marker at the open `** Thinking' headline, owned once the scaffold is inserted.
+Read instead of re-searching for the headline on every reasoning chunk.")
+
 (defvar-local emagent-chat--thought-marker nil
   "Insert position for streaming agent reasoning text.")
 
