@@ -1162,6 +1162,28 @@ the emagent gate can show what was edited instead of a bare arrow line."
         (should-not (emagent-acp-state-permission-busy state))
         (should (null (emagent-acp-state-permission-queue state)))))))
 
+(ert-deftest emagent-acp-session-test-permission-on-complete-error-no-double-answer ()
+  "When the post-reply continuation throws, the request is not answered twice:
+`respond' already fired, so the outer handler must not send a second `cancelled'."
+  (let* ((state (emagent-test--make-acp-state))
+         (request '((id . "req1") (params . ((title . "Allow?")))))
+         (responses 0))
+    (setf (emagent-acp-state-permission-queue state) (list request))
+    (emagent-test--with-mocks
+        (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
+         ((symbol-function 'emagent-acp-send-response)
+          (lambda (&rest _) (setq responses (1+ responses))))
+         ((symbol-function 'emagent-acp--maybe-complete-deferred-prompt)
+          (lambda (&rest _) (error "continuation crash")))
+         ((symbol-function 'emagent-acp--handle-one-permission)
+          (lambda (&rest args)
+            ;; Simulate an auto-decision: reply, then run the continuation.
+            (emagent-acp-send-response :client nil :response nil)
+            (funcall (plist-get args :on-complete)))))
+      (emagent-acp--drain-permission-queue-now state)
+      (should (= responses 1))
+      (should-not (emagent-acp-state-permission-busy state)))))
+
 (ert-deftest emagent-acp-session-test-maybe-recover-stall-drains-queue ()
   "maybe-recover-stall' schedules permission drain when queue is nonempty."
   (let* ((state (emagent-test--make-acp-state))
