@@ -291,14 +291,22 @@ renders of the same line keep the decision suffix instead of dropping it."
           (emagent-chat-show-tool-call id label (car spec) (cdr spec)))))))
 
 (defun emagent-acp--permission-gate-auto-approve-p (state tool-call validation fingerprint chat-buffer)
-  "Return non-nil when emagent should approve without prompting."
-  (and (not (and validation (eq (car validation) :deny)))
-       (or (emagent-acp--permission-auto-allowed-p state fingerprint chat-buffer)
-           (and (eq emagent-acp-auto-approve-permissions t)
-                (not (and validation (eq (car validation) :confirm))))
-           (and (eq emagent-acp-auto-approve-permissions 'safe)
-                (not (emagent-acp--tool-call-shell-needs-confirm-p tool-call))
-                (not (and validation (eq (car validation) :confirm)))))))
+  "Return non-nil when emagent should approve without prompting.
+
+A policy :deny is never auto-approved.  A policy :confirm is auto-approved only
+under \"Allow all (session)\" — the explicit user opt-out of prompting.  A
+stored fingerprint grant (or the t/safe auto-approve modes) removes the prompt
+only for policy-clean requests: it must not silence a :confirm, so e.g. an
+`execute:rm' grant made for `rm foo.log' cannot auto-run `rm -rf ~'."
+  (let ((deny (and validation (eq (car validation) :deny)))
+        (confirm (and validation (eq (car validation) :confirm))))
+    (and (not deny)
+         (or (map-elt state :session-auto-approve)
+             (and (not confirm)
+                  (or (emagent-acp--permission-auto-allowed-p state fingerprint chat-buffer)
+                      (eq emagent-acp-auto-approve-permissions t)
+                      (and (eq emagent-acp-auto-approve-permissions 'safe)
+                           (not (emagent-acp--tool-call-shell-needs-confirm-p tool-call)))))))))
 
 (defun emagent-acp--permission-apply-choice (state fingerprint _chat-buffer choice)
   "Record user CHOICE for FINGERPRINT in STATE."
