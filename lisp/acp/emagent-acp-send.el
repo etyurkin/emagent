@@ -12,6 +12,7 @@
 
 ;; Defined in emagent-acp-prompt.el, which declares this file's functions the
 ;; same way; declaring here avoids a require cycle between the two modules.
+(declare-function emagent-acp--cancel-outstanding-permissions "emagent-acp-request")
 (declare-function emagent-acp--agent-error-only-response-p "emagent-acp-prompt")
 (declare-function emagent-acp--turn-hit-transient-error-p "emagent-acp-prompt")
 (declare-function emagent-acp--turn-did-no-work-p "emagent-acp-prompt")
@@ -280,7 +281,7 @@ interrupted."
       (when-let ((timer (map-elt state :permission-drain-timer)))
         (cancel-timer timer)
         (map-put! state :permission-drain-timer nil))
-      (map-put! state :permission-queue nil)
+      (emagent-acp--cancel-outstanding-permissions state)
       (map-put! state :permission-busy nil)
       (map-put! state :deferred-complete-response nil)
       (emagent-acp--cancel-prompt-render state)
@@ -320,7 +321,7 @@ finalized."
     (when-let ((timer (map-elt state :permission-drain-timer)))
       (cancel-timer timer)
       (map-put! state :permission-drain-timer nil))
-    (map-put! state :permission-queue nil)
+    (emagent-acp--cancel-outstanding-permissions state)
     (map-put! state :permission-busy nil)
     (map-put! state :deferred-complete-response nil)
     (map-put! state :busy nil)
