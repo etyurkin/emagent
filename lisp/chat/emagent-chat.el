@@ -297,13 +297,27 @@ finalized or failed; openness is tracked by the live body-start marker."
   "Return the start of the in-flight response (the `** Thinking' line), or nil."
   (emagent-chat--open-response-begin))
 
+(defun emagent-chat--response-region-end (begin)
+  "Return the buffer position that ends the response region starting at BEGIN.
+
+That is the next user heading after BEGIN (the start of the following
+exchange), or `point-max' when this is the last exchange.  Bounding the region
+here instead of at `point-max' keeps finalizing a mid-buffer response — e.g.
+after re-evaluating an earlier prompt — from deleting the exchanges below it."
+  (save-excursion
+    (goto-char begin)
+    (if (re-search-forward (emagent-chat--user-heading-re) nil t)
+        (line-beginning-position)
+      (point-max))))
+
 (defun emagent-chat--open-response-body-bounds ()
   "Return (BEG . END) for the open response body.
 
-BEG is the `** Thinking' headline; END is `point-max' while the response is
-still streaming.  Returns nil when no response is open."
+BEG is the response body start; END is the next user heading after it (the next
+exchange), or `point-max' when this is the last exchange.  Returns nil when no
+response is open."
   (when-let ((begin (emagent-chat--open-response-begin)))
-    (cons begin (point-max))))
+    (cons begin (emagent-chat--response-region-end begin))))
 
 (defun emagent-chat--finish-body-bounds ()
   "Return (BEG . END) for the open response body to finalize, or nil."
