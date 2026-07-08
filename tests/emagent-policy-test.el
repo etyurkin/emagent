@@ -38,6 +38,20 @@
   ;; leaf; the rule matcher re-parses and unquotes it).
   (should (equal '("echo 'a;b'") (emagent-policy-shell-commands "echo 'a;b'"))))
 
+(ert-deftest emagent-policy-test-shell-decomposition-hardening ()
+  "A backslash-escaped quote does not swallow a separator; env/VAR= wrappers are
+stripped so the dangerous leaf is isolated and confirmed."
+  ;; \" is a literal char, not a quote — the following `;' must still split.
+  (should (member "rm --recursive ~"
+                  (emagent-policy-shell-commands "echo \\\" ; rm --recursive ~")))
+  (should (emagent-policy-shell-needs-confirm-p "echo \\\" ; rm --recursive ~"))
+  ;; Leading VAR=VALUE assignment and the `env' wrapper are stripped.
+  (should (equal '("rm --recursive ~")
+                 (emagent-policy-shell-commands "FOO=1 rm --recursive ~")))
+  (should (equal '("rm --recursive ~")
+                 (emagent-policy-shell-commands "env rm --recursive ~")))
+  (should (emagent-policy-shell-needs-confirm-p "sudo env FOO=1 rm --recursive ~")))
+
 (ert-deftest emagent-policy-test-shell-rm-combined-rf ()
   (should (emagent-policy-rule-id-matches-p 'shell 'shell-rm-combined-rf "rm -rf /tmp"))
   (should (emagent-policy-test--confirm-p "rm -fr /tmp")))
