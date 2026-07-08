@@ -85,6 +85,37 @@
     (should (string-match-p "Agent process ended" (alist-get 'message (car failures))))
     (should (null (map-elt client :pending-requests)))))
 
+(ert-deftest emagent-acp-routing-test-non-object-message-ignored ()
+  "A syntactically valid non-object payload must not signal (it would wedge
+the drain).  Numbers, vectors, and empty objects route as no-ops."
+  (let ((client (emagent-test--make-test-client)))
+    (dolist (obj (list 42 [] "str" nil))
+      (let ((msg (emagent-acp--make-message :json "x" :object obj)))
+        (should
+         (progn
+           (emagent-acp--route-incoming-message
+            :client client :message msg
+            :on-notification (lambda (_n) (error "should not notify on %S" obj))
+            :on-request (lambda (_r) (error "should not request on %S" obj)))
+           t))))))
+
+(ert-deftest emagent-acp-routing-test-callback-error-isolated ()
+  "A throwing on-success callback must not escape routing (so the drain that
+calls it keeps going); the pending request is still cleared."
+  (let* ((client (emagent-test--route-client
+                  (lambda (_r) (error "boom in on-success"))))
+         (msg (emagent-acp--make-message
+               :json "{}"
+               :object '((jsonrpc . "2.0") (id . 1) (result . ((ok . t)))))))
+    (should
+     (progn
+       (emagent-acp--route-incoming-message
+        :client client :message msg
+        :on-notification (lambda (_m) nil)
+        :on-request (lambda (_r) nil))
+       t))
+    (should (null (map-elt client :pending-requests)))))
+
 (ert-deftest emagent-acp-routing-test-fake-request-sender ()
   (let ((result nil)
         (request (emagent-acp-make-session-new-request :cwd "/tmp")))
