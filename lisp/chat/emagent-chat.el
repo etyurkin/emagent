@@ -18,6 +18,7 @@
 (require 'emagent-tools)
 (require 'emagent-chat-markup)
 (require 'emagent-chat-header)
+(require 'emagent-session)
 (require 'emagent-chat-compress)
 (require 'emagent-chat-mode-line)
 (require 'emagent-chat-slash)
@@ -131,30 +132,11 @@ or concurrent chat buffers would alias one table.")
 (defvar-local emagent-chat-slug nil
   "Filesystem slug for the current emagent buffer.")
 
-(defvar-local emagent-chat-project-directory nil
-  "Project directory for the current emagent buffer.")
-
-(defvar-local emagent-chat-model nil
-  "ACP model id for the current emagent buffer.")
-
-(defvar-local emagent-chat-session-id nil
-  "ACP session id for the current emagent buffer.")
-
-(defvar-local emagent-chat-provider nil
-  "ACP provider symbol (`cursor' or `claude') for the current emagent buffer.")
-
-(defvar-local emagent-chat-cursor-acp-extra-args nil
-  "When non-nil, replaces `emagent-cursor-acp-extra-args' for this buffer only.")
-
-(defvar-local emagent-chat-allowed-tools nil
-  "Extra MCP tools allowed without confirmation for this buffer session.
-
-Project-wide choices persist under `emagent-permissions-directory'.")
-
-(defvar-local emagent-chat-allowed-permissions nil
-  "Legacy buffer-local permission fingerprints from #+EMAGENT_ALLOWED_PERMISSIONS.
-
-New choices persist under `emagent-permissions-directory'.")
+;; Per-buffer session identity (project root, model, session id, provider,
+;; allowed tools/permissions) now lives in `emagent-session' so lower layers
+;; can read it without depending on this UI module.  The buffer-local vars and
+;; canonical accessors are defined there; `emagent-chat-*' names below remain as
+;; thin compatibility wrappers.
 
 (defface emagent-tool-detail
   '((t (:inherit fixed-pitch :slant normal)))
@@ -369,106 +351,30 @@ response is open."
           (setq n (1+ n)))
         (format "*emagent %s-%d*" label n)))))
 
-(defun emagent-chat-session-id ()
-  "Return the persisted ACP session id for the current buffer."
-  (or emagent-chat-session-id (emagent-chat--read-session-property)))
-
-(defun emagent-chat-set-project-directory (directory)
-  "Store PROJECT directory in the current buffer."
-  (let ((dir (expand-file-name directory)))
-    (setq emagent-chat-project-directory dir)
-    (setq-local default-directory dir)
-    (emagent-chat--write-top-property "EMAGENT_PROJECT" dir)))
-
-(defun emagent-chat-project-directory ()
-  "Return the project directory for the current emagent buffer."
-  (or emagent-chat-project-directory (emagent-chat--read-project-property)))
+;; Session-identity accessors moved to `emagent-session'.  These aliases keep
+;; the historical `emagent-chat-*' entry points working for UI callers.
+(defalias 'emagent-chat-session-id #'emagent-session-id)
+(defalias 'emagent-chat-set-session-id #'emagent-session-set-id)
+(defalias 'emagent-chat-clear-session-id #'emagent-session-clear-id)
+(defalias 'emagent-chat-set-project-directory #'emagent-session-set-project-directory)
+(defalias 'emagent-chat-project-directory #'emagent-session-project-directory)
+(defalias 'emagent-chat-model #'emagent-session-model)
+(defalias 'emagent-chat-model-display #'emagent-session-model-display)
+(defalias 'emagent-chat-set-agent #'emagent-session-set-agent)
+(defalias 'emagent-chat-agent #'emagent-session-agent)
+(defalias 'emagent-chat-allowed-tools #'emagent-session-allowed-tools)
+(defalias 'emagent-chat-add-allowed-tool #'emagent-session-add-allowed-tool)
+(defalias 'emagent-chat-allowed-permissions #'emagent-session-allowed-permissions)
+(defalias 'emagent-chat-add-allowed-permission #'emagent-session-add-allowed-permission)
+(defalias 'emagent-chat-session-allowed-permissions #'emagent-session-allowed-permissions-for)
+(defalias 'emagent-chat-add-session-permission #'emagent-session-add-session-permission)
+(defalias 'emagent-chat-session-auto-approve-p #'emagent-session-auto-approve-p)
+(defalias 'emagent-chat-set-session-auto-approve #'emagent-session-set-auto-approve)
 
 (defun emagent-chat-set-model (model)
-  "Store ACP MODEL id in the current buffer."
-  (setq model (emagent-chat--canonical-model-id model))
-  (unless (equal emagent-chat-model model)
-    (setq emagent-chat-model model)
-    (emagent-chat--write-top-property "EMAGENT_MODEL" model))
-  (setq emagent-chat-model (or emagent-chat-model model))
+  "Store ACP MODEL id in the current buffer and refresh the mode line."
+  (emagent-session-set-model model)
   (emagent-chat--refresh-mode-line))
-
-(defun emagent-chat-model ()
-  "Return the ACP model id for the current emagent buffer."
-  (emagent-chat--canonical-model-id
-   (or emagent-chat-model (emagent-chat--read-model-property))))
-
-(defun emagent-chat-model-display (&optional model)
-  "Return MODEL as a short label for the mode line."
-  (emagent-chat--normalize-model-id
-   (or model (emagent-chat-model))))
-
-(defun emagent-chat-set-session-id (session-id)
-  "Store ACP SESSION-ID in the current buffer."
-  (unless (equal emagent-chat-session-id session-id)
-    (setq emagent-chat-session-id session-id)
-    (emagent-chat--write-top-property "EMAGENT_SESSION" session-id)))
-
-(defun emagent-chat-clear-session-id ()
-  "Remove the ACP session id from the current buffer."
-  (setq emagent-chat-session-id nil)
-  (emagent-chat--delete-top-property "EMAGENT_SESSION"))
-
-(defun emagent-chat-set-agent (agent)
-  "Store the ACP provider AGENT symbol in the current buffer."
-  (when agent
-    (setq emagent-chat-provider agent)
-    (emagent-chat--write-top-property "EMAGENT_AGENT" (symbol-name agent))))
-
-(defun emagent-chat-agent ()
-  "Return the ACP provider symbol for the current emagent buffer, or nil."
-  (or emagent-chat-provider
-      (when-let* ((value (emagent-chat--read-agent-property))
-                  ((not (string-empty-p value))))
-        (intern value))))
-
-(defun emagent-chat-allowed-tools ()
-  "Return MCP tools allowed without confirmation for this buffer's project."
-  (let* ((legacy (or emagent-chat-allowed-tools
-                     (emagent-chat--read-allowed-tools-property)))
-         (stored (when-let ((dir (emagent-chat-project-directory)))
-                   (emagent-permissions-project-tools dir))))
-    (cl-delete-duplicates (append legacy stored))))
-
-(defun emagent-chat-add-allowed-tool (tool)
-  "Allow TOOL for this project without confirmation and persist it."
-  (let* ((sym (if (stringp tool) (intern tool) tool))
-         (dir (emagent-chat-project-directory)))
-    (unless (memq sym (emagent-chat-allowed-tools))
-      (setq emagent-chat-allowed-tools (append (or emagent-chat-allowed-tools nil)
-                                               (list sym)))
-      (when dir
-        (emagent-permissions-add-project-tool dir sym)))))
-
-(defun emagent-chat-allowed-permissions ()
-  "Return legacy buffer permission fingerprints still honored at the gate."
-  (or emagent-chat-allowed-permissions
-      (emagent-chat--read-allowed-permissions-property)))
-
-(defun emagent-chat-add-allowed-permission (fingerprint)
-  "Persist FINGERPRINT as globally allowed for ACP permission requests."
-  (emagent-permissions-add-global-fingerprint fingerprint))
-
-(defun emagent-chat-session-allowed-permissions (session-id)
-  "Return session-scoped permission fingerprints for SESSION-ID."
-  (emagent-permissions-session-fingerprints session-id))
-
-(defun emagent-chat-add-session-permission (session-id fingerprint)
-  "Record FINGERPRINT as session-scoped for SESSION-ID."
-  (emagent-permissions-add-session-fingerprint session-id fingerprint))
-
-(defun emagent-chat-session-auto-approve-p (session-id)
-  "Return non-nil when SESSION-ID has allow-all enabled."
-  (emagent-permissions-session-auto-approve-p session-id))
-
-(defun emagent-chat-set-session-auto-approve (session-id)
-  "Enable allow-all for SESSION-ID."
-  (emagent-permissions-set-session-auto-approve session-id))
 
 (defun emagent-chat--window-at-bottom-p (window)
   "Return non-nil when WINDOW shows the end of the current buffer."
