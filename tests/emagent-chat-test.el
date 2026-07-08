@@ -185,8 +185,8 @@ signal), so finalizing a response containing one does not crash."
 (ert-deftest emagent-chat-test-mode-line-thinking ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
-     (setq emagent-acp--session (make-hash-table :test 'eq))
-     (puthash :busy t emagent-acp--session)
+     (setq emagent-acp--session (emagent-acp--make-state))
+     (setf (emagent-acp-state-busy emagent-acp--session) t)
      (pop-to-buffer buffer)
      (with-current-buffer buffer
        (emagent-test--sync-status)
@@ -216,7 +216,7 @@ session present (the UI no longer pulls from the ACP layer)."
 (ert-deftest emagent-chat-test-mode-line-allow-no-spinner ()
   (emagent-test--with-busy-session
    (lambda ()
-     (puthash :permission-busy t emagent-acp--session)
+     (setf (emagent-acp-state-permission-busy emagent-acp--session) t)
      (emagent-test--sync-status)
      (let* ((parts (emagent-chat--mode-line-strings))
             (head (substring-no-properties (car parts))))
@@ -227,15 +227,15 @@ session present (the UI no longer pulls from the ACP layer)."
 (ert-deftest emagent-chat-test-mode-line-idle-when-busy-clears ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
-     (setq emagent-acp--session (make-hash-table :test 'eq))
-     (puthash :busy t emagent-acp--session)
-     (puthash :ready t emagent-acp--session)
+     (setq emagent-acp--session (emagent-acp--make-state))
+     (setf (emagent-acp-state-busy emagent-acp--session) t)
+     (setf (emagent-acp-state-ready emagent-acp--session) t)
      (with-current-buffer buffer
        (pop-to-buffer buffer)
        (emagent-test--sync-status)
        (emagent-chat--mode-line-recompute)
        (should (string-match-p "^Thinking " emagent-chat--mode-line-head))
-       (puthash :busy nil emagent-acp--session)
+       (setf (emagent-acp-state-busy emagent-acp--session) nil)
        (emagent-test--sync-status)
        (emagent-chat--refresh-mode-line)
        (should (string-match-p "Idle" emagent-chat--mode-line-head))))))
@@ -243,8 +243,8 @@ session present (the UI no longer pulls from the ACP layer)."
 (ert-deftest emagent-chat-test-mode-line-refresh-deferred-when-inactive ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
-     (setq emagent-acp--session (make-hash-table :test 'eq))
-     (puthash :busy t emagent-acp--session)
+     (setq emagent-acp--session (emagent-acp--make-state))
+     (setf (emagent-acp-state-busy emagent-acp--session) t)
      (with-temp-buffer
        (pop-to-buffer (current-buffer))
        (with-current-buffer buffer
@@ -340,8 +340,8 @@ session present (the UI no longer pulls from the ACP layer)."
 (ert-deftest emagent-chat-test-spinner-ensure-running ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
-     (setq emagent-acp--session (make-hash-table :test 'eq))
-     (puthash :busy t emagent-acp--session)
+     (setq emagent-acp--session (emagent-acp--make-state))
+     (setf (emagent-acp-state-busy emagent-acp--session) t)
      (setq emagent-chat--spinner-timer nil
            emagent-chat--spinner-start-time nil)
      (with-current-buffer buffer
@@ -349,11 +349,11 @@ session present (the UI no longer pulls from the ACP layer)."
        (emagent-test--sync-status)
        (emagent-chat--spinner-ensure-running)
        (should emagent-chat--spinner-timer)
-       (puthash :permission-busy t emagent-acp--session)
+       (setf (emagent-acp-state-permission-busy emagent-acp--session) t)
        (emagent-test--sync-status)
        (emagent-chat--spinner-refresh-idle)
        (should-not emagent-chat--spinner-timer)
-       (puthash :permission-busy nil emagent-acp--session)
+       (setf (emagent-acp-state-permission-busy emagent-acp--session) nil)
        (emagent-test--sync-status)
        (emagent-chat--spinner-ensure-running)
        (should emagent-chat--spinner-timer)
@@ -362,8 +362,8 @@ session present (the UI no longer pulls from the ACP layer)."
 (ert-deftest emagent-chat-test-spinner-only-when-active ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
-     (setq emagent-acp--session (make-hash-table :test 'eq))
-     (puthash :busy t emagent-acp--session)
+     (setq emagent-acp--session (emagent-acp--make-state))
+     (setf (emagent-acp-state-busy emagent-acp--session) t)
      (setq emagent-chat--spinner-timer nil)
      (with-temp-buffer
        (pop-to-buffer (current-buffer))
@@ -398,8 +398,8 @@ session present (the UI no longer pulls from the ACP layer)."
   "Spinner keeps animating while the buffer is shown in a non-selected window."
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
-     (setq emagent-acp--session (make-hash-table :test 'eq))
-     (puthash :busy t emagent-acp--session)
+     (setq emagent-acp--session (emagent-acp--make-state))
+     (setf (emagent-acp-state-busy emagent-acp--session) t)
      (setq emagent-chat--spinner-timer nil)
      (with-current-buffer buffer (emagent-test--sync-status))
      (let ((other (get-buffer-create "*emagent-other-window*")))
@@ -418,8 +418,8 @@ session present (the UI no longer pulls from the ACP layer)."
 (ert-deftest emagent-chat-test-spinner-refresh-without-cache ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
-     (setq emagent-acp--session (make-hash-table :test 'eq))
-     (puthash :busy t emagent-acp--session)
+     (setq emagent-acp--session (emagent-acp--make-state))
+     (setf (emagent-acp-state-busy emagent-acp--session) t)
      (with-current-buffer buffer
        (emagent-test--sync-status)
        (setq emagent-chat--mode-line-head nil
@@ -1365,8 +1365,8 @@ bracket must flush once the following non-`(' text confirms it is not a link."
 (ert-deftest emagent-chat-test-btw-finalizes-when-busy ()
   (with-temp-buffer
     (setq emagent-acp--session (emagent-test--make-acp-state nil (current-buffer)))
-    (puthash :busy t emagent-acp--session)
-    (puthash :ready t emagent-acp--session)
+    (setf (emagent-acp-state-busy emagent-acp--session) t)
+    (setf (emagent-acp-state-ready emagent-acp--session) t)
     (let ((sent nil)
           (finalized nil))
       (emagent-test--with-mocks
@@ -1382,7 +1382,7 @@ bracket must flush once the following non-`(' text confirms it is not a link."
 (ert-deftest emagent-chat-test-btw-sends-immediately-when-idle ()
   (with-temp-buffer
     (setq emagent-acp--session (emagent-test--make-acp-state nil (current-buffer)))
-    (puthash :busy nil emagent-acp--session)
+    (setf (emagent-acp-state-busy emagent-acp--session) nil)
     (let ((sent nil)
           (finalized nil))
       (emagent-test--with-mocks
@@ -1401,15 +1401,15 @@ bracket must flush once the following non-`(' text confirms it is not a link."
    (lambda (buffer _dir)
      (with-current-buffer buffer
        (setq emagent-acp--session (emagent-test--make-acp-state nil buffer))
-       (puthash :busy t emagent-acp--session)
-       (puthash :ready t emagent-acp--session)
-       (puthash :prompt-generation 0 emagent-acp--session)
-       (puthash :cb-finish #'emagent-chat-finish-assistant emagent-acp--session)
+       (setf (emagent-acp-state-busy emagent-acp--session) t)
+       (setf (emagent-acp-state-ready emagent-acp--session) t)
+       (setf (emagent-acp-state-prompt-generation emagent-acp--session) 0)
+       (setf (emagent-acp-state-cb-finish emagent-acp--session) #'emagent-chat-finish-assistant)
        (goto-char (point-max))
        (emagent-chat--begin-response (point))
        (emagent-chat-begin-thought)
        (emagent-chat-append-thought "weighing options")
-       (puthash :assistant-text "partial answer" emagent-acp--session)
+       (setf (emagent-acp-state-assistant-text emagent-acp--session) "partial answer")
        (let ((inhibit-message t))
          (emagent-acp-interrupt))
        (let ((text (substring-no-properties (buffer-string))))
@@ -1423,14 +1423,14 @@ bracket must flush once the following non-`(' text confirms it is not a link."
    (lambda (buffer _dir)
      (with-current-buffer buffer
        (setq emagent-acp--session (emagent-test--make-acp-state nil buffer))
-       (puthash :busy t emagent-acp--session)
-       (puthash :ready t emagent-acp--session)
-       (puthash :prompt-generation 0 emagent-acp--session)
-       (puthash :cb-finish #'emagent-chat-finish-assistant emagent-acp--session)
+       (setf (emagent-acp-state-busy emagent-acp--session) t)
+       (setf (emagent-acp-state-ready emagent-acp--session) t)
+       (setf (emagent-acp-state-prompt-generation emagent-acp--session) 0)
+       (setf (emagent-acp-state-cb-finish emagent-acp--session) #'emagent-chat-finish-assistant)
        (goto-char (point-max))
        (emagent-chat--begin-response (point))
-       (puthash :thought-text "internal reasoning" emagent-acp--session)
-       (puthash :assistant-text "partial answer" emagent-acp--session)
+       (setf (emagent-acp-state-thought-text emagent-acp--session) "internal reasoning")
+       (setf (emagent-acp-state-assistant-text emagent-acp--session) "partial answer")
        (let ((inhibit-message t))
          (emagent-acp-interrupt))
        (let ((text (substring-no-properties (buffer-string))))

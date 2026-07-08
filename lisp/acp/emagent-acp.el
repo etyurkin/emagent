@@ -133,7 +133,7 @@ Choices:
   "Set the ACP model for the current emagent session."
   (interactive)
   (let* ((state (emagent-acp--session))
-         (session-id (map-elt state :session-id))
+         (session-id (emagent-acp-state-session-id state))
          (choices (emagent-acp--model-choices state nil))
          (labels (mapcar #'car choices))
          (selection (emagent-acp--read-labeled-choice

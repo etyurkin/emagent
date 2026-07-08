@@ -48,7 +48,7 @@
 
 (defun emagent-acp--provider-symbol (state)
   "Return the provider symbol for STATE (`cursor' or `claude')."
-  (or (map-elt state :provider)
+  (or (emagent-acp-state-provider state)
       (cl-loop for sym being the hash-keys of emagent-acp--provider-specs
                for detect = (plist-get (gethash sym emagent-acp--provider-specs) :detect)
                when (and detect (funcall detect state))

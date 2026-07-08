@@ -43,7 +43,7 @@
 (defun emagent-acp-cursor--enrich-tool-call (state update)
   "Enrich UPDATE from Cursor store.db when rawInput is empty."
   (if (fboundp 'emagent-cursor-enrich-tool-call-update)
-      (emagent-cursor-enrich-tool-call-update (map-elt state :session-id) update)
+      (emagent-cursor-enrich-tool-call-update (emagent-acp-state-session-id state) update)
     update))
 
 (defun emagent-acp-cursor--defer-tool-call-p (_state update)
@@ -53,35 +53,35 @@
 
 (defun emagent-acp-cursor--tool-resolve-active-p (state)
   "Return non-nil while Cursor store.db tool-call lookups are pending."
-  (or (map-elt state :tool-resolve-worker)
-      (map-elt state :tool-resolve-queue)))
+  (or (emagent-acp-state-tool-resolve-worker state)
+      (emagent-acp-state-tool-resolve-queue state)))
 
 (defun emagent-acp-cursor--reset-tool-resolve (state)
   "Clear Cursor tool-call resolve queue state in STATE."
-  (map-put! state :tool-resolve-queue nil)
-  (map-put! state :tool-resolve-worker nil)
-  (clrhash (map-elt state :tool-resolve-attempts)))
+  (setf (emagent-acp-state-tool-resolve-queue state) nil)
+  (setf (emagent-acp-state-tool-resolve-worker state) nil)
+  (clrhash (emagent-acp-state-tool-resolve-attempts state)))
 
 (defun emagent-acp-cursor--enqueue-tool-resolve (state id &optional delay)
   "Queue ID for a serialized Cursor store.db lookup."
-  (let ((queue (map-elt state :tool-resolve-queue)))
+  (let ((queue (emagent-acp-state-tool-resolve-queue state)))
     (unless (member id queue)
-      (map-put! state :tool-resolve-queue (append queue (list id)))))
-  (unless (map-elt state :tool-resolve-worker)
+      (setf (emagent-acp-state-tool-resolve-queue state) (append queue (list id)))))
+  (unless (emagent-acp-state-tool-resolve-worker state)
     (emagent-acp-cursor--drain-tool-resolve-queue state delay)))
 
 (defun emagent-acp-cursor--drain-tool-resolve-queue (state &optional delay)
   "Resolve one queued Cursor tool call via `run-at-time'."
-  (unless (map-elt state :tool-resolve-worker)
-    (if-let ((id (car (map-elt state :tool-resolve-queue))))
+  (unless (emagent-acp-state-tool-resolve-worker state)
+    (if-let ((id (car (emagent-acp-state-tool-resolve-queue state))))
         (progn
-          (map-put! state :tool-resolve-worker t)
+          (setf (emagent-acp-state-tool-resolve-worker state) t)
           (run-at-time
            (or delay 0) nil
            (lambda ()
-             (map-put! state :tool-resolve-worker nil)
-             (map-put! state :tool-resolve-queue
-                         (cdr (map-elt state :tool-resolve-queue)))
+             (setf (emagent-acp-state-tool-resolve-worker state) nil)
+             (setf (emagent-acp-state-tool-resolve-queue state)
+                         (cdr (emagent-acp-state-tool-resolve-queue state)))
              (let ((retry-delay (emagent-acp-cursor--resolve-tool-from-store state id)))
                (if retry-delay
                    (emagent-acp-cursor--drain-tool-resolve-queue state retry-delay)
@@ -94,9 +94,9 @@
 
 (defun emagent-acp-cursor--resolve-tool-from-store (state id)
   "Look up tool-call ID in Cursor store.db; return retry delay or nil when done."
-  (when-let* ((pending-table (map-elt state :tool-call-pending))
+  (when-let* ((pending-table (emagent-acp-state-tool-call-pending state))
               (merged (gethash id pending-table))
-              (session-id (map-elt state :session-id))
+              (session-id (emagent-acp-state-session-id state))
               (fboundp 'emagent-cursor-enrich-tool-call-update))
     (let* ((enriched (emagent-cursor-enrich-tool-call-update session-id merged))
            (merged (if (equal enriched merged) merged
@@ -104,7 +104,7 @@
            (label (emagent-acp--tool-call-label merged))
            (status (map-elt merged 'status))
            (kind (map-elt merged 'kind))
-           (attempts-table (map-elt state :tool-resolve-attempts))
+           (attempts-table (emagent-acp-state-tool-resolve-attempts state))
            (attempts (gethash id attempts-table 0)))
       (cond
        ((emagent-acp--tool-call-meaningful-detail-p merged)
@@ -120,9 +120,9 @@
         nil)
        (t
         (puthash id (1+ attempts) attempts-table)
-        (let ((queue (map-elt state :tool-resolve-queue)))
+        (let ((queue (emagent-acp-state-tool-resolve-queue state)))
           (unless (member id queue)
-            (map-put! state :tool-resolve-queue (append queue (list id)))))
+            (setf (emagent-acp-state-tool-resolve-queue state) (append queue (list id)))))
         (* emagent-acp-cursor--tool-resolve-base-delay (expt 2 attempts)))))))
 
 (defun emagent-acp-cursor--generic-title-p (title)

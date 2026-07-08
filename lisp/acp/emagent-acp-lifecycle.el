@@ -54,8 +54,8 @@ grants full plan access (including Auto model) to this ACP session."
                               (title . "Emacs Emagent")
                               (version . "1.0.2"))))
    :on-success (lambda (response)
-                 (map-put! state :initialized t)
-                 (map-put! state :mcp-http (emagent-acp--mcp-http-capable-p response))
+                 (setf (emagent-acp-state-initialized state) t)
+                 (setf (emagent-acp-state-mcp-http state) (emagent-acp--mcp-http-capable-p response))
                  (emagent-acp--infer-external-tool-gate-from-agent state)
                  (emagent-acp--infer-external-tool-gate-from-initialize-response state response)
                  (emagent-acp--maybe-log-external-tool-gate-proactive state)
@@ -80,8 +80,8 @@ grants full plan access (including Auto model) to this ACP session."
     (and value (not (eq value :false)) (not (eq value :json-false)))))
 
 (cl-defun emagent-acp--session-ready (&key state session-id on-ready resumed)
-  (map-put! state :session-id session-id)
-  (map-put! state :ready t)
+  (setf (emagent-acp-state-session-id state) session-id)
+  (setf (emagent-acp-state-ready state) t)
   (emagent-acp--persist-session-id state session-id)
   (emagent-acp--hydrate-session-permissions state session-id)
   (emagent-tools-set-project-directory (emagent-acp--session-cwd state))
@@ -103,7 +103,7 @@ grants full plan access (including Auto model) to this ACP session."
    :state state
    :request (emagent-acp-make-session-new-request
              :cwd (emagent-acp--session-cwd state)
-             :mcp-servers (emagent-mcp-session-servers (map-elt state :mcp-http)
+             :mcp-servers (emagent-mcp-session-servers (emagent-acp-state-mcp-http state)
                                                        (emagent-acp--chat-buffer state))
              :meta `((systemPrompt . ((append . ,(emagent-acp--session-system-prompt
                                                   compressed-context))))))
@@ -123,17 +123,17 @@ grants full plan access (including Auto model) to this ACP session."
 
 (cl-defun emagent-acp--load-session (&key state session-id on-ready)
   (emagent-acp--progress state "resuming session…")
-  (map-put! state :replaying-history t)
+  (setf (emagent-acp-state-replaying-history state) t)
   (emagent-acp--send-request
    :state state
    :request (emagent-acp-make-session-load-request
              :session-id session-id
              :cwd (emagent-acp--session-cwd state)
-             :mcp-servers (emagent-mcp-session-servers (map-elt state :mcp-http)
+             :mcp-servers (emagent-mcp-session-servers (emagent-acp-state-mcp-http state)
                                                        (emagent-acp--chat-buffer state))
              :meta `((systemPrompt . ((append . ,(emagent-acp--system-prompt))))))
    :on-success (lambda (response)
-                 (map-put! state :replaying-history nil)
+                 (setf (emagent-acp-state-replaying-history state) nil)
                  (unless (fboundp 'emagent-acp--configure-model)
                    (require 'emagent-acp-model))
                  (emagent-acp--configure-model
@@ -143,7 +143,7 @@ grants full plan access (including Auto model) to this ACP session."
                   :on-ready on-ready
                   :resumed t))
    :on-failure (lambda (_error _raw)
-                 (map-put! state :replaying-history nil)
+                 (setf (emagent-acp-state-replaying-history state) nil)
                  (emagent-acp--progress state "resume failed, creating session…")
                  (when-let ((buf (emagent-acp--chat-buffer state)))
                    (with-current-buffer buf
@@ -175,9 +175,9 @@ CALLBACKS is an alist of rendering callbacks keyed by:
     (setq emagent-acp--session (emagent-acp--make-state :client client
                                                         :chat-buffer chat-buffer
                                                         :on-reveal on-reveal))
-    (map-put! emagent-acp--session :provider (or emagent-chat-provider 'cursor))
+    (setf (emagent-acp-state-provider emagent-acp--session) (or emagent-chat-provider 'cursor))
     (dolist (cb callbacks)
-      (map-put! emagent-acp--session (car cb) (cdr cb)))
+      (emagent-acp--set-callback emagent-acp--session (car cb) (cdr cb)))
     (emagent-mcp-register-session :token (emagent-mcp-buffer-token)
                                   :cwd (emagent-chat--session-directory)
                                   :buffer chat-buffer
