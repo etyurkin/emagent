@@ -772,6 +772,21 @@ same markup outside the block is converted."
     (should (string-match-p "^## not a heading" out))
     (should (string-match-p "^\\* not a bullet" out))))
 
+(ert-deftest emagent-chat-test-markup-preserves-code-links-and-sentences ()
+  "Markdown-link and sentence-spacing transforms also skip src-block interiors."
+  (let ((out (emagent-chat--convert-agent-markup
+              (concat "See [docs](http://x) and note path.Join.\n\n"
+                      "```go\n"
+                      "y = arr[i](fn)\n"
+                      "call p.Do done.Next\n"
+                      "```"))))
+    ;; Prose: link converted, sentence spaced.
+    (should (string-match-p "\\[\\[http://x\\]\\[docs\\]\\]" out))
+    (should-not (string-match-p "note path.Join" out)) ; spaced to "path. Join"
+    ;; Code interior: array-index-then-call and glued sentence untouched.
+    (should (string-match-p "arr\\[i\\](fn)" out))
+    (should (string-match-p "done.Next" out))))
+
 (ert-deftest emagent-chat-test-demote-preserves-code-stars ()
   "Heading demotion skips org-star lines inside src blocks."
   (let ((out (emagent-chat--demote-response-headings
