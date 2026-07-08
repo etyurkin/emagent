@@ -50,7 +50,9 @@
 (defun emagent-chat--table-row-p (line)
   "Return non-nil when LINE looks like an org/markdown table row."
   (let ((trimmed (string-trim line)))
-    (and (not (string-empty-p trimmed))
+    ;; Require at least two chars so a lone "|" is not both prefix and suffix;
+    ;; callers do (substring trimmed 1 -1), which signals on a 1-char string.
+    (and (>= (length trimmed) 2)
          (string-prefix-p "|" trimmed)
          (string-suffix-p "|" trimmed))))
 

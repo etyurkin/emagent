@@ -96,6 +96,14 @@
     (should (= (length fixed) 3))
     (should (emagent-chat--table-hline-p (nth 1 fixed)))))
 
+(ert-deftest emagent-chat-test-lone-pipe-not-table ()
+  "A lone \"|\" must not be treated as a table row (substring 1 -1 would
+signal), so finalizing a response containing one does not crash."
+  (should-not (emagent-chat--table-row-p "|"))
+  (should-not (emagent-chat--table-row-p " | "))
+  ;; Full conversion over content with a lone pipe must not signal.
+  (should (stringp (emagent-chat--convert-agent-markup "before\n|\nafter"))))
+
 ;;;; Spinner
 
 (ert-deftest emagent-chat-test-spinner-frame-count ()
