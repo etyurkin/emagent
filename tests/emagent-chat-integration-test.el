@@ -48,6 +48,30 @@
          ;; The later exchange must survive finalization.
          (should (string-match-p "LATER-MARKER" text)))))))
 
+(ert-deftest emagent-chat-integration-test-streamed-code-block-preserved ()
+  "Streaming a completed code block must not rewrite its interior backticks or
+double-stars, while inline markup in surrounding prose is still converted."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (let ((at (emagent-chat--insert-user-heading-with-text "q")))
+         (emagent-chat--begin-response at)
+         (emagent-chat-append-assistant
+          (concat "Use `x` and a**b.\n\n"
+                  "```python\n"
+                  "y = `z`\n"
+                  "w = a**b\n"
+                  "```\n\n"
+                  "Done `now`.")))
+       (let ((text (substring-no-properties (buffer-string))))
+         ;; Prose inline code converted.
+         (should (string-match-p "Use =x=" text))
+         (should (string-match-p "Done =now=" text))
+         ;; Code interior preserved verbatim.
+         (should (string-match-p "y = `z`" text))
+         (should (string-match-p "w = a\\*\\*b" text)))))))
+
 (ert-deftest emagent-chat-integration-test-fail-assistant ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)

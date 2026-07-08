@@ -1095,15 +1095,21 @@ buffer shows formatted org while the response is still arriving."
                                            text)
                                  text))
                      (result (emagent-chat--split-fences combined))
-                     (safe (let ((case-fold-search nil))
-                             (replace-regexp-in-string
-                              "`\\([^`\n]+\\)`" "=\\1="
-                              (replace-regexp-in-string
-                               "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*"
-                               (replace-regexp-in-string
-                                "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
-                                "[[\\2][\\1]]"
-                                (car result))))))
+                     ;; Apply inline conversions only outside completed src
+                     ;; blocks: the safe portion may contain #+BEGIN_SRC blocks
+                     ;; whose interiors must not be rewritten (e.g. `x` or a**b).
+                     (safe (emagent-chat--map-outside-src-blocks
+                            (lambda (s)
+                              (let ((case-fold-search nil))
+                                (replace-regexp-in-string
+                                 "`\\([^`\n]+\\)`" "=\\1="
+                                 (replace-regexp-in-string
+                                  "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*"
+                                  (replace-regexp-in-string
+                                   "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
+                                   "[[\\2][\\1]]"
+                                   s)))))
+                            (car result)))
                      (existing (emagent-chat--response-body-bounds))
                      (insert-at
                       (cond
