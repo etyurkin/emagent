@@ -96,6 +96,32 @@ exchange's heading, so the region is bounded there rather than at point-max."
          (should (string-match-p "revised" text))
          (should (string-match-p "LATER" text)))))))
 
+(ert-deftest emagent-chat-integration-test-reasoning-then-response-separated ()
+  "Reasoning streams into `** Thinking' and the answer into `** Response'; once
+the Response headline exists the Thinking tail is read from the owned marker.
+Reasoning text must not leak into the Response body and vice versa."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "planning the approach")
+          (emagent-chat-append-assistant "the answer")
+          ;; Response headline now exists → owned content marker is set.
+          (should (markerp emagent-chat--response-content-marker))
+          (let* ((text (substring-no-properties (buffer-string)))
+                 (thinking-at (string-match "\\*\\* Thinking" text))
+                 (response-at (string-match "\\*\\* Response" text))
+                 (reasoning-at (string-match "planning the approach" text))
+                 (answer-at (string-match "the answer" text)))
+            (should (and thinking-at response-at reasoning-at answer-at))
+            ;; Reasoning sits under Thinking (before Response); answer under Response.
+            (should (< thinking-at reasoning-at response-at))
+            (should (< response-at answer-at)))))))))
+
 (ert-deftest emagent-chat-integration-test-streamed-code-block-preserved ()
   "Streaming a completed code block must not rewrite its interior backticks or
 double-stars, while inline markup in surrounding prose is still converted."

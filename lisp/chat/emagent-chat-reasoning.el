@@ -33,12 +33,23 @@ locate the headline by search and cache it."
 (defun emagent-chat--thinking-content-end (begin limit)
   "Return where the Thinking content ends after BEGIN, before LIMIT.
 
-That is the start of the `** Response' headline when present, otherwise LIMIT."
-  (save-excursion
-    (goto-char begin)
-    (if (re-search-forward emagent-chat--response-headline-re limit t)
-        (match-beginning 0)
-      limit)))
+That is the start of the `** Response' headline when present, otherwise LIMIT.
+Uses the owned `emagent-chat--response-content-marker' (the Response headline
+sits on the line just above it) so it does not scan to LIMIT for a Response
+headline that has not been created yet — that scan was O(reasoning^2) while
+reasoning streamed with no Response below."
+  (if (and emagent-chat--response-content-marker
+           (marker-position emagent-chat--response-content-marker)
+           (< begin (marker-position emagent-chat--response-content-marker)))
+      ;; Response headline exists (owned marker sits on the line below it).
+      (save-excursion
+        (goto-char emagent-chat--response-content-marker)
+        (forward-line -1)
+        (line-beginning-position))
+    ;; No Response headline: reasoning owns the marker whenever the headline is
+    ;; created, so a nil marker in this streaming path means Thinking runs to
+    ;; the end of the region.
+    limit))
 
 (defun emagent-chat--insert-reasoning-scaffold ()
   "Insert an empty `** Thinking' subsection at the response body start."
