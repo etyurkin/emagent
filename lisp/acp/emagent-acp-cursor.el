@@ -14,6 +14,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'emagent-acp-state)
 (require 'map)
 (require 'emagent-acp-provider)
 (require 'emagent-acp-gate)

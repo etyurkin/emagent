@@ -15,6 +15,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'emagent-acp-state)
 (require 'map)
 (require 'emagent-log)
 (require 'emagent-acp-custom)
