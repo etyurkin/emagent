@@ -31,7 +31,7 @@
 
 (defun emagent-acp-busy-p ()
   "Return non-nil when the current buffer's ACP session is processing a prompt."
-  (and emagent-acp--session (map-elt emagent-acp--session :busy)))
+  (and emagent-acp--session (emagent-acp-state-busy emagent-acp--session)))
 
 (defun emagent-acp-waiting-permission-p ()
   "Return non-nil while permission requests are queued or being answered."
@@ -40,24 +40,24 @@
 
 (defun emagent-acp-ready-p ()
   "Return non-nil when the current buffer's ACP session is connected and idle."
-  (and emagent-acp--session (map-elt emagent-acp--session :ready)))
+  (and emagent-acp--session (emagent-acp-state-ready emagent-acp--session)))
 
 (defun emagent-acp-current-tool ()
   "Return the name of the tool currently running, or nil."
-  (and emagent-acp--session (map-elt emagent-acp--session :current-tool)))
+  (and emagent-acp--session (emagent-acp-state-current-tool emagent-acp--session)))
 
 (defun emagent-acp-current-tool-kind ()
   "Return the kind of the running tool (\"read\", \"write\", \"execute\"), or nil."
-  (and emagent-acp--session (map-elt emagent-acp--session :current-tool-kind)))
+  (and emagent-acp--session (emagent-acp-state-current-tool-kind emagent-acp--session)))
 
 (defun emagent-acp-agent-rss ()
   "Return the agent process RSS in MB, or nil."
-  (and emagent-acp--session (map-elt emagent-acp--session :agent-rss)))
+  (and emagent-acp--session (emagent-acp-state-agent-rss emagent-acp--session)))
 
 (defun emagent-acp-context-usage ()
   "Return (USED . SIZE) context token counts for the current session, or nil."
   (when-let* ((state emagent-acp--session)
-              (usage (map-elt state :usage))
+              (usage (emagent-acp-state-usage state))
               (used (map-elt usage :context-used))
               (size (map-elt usage :context-size)))
     (cons used size)))
@@ -67,15 +67,15 @@
 Cursor does not expose context-window figures over ACP, so emagent has no data
 to compute a percentage and the mode line shows `ctx:n/a' instead."
   (and emagent-acp--session
-       (or (map-elt emagent-acp--session :busy)
-           (map-elt emagent-acp--session :ready))
-       (eq (or (map-elt emagent-acp--session :provider) 'cursor) 'cursor)))
+       (or (emagent-acp-state-busy emagent-acp--session)
+           (emagent-acp-state-ready emagent-acp--session))
+       (eq (or (emagent-acp-state-provider emagent-acp--session) 'cursor) 'cursor)))
 
 (defun emagent-acp-external-tool-gate-reasons ()
   "Return external tool-gate reason symbols for the current session, or nil.
 See `emagent-acp-external-tool-gate-hints'."
   (and emagent-acp--session
-       (map-elt emagent-acp--session :external-tool-gate-reasons)))
+       (emagent-acp-state-external-tool-gate-reasons emagent-acp--session)))
 
 ;;; -------------------------------------------------------------------------
 ;;; Session utility helpers
@@ -87,7 +87,7 @@ See `emagent-acp-external-tool-gate-hints'."
 A killed buffer must not be returned: timers and callbacks still hold STATE
 after the user kills the chat buffer, and `with-current-buffer' on a dead
 buffer signals \"Selecting deleted buffer\"."
-  (let ((buf (map-elt state :chat-buffer)))
+  (let ((buf (emagent-acp-state-chat-buffer state)))
     (when (buffer-live-p buf)
       buf)))
 
@@ -126,9 +126,9 @@ buffer signals \"Selecting deleted buffer\"."
 
 (defun emagent-acp--maybe-recover-stall (state)
   "Unstick a session that finished on the wire but left the buffer open."
-  (when (and state (map-elt state :ready) (not (map-elt state :busy)))
+  (when (and state (emagent-acp-state-ready state) (not (emagent-acp-state-busy state)))
     (emagent-acp--maybe-complete-deferred-prompt state)
-    (when (map-elt state :permission-queue)
+    (when (emagent-acp-state-permission-queue state)
       (emagent-acp--drain-permission-queue state))))
 
 (defun emagent-acp--status-snapshot (state)
@@ -137,24 +137,24 @@ buffer signals \"Selecting deleted buffer\"."
 Built entirely from STATE so it does not depend on the current buffer; the UI
 renders from this snapshot instead of pulling session state back out of the ACP
 layer (see `emagent-chat-set-status')."
-  (let ((usage (map-elt state :usage)))
-    (list :busy (and (map-elt state :busy) t)
+  (let ((usage (emagent-acp-state-usage state)))
+    (list :busy (and (emagent-acp-state-busy state) t)
           :waiting-permission (and (emagent-acp--permission-pending-p state) t)
-          :ready (and (map-elt state :ready) t)
-          :prompt-finishing (and (map-elt state :prompt-finishing) t)
-          :tool (map-elt state :current-tool)
-          :tool-kind (map-elt state :current-tool-kind)
-          :rss (map-elt state :agent-rss)
+          :ready (and (emagent-acp-state-ready state) t)
+          :prompt-finishing (and (emagent-acp-state-prompt-finishing state) t)
+          :tool (emagent-acp-state-current-tool state)
+          :tool-kind (emagent-acp-state-current-tool-kind state)
+          :rss (emagent-acp-state-agent-rss state)
           :ctx-usage (when-let ((used (and usage (map-elt usage :context-used)))
                                 (size (map-elt usage :context-size)))
                        (cons used size))
-          :ctx-unavailable (and (or (map-elt state :busy) (map-elt state :ready))
-                                (eq (or (map-elt state :provider) 'cursor) 'cursor)))))
+          :ctx-unavailable (and (or (emagent-acp-state-busy state) (emagent-acp-state-ready state))
+                                (eq (or (emagent-acp-state-provider state) 'cursor) 'cursor)))))
 
 (defun emagent-acp--refresh-mode-line (state)
   (emagent-acp--maybe-recover-stall state)
   (when-let ((buffer (emagent-acp--chat-buffer state))
-             (cb (map-elt state :cb-status)))
+             (cb (emagent-acp-state-cb-status state)))
     (let ((snapshot (emagent-acp--status-snapshot state)))
       (with-current-buffer buffer
         (funcall cb snapshot)))))
@@ -164,12 +164,12 @@ layer (see `emagent-chat-set-status')."
 ;;; -------------------------------------------------------------------------
 
 (defun emagent-acp--usage-state (state)
-  (or (map-elt state :usage)
+  (or (emagent-acp-state-usage state)
       (let ((usage (make-hash-table :test 'eq)))
         (puthash :context-used nil usage)
         (puthash :context-size nil usage)
         (puthash :total-tokens 0 usage)
-        (map-put! state :usage usage)
+        (setf (emagent-acp-state-usage state) usage)
         usage)))
 
 (defun emagent-acp--save-usage-from-response (state emagent-acp-usage)
@@ -186,7 +186,7 @@ layer (see `emagent-chat-set-status')."
                          (map-elt emagent-acp-usage 'contextLimit)
                          (map-elt emagent-acp-usage 'contextWindow))))
       (map-put! usage :context-size size))
-    (map-put! state :usage usage)
+    (setf (emagent-acp-state-usage state) usage)
     (emagent-acp--refresh-mode-line state)))
 
 (defun emagent-acp--update-usage-from-notification (state emagent-acp-update)
@@ -204,7 +204,7 @@ layer (see `emagent-chat-set-status')."
                          (map-elt emagent-acp-update 'contextWindow)
                          (map-elt emagent-acp-update 'maxTokens))))
       (map-put! usage :context-size size))
-    (map-put! state :usage usage)
+    (setf (emagent-acp-state-usage state) usage)
     (emagent-acp--refresh-mode-line state)))
 
 (provide 'emagent-acp-usage)

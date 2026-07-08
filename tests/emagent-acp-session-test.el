@@ -37,7 +37,7 @@
     (let ((emagent-acp-external-tool-gate-hints t))
       (emagent-acp--infer-external-tool-gate-from-agent state)
       (should (string-match-p "cursor-agent" (emagent-acp--agent-launch-string state)))
-      (should (member 'cursor-agent-cli (map-elt state :external-tool-gate-reasons))))))
+      (should (member 'cursor-agent-cli (emagent-acp-state-external-tool-gate-reasons state))))))
 
 (ert-deftest emagent-acp-session-test-format-external-tool-gate-hint ()
   (let ((msg (emagent-acp--format-external-tool-gate-proactive-hint
@@ -50,7 +50,7 @@
     (emagent-acp--detect-external-refusal-in-text
      state "permission to run tool was denied")
     (should (memq 'observed-refusal-in-stream
-                  (map-elt state :external-tool-gate-reasons)))))
+                  (emagent-acp-state-external-tool-gate-reasons state)))))
 
 ;;;; Permission helpers
 
@@ -111,12 +111,12 @@ request is cancelled rather than escalated to a permanent agent-side grant."
   "The turn phase derives idle/streaming/finalizing/done from the turn flags."
   (let ((state (emagent-test--make-acp-state)))
     (should (eq 'idle (emagent-acp--turn-phase state)))
-    (map-put! state :busy t)
+    (setf (emagent-acp-state-busy state) t)
     (should (eq 'streaming (emagent-acp--turn-phase state)))
-    (map-put! state :busy nil)
-    (map-put! state :prompt-finishing t)
+    (setf (emagent-acp-state-busy state) nil)
+    (setf (emagent-acp-state-prompt-finishing state) t)
     (should (eq 'finalizing (emagent-acp--turn-phase state)))
-    (map-put! state :prompt-finalized t)
+    (setf (emagent-acp-state-prompt-finalized state) t)
     (should (eq 'done (emagent-acp--turn-phase state)))))
 
 (ert-deftest emagent-acp-session-test-permission-auto-allowed-session ()
@@ -124,7 +124,7 @@ request is cancelled rather than escalated to a permanent agent-side grant."
       (((symbol-function 'emagent-permissions-global-fingerprints) (lambda () nil))
        ((symbol-function 'emagent-permissions-session-fingerprints) (lambda (_) nil)))
     (let ((state (emagent-test--make-acp-state)))
-      (map-put! state :permission-auto-allow '("execute:make"))
+      (setf (emagent-acp-state-permission-auto-allow state) '("execute:make"))
       (should (emagent-acp--permission-auto-allowed-p state "execute:make" nil))
       (should-not (emagent-acp--permission-auto-allowed-p state "execute:git" nil)))))
 
@@ -158,7 +158,7 @@ request is cancelled rather than escalated to a permanent agent-side grant."
         (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
         (should (string= "allow_once" sent-id))
         (should (member "execute:make:test" (emagent-permissions-global-fingerprints)))
-        (should-not (member "execute:make:test" (or (map-elt state :permission-auto-allow) nil)))))))
+        (should-not (member "execute:make:test" (or (emagent-acp-state-permission-auto-allow state) nil)))))))
 
 (ert-deftest emagent-acp-session-test-permission-allow-session-persists-by-session-id ()
   (let ((perms-dir (emagent-test--temp-directory)))
@@ -167,16 +167,16 @@ request is cancelled rather than escalated to a permanent agent-side grant."
       (let* ((state (emagent-test--make-acp-state))
              (session-id "sess-abc")
              (fingerprint "execute:make"))
-        (puthash :session-id session-id state)
+        (setf (emagent-acp-state-session-id state) session-id)
         (emagent-acp--permission-apply-choice state fingerprint nil :allow-session)
         (should (equal '("execute:make")
                        (emagent-permissions-session-fingerprints session-id)))
         (should-not (emagent-permissions-session-fingerprints "other-session"))
         (setq emagent-acp--session nil)
         (let ((fresh (emagent-test--make-acp-state)))
-          (puthash :session-id session-id fresh)
+          (setf (emagent-acp-state-session-id fresh) session-id)
           (emagent-acp--hydrate-session-permissions fresh session-id)
-          (should (member fingerprint (map-elt fresh :permission-auto-allow))))))))
+          (should (member fingerprint (emagent-acp-state-permission-auto-allow fresh))))))))
 
 (ert-deftest emagent-acp-session-test-permission-allow-all-persists-by-session-id ()
   (let ((perms-dir (emagent-test--temp-directory)))
@@ -184,13 +184,13 @@ request is cancelled rather than escalated to a permanent agent-side grant."
           (emagent-permissions--cache (make-hash-table :test 'equal)))
       (let* ((state (emagent-test--make-acp-state))
              (session-id "sess-all"))
-        (puthash :session-id session-id state)
+        (setf (emagent-acp-state-session-id state) session-id)
         (emagent-acp--permission-apply-choice state nil nil :allow-all)
         (should (emagent-permissions-session-auto-approve-p session-id))
         (setq emagent-acp--session nil)
         (let ((fresh (emagent-test--make-acp-state)))
           (emagent-acp--hydrate-session-permissions fresh session-id)
-          (should (map-elt fresh :session-auto-approve)))))))
+          (should (emagent-acp-state-session-auto-approve fresh)))))))
 
 (ert-deftest emagent-acp-session-test-permission-decision-label ()
   (should (string= "Allow web search? (Allow: Always)"
@@ -236,7 +236,7 @@ request is cancelled rather than escalated to a permanent agent-side grant."
       (should (eq :allow-always
                   (emagent-acp--permission-stored-auto-choice
                    state "tool:Allow web search?" nil)))
-      (map-put! state :session-auto-approve t)
+      (setf (emagent-acp-state-session-auto-approve state) t)
       (should (eq :allow-all
                   (emagent-acp--permission-stored-auto-choice
                    state "tool:Allow web search?" nil))))))
@@ -371,7 +371,7 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
             (lambda (&rest _args) nil)))
         (emagent-acp--on-permission :state state :emagent-acp-request request)
         (should scheduled)
-        (should (= 1 (length (map-elt state :permission-queue))))))))
+        (should (= 1 (length (emagent-acp-state-permission-queue state))))))))
 
 (ert-deftest emagent-acp-session-test-permission-handler-error-cancels ()
   "When the permission handler errors, the popped request is replied to with
@@ -382,7 +382,7 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
                                (options . [((optionId . "allow_once")
                                             (kind . "allow_once"))])))))
          (responses nil))
-    (map-put! state :permission-queue (list request))
+    (setf (emagent-acp-state-permission-queue state) (list request))
     (emagent-test--with-mocks
         (((symbol-function 'emagent-acp--handle-one-permission)
           (lambda (&rest _) (error "boom in handler")))
@@ -393,7 +393,7 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
          ((symbol-function 'emagent-acp--schedule-permission-drain)
           (lambda (&rest _) nil)))
       (emagent-acp--drain-permission-queue-now state)
-      (should (null (map-elt state :permission-busy)))
+      (should (null (emagent-acp-state-permission-busy state)))
       (should (= 1 (length responses)))
       (should (equal "cancelled"
                      (map-nested-elt (car responses) '(:result outcome outcome)))))))
@@ -416,7 +416,7 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
             (lambda (&rest _args) nil)))
         (emagent-acp--on-permission :state state :emagent-acp-request request)
         (should prompted)
-        (should (null (map-elt state :permission-queue)))))))
+        (should (null (emagent-acp-state-permission-queue state)))))))
 
 (ert-deftest emagent-acp-session-test-permission-not-deferred-for-tool-resolve ()
   (let* ((state (emagent-test--make-acp-state))
@@ -426,8 +426,8 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
                                             (kind . "allow_once"))])))))
          (prompted nil))
     (let ((emagent-acp-auto-approve-permissions nil))
-      (map-put! state :tool-resolve-queue '("tool_x"))
-      (map-put! state :tool-resolve-worker t)
+      (setf (emagent-acp-state-tool-resolve-queue state) '("tool_x"))
+      (setf (emagent-acp-state-tool-resolve-worker state) t)
       (emagent-test--with-mocks
           (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
            ((symbol-function 'emagent-acp--agent-launch-string)
@@ -440,7 +440,7 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
             (lambda (&rest _args) nil)))
         (emagent-acp--on-permission :state state :emagent-acp-request request)
         (should prompted)
-        (should (null (map-elt state :permission-queue)))))))
+        (should (null (emagent-acp-state-permission-queue state)))))))
 
 (ert-deftest emagent-acp-session-test-permission-handle-one-prompts ()
   (let* ((state (emagent-test--make-acp-state))
@@ -467,8 +467,8 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
          (prompted nil)
          (responded nil))
     (let ((emagent-acp-auto-approve-permissions t))
-      (map-put! state :permission-queue (list request))
-      (map-put! state :cursor-tool-resolve-queue '("tool_x"))
+      (setf (emagent-acp-state-permission-queue state) (list request))
+      (setf (emagent-acp-state-tool-resolve-queue state) '("tool_x"))
       (emagent-test--with-mocks
           (((symbol-function 'emagent-acp--agent-launch-string)
             (lambda (_s) "cursor-agent acp"))
@@ -481,7 +481,7 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
         (emagent-acp--drain-permission-queue state)
         (should-not prompted)
         (should responded)
-        (should (null (map-elt state :permission-queue)))))))
+        (should (null (emagent-acp-state-permission-queue state)))))))
 
 (ert-deftest emagent-acp-session-test-permission-drains-after-tool-resolve ()
   (let* ((state (emagent-test--make-acp-state))
@@ -491,7 +491,7 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
                                             (kind . "allow_once"))])))))
          (prompted nil))
     (let ((emagent-acp-auto-approve-permissions nil))
-      (map-put! state :permission-queue (list request))
+      (setf (emagent-acp-state-permission-queue state) (list request))
       (emagent-test--with-mocks
           (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
            ((symbol-function 'emagent-acp--agent-launch-string)
@@ -503,7 +503,7 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
            ((symbol-function 'emagent-acp-send-response) (lambda (&rest _args) nil)))
         (emagent-acp-cursor--drain-tool-resolve-queue state)
         (should prompted)
-        (should (null (map-elt state :permission-queue)))))))
+        (should (null (emagent-acp-state-permission-queue state)))))))
 
 (ert-deftest emagent-acp-session-test-permission-prompt-text ()
   (let* ((cmd "emacs --batch -l tests/emagent-test-runner.el 2>&1 | tail -30")
@@ -769,7 +769,7 @@ the emagent gate can show what was edited instead of a bare arrow line."
 (ert-deftest emagent-acp-session-test-cursor-tool-call-deferred-until-detail ()
   (let ((state (emagent-test--make-acp-state))
         (shown nil))
-    (puthash :session-id "sess" state)
+    (setf (emagent-acp-state-session-id state) "sess")
     (emagent-test--with-mocks
         (((symbol-function 'emagent-acp--agent-launch-string)
           (lambda (_state) "cursor-agent acp"))
@@ -780,13 +780,13 @@ the emagent gate can show what was edited instead of a bare arrow line."
       (emagent-acp--on-tool-call
        state '((toolCallId . "tool_x") (title . "Edit") (rawInput . ())))
       (should (null shown))
-      (should (= 1 (hash-table-count (map-elt state :tool-call-pending))))
+      (should (= 1 (hash-table-count (emagent-acp-state-tool-call-pending state))))
       (emagent-acp--ingest-tool-call-request
        state '((toolCallId . "tool_x")
                 (title . "Edit")
                 (rawInput . "{\"path\":\"foo.el\"}")))
       (should (string-match-p "foo.el" shown))
-      (should (= 0 (hash-table-count (map-elt state :tool-call-pending))))
+      (should (= 0 (hash-table-count (emagent-acp-state-tool-call-pending state))))
       (setq shown nil)
       (emagent-acp--on-tool-call
        state '((toolCallId . "tool_y") (title . "Read") (rawInput . ())))
@@ -795,12 +795,12 @@ the emagent gate can show what was edited instead of a bare arrow line."
         (cl-letf (((symbol-function 'emagent-cursor-tool-call-from-store) store))
           (emagent-acp-cursor--resolve-tool-from-store state "tool_y")))
       (should (string-match-p "bar.el" shown))
-      (should (= 0 (hash-table-count (map-elt state :tool-call-pending)))))))
+      (should (= 0 (hash-table-count (emagent-acp-state-tool-call-pending state)))))))
 
 (ert-deftest emagent-acp-session-test-cursor-tool-call-completed-waits-for-store ()
   (let ((state (emagent-test--make-acp-state))
         (shown nil))
-    (puthash :session-id "sess" state)
+    (setf (emagent-acp-state-session-id state) "sess")
     (emagent-test--with-mocks
         (((symbol-function 'emagent-acp--agent-launch-string)
           (lambda (_state) "cursor-agent acp"))
@@ -819,12 +819,12 @@ the emagent gate can show what was edited instead of a bare arrow line."
         (cl-letf (((symbol-function 'emagent-cursor-tool-call-from-store) store))
           (emagent-acp-cursor--resolve-tool-from-store state "tool_z")))
       (should (string-match-p "done.el" shown))
-      (should (= 0 (hash-table-count (map-elt state :tool-call-pending)))))))
+      (should (= 0 (hash-table-count (emagent-acp-state-tool-call-pending state)))))))
 
 (ert-deftest emagent-acp-session-test-cursor-generic-title-stays-hidden ()
   (let ((state (emagent-test--make-acp-state))
         (shown nil))
-    (puthash :session-id "sess" state)
+    (setf (emagent-acp-state-session-id state) "sess")
     (emagent-test--with-mocks
         (((symbol-function 'emagent-acp--agent-launch-string)
           (lambda (_state) "cursor-agent acp"))
@@ -846,11 +846,11 @@ the emagent gate can show what was edited instead of a bare arrow line."
 
 (ert-deftest emagent-acp-session-test-complete-prompt-defers-for-permission ()
   (let ((state (emagent-test--make-acp-state)))
-    (map-put! state :busy t)
-    (map-put! state :permission-queue '((id . "req")))
+    (setf (emagent-acp-state-busy state) t)
+    (setf (emagent-acp-state-permission-queue state) '((id . "req")))
     (emagent-acp--complete-prompt state '((usage . nil)))
-    (should (map-elt state :deferred-complete-response))
-    (should (map-elt state :busy))))
+    (should (emagent-acp-state-deferred-complete-response state))
+    (should (emagent-acp-state-busy state))))
 
 (ert-deftest emagent-acp-session-test-permission-question-line ()
   (let* ((cmd "make test")
@@ -891,7 +891,7 @@ the emagent gate can show what was edited instead of a bare arrow line."
                      (emagent-acp--resolve-model-id state models "gpt-4")))
     (should (string= "auto"
                      (emagent-acp--resolve-model-id state models nil)))
-    (map-put! state :config-options
+    (setf (emagent-acp-state-config-options state)
               `((( :id . "model") (:category . "model")
                  (:current-value . "gpt-4")
                  (:options . (((:value . "gpt-4") (:name . "GPT 4")))))))
@@ -1023,52 +1023,46 @@ the emagent gate can show what was edited instead of a bare arrow line."
   (let ((state (emagent-test--make-acp-state)))
     ;; A turn whose whole output is a transient network error, with no
     ;; content or tool calls, is safe to re-issue.
-    (puthash :assistant-text
-             "Error: RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh"
-             state)
+    (setf (emagent-acp-state-assistant-text state) "Error: RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh")
     (should (emagent-acp--agent-error-only-response-p state))
     ;; A real answer is never re-issued, even if it mentions a network word.
-    (puthash :assistant-text
-             "I finished the task; there was no network error along the way."
-             state)
+    (setf (emagent-acp-state-assistant-text state) "I finished the task; there was no network error along the way.")
     (should-not (emagent-acp--agent-error-only-response-p state))
     ;; An error turn that also did tool work is left alone.
-    (puthash :assistant-text "RetriableError: socket hang up" state)
-    (puthash "call-1" "shell" (map-elt state :tool-call-titles))
+    (setf (emagent-acp-state-assistant-text state) "RetriableError: socket hang up")
+    (puthash "call-1" "shell" (emagent-acp-state-tool-call-titles state))
     (should-not (emagent-acp--agent-error-only-response-p state))
-    (clrhash (map-elt state :tool-call-titles))
+    (clrhash (emagent-acp-state-tool-call-titles state))
     ;; Compression turns are never treated as retriable errors.
-    (puthash :compress-pending t state)
+    (setf (emagent-acp-state-compress-pending state) t)
     (should-not (emagent-acp--agent-error-only-response-p state))))
 
 (ert-deftest emagent-acp-session-test-turn-did-no-work-p ()
   (let ((state (emagent-test--make-acp-state)))
-    (puthash :assistant-text "" state)
+    (setf (emagent-acp-state-assistant-text state) "")
     (should (emagent-acp--turn-did-no-work-p state))
     ;; A tool call means side effects may have happened.
-    (puthash "call-1" "shell" (map-elt state :tool-call-titles))
+    (puthash "call-1" "shell" (emagent-acp-state-tool-call-titles state))
     (should-not (emagent-acp--turn-did-no-work-p state))
-    (clrhash (map-elt state :tool-call-titles))
+    (clrhash (emagent-acp-state-tool-call-titles state))
     ;; Substantial content also counts as work.
-    (puthash :assistant-text (make-string 500 ?x) state)
+    (setf (emagent-acp-state-assistant-text state) (make-string 500 ?x))
     (should-not (emagent-acp--turn-did-no-work-p state))))
 
 (ert-deftest emagent-acp-session-test-turn-hit-transient-error-p ()
   (let ((state (emagent-test--make-acp-state)))
     ;; Detected even when the turn also ran tool calls (unlike error-only).
-    (puthash :assistant-text
-             "Committed and pushed.\n\nError: RetriableError: WritableIterable is closed"
-             state)
-    (puthash "call-1" "shell" (map-elt state :tool-call-titles))
+    (setf (emagent-acp-state-assistant-text state) "Committed and pushed.\n\nError: RetriableError: WritableIterable is closed")
+    (puthash "call-1" "shell" (emagent-acp-state-tool-call-titles state))
     (should (emagent-acp--turn-hit-transient-error-p state))
     ;; This work-turn must NOT be treated as safe-to-replay.
     (should-not (emagent-acp--agent-error-only-response-p state))
     ;; A clean answer is not a transient error.
-    (puthash :assistant-text "All done, pushed successfully." state)
+    (setf (emagent-acp-state-assistant-text state) "All done, pushed successfully.")
     (should-not (emagent-acp--turn-hit-transient-error-p state))
     ;; Compression turns are excluded.
-    (puthash :assistant-text "RetriableError: socket hang up" state)
-    (puthash :compress-pending t state)
+    (setf (emagent-acp-state-assistant-text state) "RetriableError: socket hang up")
+    (setf (emagent-acp-state-compress-pending state) t)
     (should-not (emagent-acp--turn-hit-transient-error-p state))))
 
 (ert-deftest emagent-acp-session-test-prompt-retry-delay ()
@@ -1080,7 +1074,7 @@ the emagent gate can show what was edited instead of a bare arrow line."
 (ert-deftest emagent-acp-session-test-tool-call-displayable-p ()
   (let* ((state (emagent-test--make-acp-state))
          (emagent-acp--tool-call-weak-details '("tool" "Tool" "running" "pending")))
-    (puthash :provider 'cursor state)
+    (setf (emagent-acp-state-provider state) 'cursor)
     (should (emagent-acp--tool-call-displayable-p
              state '((title . "compile") (rawInput . "{\"command\":\"make test\"}"))))
     ;; A meaningful detail is displayable even when it duplicates the title;
@@ -1102,9 +1096,9 @@ the emagent gate can show what was edited instead of a bare arrow line."
                     (params . ((title . "Allow compile?")
                                (options . [((optionId . "allow_once")
                                             (kind . "allow_once"))]))))))
-    (map-put! state :busy t)
-    (map-put! state :deferred-complete-response '((usage . ((totalTokens . 5)))))
-    (map-put! state :permission-queue (list request))
+    (setf (emagent-acp-state-busy state) t)
+    (setf (emagent-acp-state-deferred-complete-response state) '((usage . ((totalTokens . 5)))))
+    (setf (emagent-acp-state-permission-queue state) (list request))
     (let ((emagent-acp-auto-approve-permissions nil))
       (emagent-test--with-mocks
           (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
@@ -1115,8 +1109,8 @@ the emagent gate can show what was edited instead of a bare arrow line."
             (lambda (_state) (setq completed t))))
         (emagent-acp--drain-permission-queue state)
         (should completed)
-        (should-not (map-elt state :busy))
-        (should (null (map-elt state :deferred-complete-response)))))))
+        (should-not (emagent-acp-state-busy state))
+        (should (null (emagent-acp-state-deferred-complete-response state)))))))
 
 (ert-deftest emagent-acp-session-test-permission-question-line-ext ()
   ;; title without tool detail -> strips "Allow " prefix and trailing "?"
@@ -1135,7 +1129,7 @@ the emagent gate can show what was edited instead of a bare arrow line."
                     (params . ((title . "Allow compile?")
                                (options . [((optionId . "allow_once")
                                             (kind . "allow_once"))]))))))
-    (map-put! state :permission-queue (list request))
+    (setf (emagent-acp-state-permission-queue state) (list request))
     (let ((emagent-acp-auto-approve-permissions nil))
       (emagent-test--with-mocks
           (((symbol-function 'run-at-time) #'emagent-test--run-at-time-immediately)
@@ -1143,8 +1137,8 @@ the emagent gate can show what was edited instead of a bare arrow line."
            ((symbol-function 'emagent-acp--handle-one-permission)
             (lambda (&rest _args) (error "simulated permission crash"))))
         (emagent-acp--drain-permission-queue-now state)
-        (should-not (map-elt state :permission-busy))
-        (should (null (map-elt state :permission-queue)))))))
+        (should-not (emagent-acp-state-permission-busy state))
+        (should (null (emagent-acp-state-permission-queue state)))))))
 
 (ert-deftest emagent-acp-session-test-maybe-recover-stall-drains-queue ()
   "maybe-recover-stall' schedules permission drain when queue is nonempty."
@@ -1153,9 +1147,9 @@ the emagent gate can show what was edited instead of a bare arrow line."
                     (params . ((title . "Allow compile?")
                                (options . [((optionId . "allow_once")
                                             (kind . "allow_once"))]))))))
-    (map-put! state :ready t)
-    (map-put! state :busy nil)
-    (map-put! state :permission-queue (list request))
+    (setf (emagent-acp-state-ready state) t)
+    (setf (emagent-acp-state-busy state) nil)
+    (setf (emagent-acp-state-permission-queue state) (list request))
     (let ((emagent-acp-auto-approve-permissions nil)
           (scheduled nil))
       (emagent-test--with-mocks
@@ -1166,7 +1160,7 @@ the emagent gate can show what was edited instead of a bare arrow line."
             (emagent-test--mock-buttons-prompt :allow-once)))
         (emagent-acp--maybe-recover-stall state)
         (should scheduled)
-        (should (null (map-elt state :permission-queue)))))))
+        (should (null (emagent-acp-state-permission-queue state)))))))
 
 (provide 'emagent-acp-session-test)
 

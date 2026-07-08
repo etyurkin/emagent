@@ -18,6 +18,8 @@
   (emagent--register-load-path root))
 
 (require 'emagent-acp-protocol)
+(require 'emagent-acp-state)
+(require 'emagent-acp-usage)
 (require 'emagent-mcp)
 
 (defun emagent-test--temp-file (suffix)
@@ -45,8 +47,8 @@ setting up or mutating the session so the mode line reflects it."
 (defun emagent-test--with-busy-session (fn)
   "Run FN in a temp buffer with a busy ACP session."
   (with-temp-buffer
-    (setq emagent-acp--session (make-hash-table :test 'eq))
-    (puthash :busy t emagent-acp--session)
+    (setq emagent-acp--session (emagent-acp--make-state))
+    (setf (emagent-acp-state-busy emagent-acp--session) t)
     (emagent-test--sync-status)
     (funcall fn)))
 
@@ -74,25 +76,13 @@ setting up or mutating the session so the mode line reflects it."
          args))
 
 (defun emagent-test--make-acp-state (&optional client chat-buffer)
-  "Return a minimal ACP session state hash for integration tests."
-  (let ((state (make-hash-table :test 'eq)))
-    (puthash :client (or client (emagent-test--make-test-client)) state)
-    (puthash :chat-buffer (or chat-buffer (get-buffer-create "*emagent-test-chat*")) state)
-    (puthash :tool-call-titles (make-hash-table :test 'equal) state)
-    (puthash :tool-call-inputs (make-hash-table :test 'equal) state)
-    (puthash :tool-call-labels (make-hash-table :test 'equal) state)
-    (puthash :tool-call-decisions (make-hash-table :test 'equal) state)
-    (puthash :tool-call-pending (make-hash-table :test 'equal) state)
-    (puthash :tool-resolve-queue nil state)
-    (puthash :tool-resolve-worker nil state)
-    (puthash :tool-resolve-attempts (make-hash-table :test 'equal) state)
-    (puthash :cb-tool-call 'emagent-chat-show-tool-call state)
-    (puthash :cb-permission 'emagent-chat-permission-prompt state)
-    (puthash :permission-queue nil state)
-    (puthash :permission-busy nil state)
-    (puthash :permission-drain-timer nil state)
-    (puthash :deferred-complete-response nil state)
-    (puthash :external-tool-gate-reasons nil state)
+  "Return an `emagent-acp-state' for tests, with the display callbacks wired."
+  (let ((state (emagent-acp--make-state
+                :client (or client (emagent-test--make-test-client))
+                :chat-buffer (or chat-buffer
+                                 (get-buffer-create "*emagent-test-chat*")))))
+    (setf (emagent-acp-state-cb-tool-call state) 'emagent-chat-show-tool-call
+          (emagent-acp-state-cb-permission state) 'emagent-chat-permission-prompt)
     state))
 
 (defun emagent-test--push-first-button (&optional buffer)

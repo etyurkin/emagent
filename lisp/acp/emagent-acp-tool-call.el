@@ -89,9 +89,9 @@ because generic names like `grep' collide with agent-native tools."
 
 (defun emagent-acp--emit-tool-call-display (state id kind merged label status)
   "Push TOOL-CALL LABEL to the chat buffer and update session UI."
-  (let* ((labels (map-elt state :tool-call-labels))
+  (let* ((labels (emagent-acp-state-tool-call-labels state))
          (prev (and id labels (gethash id labels)))
-         (decision (and id (when-let ((d (map-elt state :tool-call-decisions)))
+         (decision (and id (when-let ((d (emagent-acp-state-tool-call-decisions state)))
                              (gethash id d))))
          (completed (member status '("completed" "failed")))
          ;; A running or finished call already had its permission granted;
@@ -115,17 +115,17 @@ because generic names like `grep' collide with agent-native tools."
       (unless completed
         (emagent-acp--notify-user state (format "emagent: tool %s" label)))
       (when-let ((buf (emagent-acp--chat-buffer state))
-                 (cb (map-elt state :cb-tool-call)))
+                 (cb (emagent-acp-state-cb-tool-call state)))
         (let ((spec (emagent-acp--tool-call-block-spec merged)))
           (with-current-buffer buf
             (funcall cb id display (car spec) (cdr spec))))))
     (if completed
         (progn
-          (map-put! state :current-tool nil)
-          (map-put! state :current-tool-kind nil))
+          (setf (emagent-acp-state-current-tool state) nil)
+          (setf (emagent-acp-state-current-tool-kind state) nil))
       (when label-changed
-        (map-put! state :current-tool label)
-        (when kind (map-put! state :current-tool-kind kind))
+        (setf (emagent-acp-state-current-tool state) label)
+        (when kind (setf (emagent-acp-state-current-tool-kind state) kind))
         (emagent-acp--schedule-prompt-watchdog state)))
     (when (or label-changed completed)
       (emagent-acp--refresh-mode-line state))))
@@ -544,8 +544,8 @@ such as file paths stay as compact arrow lines."
 (defun emagent-acp--merged-tool-call-update (state update)
   "Return UPDATE merged with stored title/rawInput for STATE."
   (let* ((id (map-elt update 'toolCallId))
-         (titles (map-elt state :tool-call-titles))
-         (inputs (map-elt state :tool-call-inputs))
+         (titles (emagent-acp-state-tool-call-titles state))
+         (inputs (emagent-acp-state-tool-call-inputs state))
          (stored-title (and id titles (gethash id titles)))
          (stored-input (and id inputs (gethash id inputs)))
          (title (or (map-elt update 'title) stored-title))
@@ -567,14 +567,14 @@ such as file paths stay as compact arrow lines."
 
 (defun emagent-acp--on-tool-call (state update)
   "Display or refresh a tool-call line from ACP UPDATE."
-  (unless (map-elt state :replaying-history)
+  (unless (emagent-acp-state-replaying-history state)
     (let* ((update (emagent-acp--provider-enrich-tool-call state update))
            (id (map-elt update 'toolCallId))
            (status (map-elt update 'status))
            (kind (map-elt update 'kind))
            (merged (emagent-acp--merged-tool-call-update state update))
            (label (emagent-acp--tool-call-label merged))
-           (pending-table (map-elt state :tool-call-pending))
+           (pending-table (emagent-acp-state-tool-call-pending state))
            (defer (emagent-acp--provider-defer-tool-call-p state merged))
            (show (and label (not (string-empty-p label)) (not defer)
                         (emagent-acp--tool-call-displayable-p state merged))))
@@ -584,7 +584,7 @@ such as file paths stay as compact arrow lines."
       (when show
         (emagent-acp--emit-tool-call-display state id kind merged label status)
         (when id (remhash id pending-table)))
-      (when (map-elt state :permission-queue)
+      (when (emagent-acp-state-permission-queue state)
         (emagent-acp--drain-permission-queue state)))))
 
 (provide 'emagent-acp-tool-call)

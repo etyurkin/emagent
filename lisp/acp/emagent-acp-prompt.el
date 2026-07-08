@@ -52,10 +52,10 @@
 
 (defun emagent-acp--clear-prompt-watchdog (state)
   "Cancel any pending prompt stall watchdog for STATE."
-  (when-let ((timer (map-elt state :prompt-watchdog-timer)))
+  (when-let ((timer (emagent-acp-state-prompt-watchdog-timer state)))
     (cancel-timer timer))
-  (map-put! state :prompt-watchdog nil)
-  (map-put! state :prompt-watchdog-timer nil))
+  (setf (emagent-acp-state-prompt-watchdog state) nil)
+  (setf (emagent-acp-state-prompt-watchdog-timer state) nil))
 
 (defun emagent-acp--schedule-prompt-watchdog (state)
   "Abort a prompt that stays busy without ACP progress.
@@ -63,84 +63,84 @@
 Cancel any existing watchdog first: this is re-invoked on every displayed tool
 call and permission answer, and without the cancel each call would leak a live
 timer (token-guarded no-ops that still pin STATE for the whole timeout)."
-  (when-let ((old (map-elt state :prompt-watchdog-timer)))
+  (when-let ((old (emagent-acp-state-prompt-watchdog-timer state)))
     (cancel-timer old))
   (let* ((token (cl-gensym "emagent-prompt-watchdog"))
          (timer (run-with-timer
      emagent-acp-watchdog-timeout nil
      (lambda ()
-       (when (and (eq (map-elt state :prompt-watchdog) token)
-                  (map-elt state :busy))
-         (let* ((client (map-elt state :client))
+       (when (and (eq (emagent-acp-state-prompt-watchdog state) token)
+                  (emagent-acp-state-busy state))
+         (let* ((client (emagent-acp-state-client state))
                 (pending (and client (map-elt client :pending-requests))))
            (emagent-log "emagent: prompt stalled (no ACP completion in %ds)"
                         emagent-acp-watchdog-timeout)
            (when pending
              (emagent-log "emagent: pending ACP request count: %d"
                           (length pending)))
-           (if (and (map-elt state :assistant-text)
-                    (not (string-empty-p (map-elt state :assistant-text))))
+           (if (and (emagent-acp-state-assistant-text state)
+                    (not (string-empty-p (emagent-acp-state-assistant-text state))))
                (progn
                  (emagent-log "emagent: prompt stalled; finalizing partial response")
                  (emagent-acp--complete-prompt state nil))
              (emagent-acp--abort-prompt
               state
               "prompt stalled — reconnect with M-x emagent-claude-start or kill and reopen the buffer"))))))))
-  (map-put! state :prompt-watchdog token)
-  (map-put! state :prompt-watchdog-timer timer)))
+  (setf (emagent-acp-state-prompt-watchdog state) token)
+  (setf (emagent-acp-state-prompt-watchdog-timer state) timer)))
 
 (defun emagent-acp--stream-to-buffer-p (state)
   "Return non-nil when agent chunks may update the chat buffer live."
   (and emagent-acp-stream-to-buffer
-       (map-elt state :busy)
-       (not (map-elt state :compress-pending))
-       (not (map-elt state :prompt-finalized))
-       (not (map-elt state :prompt-finishing))))
+       (emagent-acp-state-busy state)
+       (not (emagent-acp-state-compress-pending state))
+       (not (emagent-acp-state-prompt-finalized state))
+       (not (emagent-acp-state-prompt-finishing state))))
 
 (defun emagent-acp--stream-thought-to-buffer-p (state)
   "Return non-nil when reasoning may stream into the chat buffer live."
   (and (memq emagent-acp-thought-progress '(buffer both))
-       (map-elt state :busy)
-       (not (map-elt state :compress-pending))
-       (not (map-elt state :prompt-finalized))
-       (not (map-elt state :prompt-finishing))))
+       (emagent-acp-state-busy state)
+       (not (emagent-acp-state-compress-pending state))
+       (not (emagent-acp-state-prompt-finalized state))
+       (not (emagent-acp-state-prompt-finishing state))))
 
 (defun emagent-acp--cancel-prompt-render (state)
   "Cancel a pending debounced render for STATE."
-  (when-let ((timer (map-elt state :finish-timer)))
+  (when-let ((timer (emagent-acp-state-finish-timer state)))
     (cancel-timer timer))
-  (map-put! state :finish-timer nil)
-  (map-put! state :finish-token nil))
+  (setf (emagent-acp-state-finish-timer state) nil)
+  (setf (emagent-acp-state-finish-token state) nil))
 
 (defun emagent-acp--schedule-prompt-render (state)
   "Debounced render of the accumulated prompt into the chat buffer."
   (let ((token (cl-gensym "emagent-finish")))
     (emagent-acp--cancel-prompt-render state)
-    (map-put! state :finish-token token)
-    (map-put! state :finish-timer
+    (setf (emagent-acp-state-finish-token state) token)
+    (setf (emagent-acp-state-finish-timer state)
               (run-with-timer
                emagent-acp-render-delay nil
                (lambda ()
-                 (when (and (eq (map-elt state :finish-token) token)
-                            (map-elt state :prompt-finishing))
-                   (map-put! state :finish-timer nil)
+                 (when (and (eq (emagent-acp-state-finish-token state) token)
+                            (emagent-acp-state-prompt-finishing state))
+                   (setf (emagent-acp-state-finish-timer state) nil)
                    (emagent-acp--render-prompt-response state)))))))
 
 (defun emagent-acp--render-prompt-response (state)
   "Render accumulated prompt text into the chat buffer for STATE."
-  (when (map-elt state :prompt-finishing)
+  (when (emagent-acp-state-prompt-finishing state)
     (when-let ((buffer (emagent-acp--chat-buffer state)))
-      (if (map-elt state :compress-pending)
-          (let ((summary (string-trim (or (map-elt state :assistant-text) ""))))
-            (map-put! state :compress-pending nil)
+      (if (emagent-acp-state-compress-pending state)
+          (let ((summary (string-trim (or (emagent-acp-state-assistant-text state) ""))))
+            (setf (emagent-acp-state-compress-pending state) nil)
             (if (string-empty-p summary)
                 (progn
                   (emagent-log "compression aborted: empty summary")
                   (with-current-buffer buffer
-                    (when-let ((cb (map-elt state :cb-fail)))
+                    (when-let ((cb (emagent-acp-state-cb-fail state)))
                       (funcall cb "Compression produced no summary; conversation left intact"))))
               (with-current-buffer buffer
-                (when-let ((cb (map-elt state :cb-finish)))
+                (when-let ((cb (emagent-acp-state-cb-finish state)))
                   (funcall cb
                            (format "*Context compacted.* Agent session reset; the summary below is its only memory of the prior conversation.\n\n%s"
                                    summary))))
@@ -148,51 +148,51 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
               (emagent-acp--new-session :state state :compressed-context summary)))
         (condition-case err
             (with-current-buffer buffer
-              (when-let ((cb (map-elt state :cb-finish)))
-                (funcall cb (map-elt state :assistant-text)
-                         (map-elt state :thought-text))))
+              (when-let ((cb (emagent-acp-state-cb-finish state)))
+                (funcall cb (emagent-acp-state-assistant-text state)
+                         (emagent-acp-state-thought-text state))))
           (error
            (emagent-log "emagent: finish failed: %s" (error-message-string err))
            (with-current-buffer buffer
-             (when-let ((cb (map-elt state :cb-fail)))
+             (when-let ((cb (emagent-acp-state-cb-fail state)))
                (funcall cb (format "response finalize failed: %s"
                                    (error-message-string err)))))))))
-    (map-put! state :prompt-finishing nil)
-    (map-put! state :prompt-finalized t)
+    (setf (emagent-acp-state-prompt-finishing state) nil)
+    (setf (emagent-acp-state-prompt-finalized state) t)
     (emagent-acp--refresh-mode-line state)))
 
 (defun emagent-acp--permission-pending-p (state)
   "Return non-nil when STATE has unanswered permission requests."
-  (or (map-elt state :permission-busy)
-      (map-elt state :permission-queue)))
+  (or (emagent-acp-state-permission-busy state)
+      (emagent-acp-state-permission-queue state)))
 
 (defun emagent-acp--maybe-complete-deferred-prompt (state)
   "Run a deferred `emagent-acp--complete-prompt' when permissions are clear."
-  (when-let ((response (map-elt state :deferred-complete-response)))
+  (when-let ((response (emagent-acp-state-deferred-complete-response state)))
     (unless (emagent-acp--permission-pending-p state)
-      (map-put! state :deferred-complete-response nil)
+      (setf (emagent-acp-state-deferred-complete-response state) nil)
       (emagent-acp--complete-prompt state response))))
 
 (defun emagent-acp--complete-prompt (state response)
   "Finalize the in-flight prompt for STATE and close the chat response."
   (cond
-   ((map-elt state :prompt-finalized)
-    (when (map-elt state :busy)
-      (map-put! state :busy nil)
+   ((emagent-acp-state-prompt-finalized state)
+    (when (emagent-acp-state-busy state)
+      (setf (emagent-acp-state-busy state) nil)
       (emagent-acp--refresh-mode-line state)))
-   ((not (map-elt state :busy))
+   ((not (emagent-acp-state-busy state))
     nil)
    ((emagent-acp--permission-pending-p state)
-    (map-put! state :deferred-complete-response response))
+    (setf (emagent-acp-state-deferred-complete-response state) response))
    (t
-    (map-put! state :prompt-finishing t)
-    (map-put! state :busy nil)
-    (map-put! state :current-tool nil)
-    (map-put! state :current-tool-kind nil)
+    (setf (emagent-acp-state-prompt-finishing state) t)
+    (setf (emagent-acp-state-busy state) nil)
+    (setf (emagent-acp-state-current-tool state) nil)
+    (setf (emagent-acp-state-current-tool-kind state) nil)
     (emagent-acp--clear-prompt-watchdog state)
     (emagent-acp--trace "prompt done (%d chars, %d thought)"
-                        (length (or (map-elt state :assistant-text) ""))
-                        (length (or (map-elt state :thought-text) "")))
+                        (length (or (emagent-acp-state-assistant-text state) ""))
+                        (length (or (emagent-acp-state-thought-text state) "")))
     (emagent-acp--flush-thought-buffer state)
     (when (and response (map-elt response 'usage))
       (emagent-acp--save-usage-from-response state (map-elt response 'usage)))
@@ -211,12 +211,12 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
         (_ nil)))))
 
 (defun emagent-acp--clear-thought-buffer (state)
-  (map-put! state :thought-buffer ""))
+  (setf (emagent-acp-state-thought-buffer state) ""))
 
 (defun emagent-acp--flush-thought-buffer (state)
   "Log any trailing thought text for STATE and clear the buffer."
   (when-let ((mode emagent-acp-thought-progress))
-    (when-let ((tail (string-trim (or (map-elt state :thought-buffer) ""))))
+    (when-let ((tail (string-trim (or (emagent-acp-state-thought-buffer state) ""))))
       (unless (string-empty-p tail)
         (emagent-acp--log-thought-line mode tail)))
     (emagent-acp--clear-thought-buffer state)))
@@ -225,26 +225,26 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
   "Accumulate thought TEXT for display and optional logging."
   (unless (string-empty-p text)
     (emagent-acp--detect-external-refusal-in-text state text)
-    (map-put! state :thought-text
-              (concat (or (map-elt state :thought-text) "") text))
+    (setf (emagent-acp-state-thought-text state)
+              (concat (or (emagent-acp-state-thought-text state) "") text))
     (when-let ((mode emagent-acp-thought-progress))
-      (when (map-elt state :prompt-finishing)
+      (when (emagent-acp-state-prompt-finishing state)
         (emagent-acp--schedule-prompt-render state))
       (when (memq mode '(buffer both))
         (when-let ((buf (and (emagent-acp--stream-thought-to-buffer-p state)
                              (emagent-acp--chat-buffer state))))
           (with-current-buffer buf
-            (when-let ((cb (map-elt state :cb-thought)))
+            (when-let ((cb (emagent-acp-state-cb-thought state)))
               (funcall cb text)))))
       (when (memq mode '(minimal trail both))
-        (let ((pending (concat (or (map-elt state :thought-buffer) "") text)))
+        (let ((pending (concat (or (emagent-acp-state-thought-buffer state) "") text)))
           (while (string-match "\\`\\(.+?[.!?]\\)\\(?:[[:space:]]\\|\\'\\)" pending)
             (let ((end (match-end 0)))
               (emagent-acp--log-thought-line
                (if (eq mode 'both) 'minimal mode)
                (substring pending 0 end))
               (setq pending (substring pending end))))
-          (map-put! state :thought-buffer pending))))))
+          (setf (emagent-acp-state-thought-buffer state) pending))))))
 
 (defun emagent-acp--run-reveal (reveal &optional now)
   (when reveal
@@ -256,8 +256,8 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
   "Run the buffer reveal callback for STATE, if any.
 
 When NOW is non-nil, show the buffer immediately for interactive prompts."
-  (when-let ((reveal (map-elt state :on-reveal)))
-    (map-put! state :on-reveal nil)
+  (when-let ((reveal (emagent-acp-state-on-reveal state)))
+    (setf (emagent-acp-state-on-reveal state) nil)
     (emagent-acp--run-reveal reveal now)))
 
 (defun emagent-acp--prepare-interactive-context (state)
@@ -271,7 +271,7 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
 
 (defun emagent-acp--fail-connect (state message)
   "Show MESSAGE, reveal the chat buffer, and stop connecting."
-  (map-put! state :ready nil)
+  (setf (emagent-acp-state-ready state) nil)
   (emagent-acp--notify-user state message)
   (emagent-acp--reveal-buffer state))
 
@@ -315,8 +315,8 @@ appear inside a real answer.")
 (defun emagent-acp--turn-did-no-work-p (state)
   "Return non-nil when STATE's turn ran no tool calls and produced little text.
 Such a turn has no side effects, so replaying its prompt is safe."
-  (let ((text (string-trim (or (map-elt state :assistant-text) "")))
-        (titles (map-elt state :tool-call-titles)))
+  (let ((text (string-trim (or (emagent-acp-state-assistant-text state) "")))
+        (titles (emagent-acp-state-tool-call-titles state)))
     (and (or (null titles) (zerop (hash-table-count titles)))
          (< (length text) 400))))
 
@@ -330,8 +330,8 @@ failing the request.  Such a turn carries no real content and no tool calls
 prompt with backoff rather than surface the error.  Matching uses
 `emagent-acp--agent-error-signature-re', which only recognises
 machine-generated error markers."
-  (let ((text (string-trim (or (map-elt state :assistant-text) ""))))
-    (and (not (map-elt state :compress-pending))
+  (let ((text (string-trim (or (emagent-acp-state-assistant-text state) ""))))
+    (and (not (emagent-acp-state-compress-pending state))
          (emagent-acp--turn-did-no-work-p state)
          (not (string-empty-p text))
          (string-match-p emagent-acp--agent-error-signature-re text))))
@@ -344,25 +344,25 @@ turn to be empty: it is true even when tool calls ran or real content was
 produced.  Such a turn must NOT be replayed (that would repeat side effects
 like commits or pushes); instead emagent resumes it by sending \"continue\",
 mirroring what a user does by hand."
-  (let ((text (or (map-elt state :assistant-text) "")))
-    (and (not (map-elt state :compress-pending))
+  (let ((text (or (emagent-acp-state-assistant-text state) "")))
+    (and (not (emagent-acp-state-compress-pending state))
          (string-match-p emagent-acp--agent-error-signature-re text))))
 
 (defun emagent-acp--abort-prompt (state message)
   "Abort the in-flight prompt for STATE and show MESSAGE."
-  (when (or (map-elt state :busy) (map-elt state :prompt-finishing))
+  (when (or (emagent-acp-state-busy state) (emagent-acp-state-prompt-finishing state))
     (emagent-acp--clear-prompt-watchdog state)
     (emagent-acp--cancel-prompt-render state)
-    (map-put! state :busy nil)
-    (map-put! state :prompt-finishing nil)
-    (map-put! state :prompt-finalized nil)
-    (map-put! state :assistant-text "")
-    (map-put! state :compress-pending nil)
+    (setf (emagent-acp-state-busy state) nil)
+    (setf (emagent-acp-state-prompt-finishing state) nil)
+    (setf (emagent-acp-state-prompt-finalized state) nil)
+    (setf (emagent-acp-state-assistant-text state) "")
+    (setf (emagent-acp-state-compress-pending state) nil)
     (emagent-acp--trace "prompt aborted: %s" message)
     (emagent-acp--flush-thought-buffer state)
     (when-let ((buffer (emagent-acp--chat-buffer state)))
       (with-current-buffer buffer
-        (when-let ((cb (map-elt state :cb-fail)))
+        (when-let ((cb (emagent-acp-state-cb-fail state)))
           (funcall cb message))))
     (emagent-acp--refresh-mode-line state)))
 
@@ -370,7 +370,7 @@ mirroring what a user does by hand."
   (let ((method (map-elt request :method)))
     (emagent-acp--trace "send %s" method)
     (emagent-acp-send-request
-     :client (map-elt state :client)
+     :client (emagent-acp-state-client state)
      :request request
      :buffer (emagent-acp--chat-buffer state)
      :on-success
