@@ -57,34 +57,16 @@
 ;; emagent-specific bindings here.  Per Emacs conventions `C-c <letter>'
 ;; is reserved for users, so emagent commands live under the `C-c C-e'
 ;; prefix map.
-(defvar emagent-command-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "u") #'emagent-chat-new-prompt)
-    (define-key map (kbd "p") #'emagent-set-project-directory)
-    (define-key map (kbd "a") #'emagent-chat-attach-buffer)
-    (define-key map (kbd "b") #'emagent-btw)
-    (define-key map (kbd "d") #'emagent-chat-attach-files)
-    (define-key map (kbd "e") #'emagent-chat-attach-error-context)
-    (define-key map (kbd "i") #'emagent-chat-attach-image)
-    (define-key map (kbd "m") #'emagent-set-model)
-    (define-key map (kbd "l") #'emagent-log-view)
-    map)
-  "Keymap for emagent commands, bound to the `C-c C-e' prefix.")
-
+;; Minimal keymap: only send and interrupt get direct keys; every other command
+;; lives in the `C-c ?' palette (`emagent-dispatch').  This keeps emagent from
+;; shadowing org-mode bindings (TAB, C-a, C-y, C-n/C-p, C-c C-e export, …),
+;; which stay available since emagent-mode derives from org-mode.
 (define-key emagent-mode-map (kbd "C-c C-c") #'emagent-chat-send-or-babel)
-(define-key emagent-mode-map (kbd "C-c C-e") emagent-command-map)
-(define-key emagent-mode-map (kbd "C-y")     #'emagent-chat-yank)
-(define-key emagent-mode-map (kbd "TAB")     #'emagent-chat-tab)
-(define-key emagent-mode-map (kbd "<backtab>") #'org-shifttab)
 (define-key emagent-mode-map (kbd "ESC ESC") #'emagent-chat-interrupt)
 (define-key emagent-mode-map (kbd "C-c ?")   #'emagent-dispatch)
-(define-key emagent-mode-map (kbd "C-a")     #'emagent-chat-beginning-of-line)
 
 (defvar-local emagent-chat--assistant-marker nil
   "Insert position for the in-flight emagent response.")
-
-(define-key emagent-mode-map (kbd "C-p") #'emagent-chat-history-previous-or-previous-line)
-(define-key emagent-mode-map (kbd "C-n") #'emagent-chat-history-next-or-next-line)
 
 (defvar-local emagent-chat--response-body-start nil
   "Start of the in-flight emagent response body.")
@@ -255,17 +237,7 @@ Only used when terminal-notifier is installed."
 #
 # Type after '* username> ' and press C-c C-c to send.
 # C-c C-c   send (on a src block: execute with org-babel instead)
-# C-c C-e u insert a new '* username>' prompt heading
-# C-c C-e a attach buffer context to the next send
-# C-c C-e b send a btw side note while the agent is thinking
-# C-c C-e d pick project files to attach
-# C-c C-e e attach compilation/flymake errors to the next send
-# C-y       paste text normally; if clipboard has image, inserts [[file:...]] link
-# C-c C-e i pick an image file and insert [[file:...]] link at point
-# C-c C-e l show emagent log (*Emagent Log*)
-# C-c C-e m set ACP model
-# C-c C-e p change project directory (moves session, reconnects)
-# C-c ?     command palette (transient menu)
+# C-c ?     command palette: model, attach, new prompt, log, project, trust, …
 # ESC ESC   interrupt agent response
 # C-x k     kill buffer and disconnect agent
 # M-x emagent-mode to reconnect a saved session

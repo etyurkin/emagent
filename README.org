@@ -88,27 +88,16 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =M-x emagent-set-project-directory=   | Change project directory (moves session, reconnects) |
 | =M-x emagent-reset-permissions=       | Reset stored permissions (project, session, or global) |
 | =C-c C-c=                             | Send =* user>= block; execute src block when inside one |
-| =C-c C-e u=                           | Insert a new =* user>= prompt heading             |
-| =C-c C-e p=                           | Change project directory (moves session, reconnects) |
-| =C-c C-e a=                           | Attach current buffer summary to next prompt     |
-| =C-c C-e b=                           | Send a btw side note while the agent is thinking     |
-| =C-c C-e d=                           | Pick project files to attach to next prompt      |
-| =C-c C-e e=                           | Attach compilation/flymake errors to next prompt |
-| =C-c C-e i=                           | Attach image file (or clipboard image)           |
-| =C-c C-e m=                           | Set ACP model                                    |
-| =C-c C-e l=                           | Show emagent log (=*Emagent Log*=)                |
-| =C-c ?=                               | Command palette (transient menu)                 |
-| =C-p= / =C-n= on =* user>= line         | Navigate prompt history (previous / next)        |
-| =M-x emagent-chat-insert-last-response= | Insert last response into another buffer        |
-| =M-x emagent-chat-insert-src-block=   | Pick a src block from last response and insert  |
-| =TAB= on =/command= line              | Complete slash commands (skills / built-ins)     |
-| =TAB= elsewhere                       | =org-cycle= (headlines, =** Thinking=, =** Response=, etc.) |
+| =C-c ?=                               | Command palette (transient): model, attach, new prompt, log, project, trust, … |
 | =ESC ESC=                             | Interrupt agent response                         |
 | =C-x k=                               | Kill buffer and disconnect agent                 |
+| =M-x emagent-chat-insert-last-response= | Insert last response into another buffer        |
+| =M-x emagent-chat-insert-src-block=   | Pick a src block from last response and insert  |
 
-Emagent commands live under the =C-c C-e= prefix, since Emacs reserves
-=C-c <letter>= for users.  Press =C-c C-e= then the mnemonic letter (e.g.
-=C-c C-e a= to attach a buffer), or use =C-c ?= for the command palette.
+Only =C-c C-c= (send) and =ESC ESC= (interrupt) are bound directly; every other
+command lives in the =C-c ?= palette.  This keeps emagent from shadowing the
+standard org-mode keys (=TAB=, =C-a=, =C-y=, =C-n=/=C-p=, =C-c C-e=, …), which
+work as usual since =emagent-mode= derives from =org-mode=.
 
 ** Project directory and agent
 
@@ -119,10 +108,12 @@ a region — the entire heading block is captured automatically.
 
 To re-evaluate a previous prompt, edit its =* username>= heading and press
 =C-c C-c= again — the old response is removed and the agent is called with the
-updated text.  Use =C-c C-e u= to insert a fresh heading if the stub was deleted.
+updated text.  Use the =C-c ?= palette (New prompt) to insert a fresh heading if
+the stub was deleted.
 
-To switch the active project directory mid-session, use =C-c C-e p= (=M-x
-emagent-set-project-directory=).  This updates =#+EMAGENT_PROJECT=, moves the
+To switch the active project directory mid-session, use =M-x
+emagent-set-project-directory= (or the =C-c ?= palette).  This updates
+=#+EMAGENT_PROJECT=, moves the
 session files to match the new location (so =session/load= keeps working), and
 reconnects the agent — preserving the full conversation context.  Do *not* edit
 =#+EMAGENT_PROJECT= manually; that leaves the session files in the old location
@@ -199,7 +190,8 @@ Agent responses appear as Org subsections under the =* user>= heading:
 
 ** Side notes while the agent is thinking (/btw/)
 
-Press =C-c C-e b= while the agent is running to send a quick side note.  A
+Run btw from the =C-c ?= palette (or =M-x emagent-btw=) while the agent is
+running to send a quick side note.  A
 minibuffer opens — type your message, press Enter.  Emagent cancels the
 in-flight turn (keeping any partial response), then sends =btw, <your
 message>= as a new prompt — the same pattern Cursor and Claude use for
