@@ -266,6 +266,12 @@ interrupted."
          (slash-command-p
           (emagent-log "send slash command: %s" user-text)))
       (map-put! state :busy t)
+      ;; Mint a fresh turn identity so a late response from a previous turn
+      ;; (which carries the old generation) fails the GEN guard instead of
+      ;; finalizing this one, and reset the per-turn resume budget.  Both must
+      ;; happen at turn start; the normal completion path never bumps them.
+      (map-put! state :prompt-generation (1+ (or (map-elt state :prompt-generation) 0)))
+      (map-put! state :continue-attempts 0)
       (when (fboundp 'emagent-chat--spinner-start)
         (emagent-chat--spinner-start))
       (map-put! state :assistant-text "")
