@@ -48,6 +48,16 @@
       (should (string= "cursor-agent" (map-elt client :command)))
       (should (member "acp" (map-elt client :command-params))))))
 
+(ert-deftest emagent-providers-test-context-usage-unavailable-hook ()
+  "Cursor reports context usage as unavailable via its provider hook; a
+provider without the hook (claude) reports it as available."
+  (let ((cursor (emagent-test--make-acp-state)))
+    (setf (emagent-acp-state-provider cursor) 'cursor)
+    (should (emagent-acp--provider-context-usage-unavailable-p cursor)))
+  (let ((claude (emagent-test--make-acp-state)))
+    (setf (emagent-acp-state-provider claude) 'claude)
+    (should-not (emagent-acp--provider-context-usage-unavailable-p claude))))
+
 (provide 'emagent-providers-test)
 
 ;;; emagent-providers-test.el ends here
