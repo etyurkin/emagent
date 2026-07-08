@@ -23,8 +23,6 @@
 (declare-function emagent-chat--session-directory "emagent-chat-header")
 (declare-function emagent-chat-set-session-id "emagent-chat")
 (declare-function emagent-chat-set-model "emagent-chat")
-(declare-function emagent-chat--refresh-mode-line "emagent-chat-mode-line")
-(declare-function emagent-chat--refresh-mode-line-soon "emagent-chat-mode-line")
 (declare-function emagent-acp--permission-pending-p "emagent-acp")
 (declare-function emagent-acp--maybe-complete-deferred-prompt "emagent-acp")
 (declare-function emagent-acp--drain-permission-queue "emagent-acp")
@@ -134,26 +132,33 @@ buffer signals \"Selecting deleted buffer\"."
     (when (map-elt state :permission-queue)
       (emagent-acp--drain-permission-queue state))))
 
-(declare-function emagent-chat--spinner-ensure-running "emagent-chat-mode-line")
-(declare-function emagent-chat--maybe-force-mode-line-update "emagent-chat")
+(defun emagent-acp--status-snapshot (state)
+  "Return a mode-line status plist computed from STATE.
+
+Built entirely from STATE so it does not depend on the current buffer; the UI
+renders from this snapshot instead of pulling session state back out of the ACP
+layer (see `emagent-chat-set-status')."
+  (let ((usage (map-elt state :usage)))
+    (list :busy (and (map-elt state :busy) t)
+          :waiting-permission (and (emagent-acp--permission-pending-p state) t)
+          :ready (and (map-elt state :ready) t)
+          :prompt-finishing (and (map-elt state :prompt-finishing) t)
+          :tool (map-elt state :current-tool)
+          :tool-kind (map-elt state :current-tool-kind)
+          :rss (map-elt state :agent-rss)
+          :ctx-usage (when-let ((used (and usage (map-elt usage :context-used)))
+                                (size (map-elt usage :context-size)))
+                       (cons used size))
+          :ctx-unavailable (and (or (map-elt state :busy) (map-elt state :ready))
+                                (eq (or (map-elt state :provider) 'cursor) 'cursor)))))
 
 (defun emagent-acp--refresh-mode-line (state)
   (emagent-acp--maybe-recover-stall state)
-  (when-let ((buffer (emagent-acp--chat-buffer state)))
-    (with-current-buffer buffer
-      (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p)
-                 (fboundp 'emagent-chat--spinner-ensure-running))
-        (emagent-chat--spinner-ensure-running))
-      (cond
-       ((and (fboundp 'emagent-acp-busy-p)
-             (not (emagent-acp-busy-p))
-             (fboundp 'emagent-chat--refresh-mode-line))
-        (emagent-chat--refresh-mode-line))
-       ((fboundp 'emagent-chat--refresh-mode-line-soon)
-        (emagent-chat--refresh-mode-line-soon))
-       ((fboundp 'emagent-chat--refresh-mode-line)
-        (emagent-chat--refresh-mode-line))
-       (t (emagent-chat--maybe-force-mode-line-update))))))
+  (when-let ((buffer (emagent-acp--chat-buffer state))
+             (cb (map-elt state :cb-status)))
+    (let ((snapshot (emagent-acp--status-snapshot state)))
+      (with-current-buffer buffer
+        (funcall cb snapshot)))))
 
 ;;; -------------------------------------------------------------------------
 ;;; Usage tracking
