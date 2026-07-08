@@ -298,7 +298,11 @@ A policy :deny is never auto-approved.  A policy :confirm is auto-approved only
 under \"Allow all (session)\" — the explicit user opt-out of prompting.  A
 stored fingerprint grant (or the t/safe auto-approve modes) removes the prompt
 only for policy-clean requests: it must not silence a :confirm, so e.g. an
-`execute:rm' grant made for `rm foo.log' cannot auto-run `rm -rf ~'."
+`execute:rm' grant made for `rm foo.log' cannot auto-run `rm -rf ~'.
+
+The `safe' mode auto-approves only `read'/`write' tool kinds; `execute', `eval',
+and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
+\"safe\" merely because it is not a shell command)."
   (let ((deny (and validation (eq (car validation) :deny)))
         (confirm (and validation (eq (car validation) :confirm))))
     (and (not deny)
@@ -307,7 +311,8 @@ only for policy-clean requests: it must not silence a :confirm, so e.g. an
                   (or (emagent-acp--permission-auto-allowed-p state fingerprint chat-buffer)
                       (eq emagent-acp-auto-approve-permissions t)
                       (and (eq emagent-acp-auto-approve-permissions 'safe)
-                           (not (emagent-acp--tool-call-shell-needs-confirm-p tool-call)))))))))
+                           (member (emagent-acp--tool-call-infer-kind tool-call)
+                                   '("read" "write")))))))))
 
 (defun emagent-acp--permission-apply-choice (state fingerprint _chat-buffer choice)
   "Record user CHOICE for FINGERPRINT in STATE."
