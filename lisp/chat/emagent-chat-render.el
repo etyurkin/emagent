@@ -157,6 +157,7 @@ the hide when the response is fully complete and the session is idle."
   (emagent-chat--cancel-thought-flush)
   (setq emagent-chat--assistant-marker nil
         emagent-chat--response-body-start nil
+        emagent-chat--response-content-marker nil
         emagent-chat--thought-open-p nil
         emagent-chat--thought-marker nil
         emagent-chat--reasoning-streamed-p nil
@@ -1042,13 +1043,22 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                 (recenter -3)))))))))
 
 (defun emagent-chat--response-body-bounds ()
-  "Return (CONTENT-START . END) for the `** Response' body, or nil."
-  (when-let ((bounds (emagent-chat--open-response-body-bounds)))
-    (save-excursion
-      (goto-char (car bounds))
-      (when (re-search-forward emagent-chat--response-headline-re (cdr bounds) t)
-        (forward-line 1)
-        (cons (point) (cdr bounds))))))
+  "Return (CONTENT-START . END) for the `** Response' body, or nil.
+CONTENT-START comes from the owned `emagent-chat--response-content-marker' once
+the headline exists; otherwise the headline is located by search and cached."
+  (if (and emagent-chat--response-content-marker
+           (marker-position emagent-chat--response-content-marker)
+           (emagent-chat--open-response-p))
+      (cons (marker-position emagent-chat--response-content-marker)
+            (emagent-chat--response-region-end
+             (emagent-chat--open-response-begin)))
+    (when-let ((bounds (emagent-chat--open-response-body-bounds)))
+      (save-excursion
+        (goto-char (car bounds))
+        (when (re-search-forward emagent-chat--response-headline-re (cdr bounds) t)
+          (forward-line 1)
+          (setq emagent-chat--response-content-marker (copy-marker (point) nil))
+          (cons (point) (cdr bounds)))))))
 
 (defun emagent-chat--ensure-response-headline ()
   "Ensure the open response has a `** Response' headline; return its content start."
@@ -1066,11 +1076,13 @@ Keyboard shortcuts (via keymap text property on the buttons line):
               ;; Response body.
               (delete-region (point) tail)
               (insert "\n\n" emagent-chat-response-headline "\n")
+              (setq emagent-chat--response-content-marker (copy-marker (point) nil))
               (point))
           ;; No reasoning was rendered: place Response at the response body start.
           (when-let ((beg (emagent-chat--open-response-begin)))
             (goto-char beg)
             (insert emagent-chat-response-headline "\n")
+            (setq emagent-chat--response-content-marker (copy-marker (point) nil))
             (point))))))
 
 (defun emagent-chat-append-assistant (text)

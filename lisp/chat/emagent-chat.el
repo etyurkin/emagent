@@ -89,6 +89,11 @@
 (defvar-local emagent-chat--response-body-start nil
   "Start of the in-flight emagent response body.")
 
+(defvar-local emagent-chat--response-content-marker nil
+  "Marker at the start of the open `** Response' body content.
+Owned once the Response headline exists, so the body bounds are read from it
+instead of re-searching for the headline on every streamed chunk.")
+
 (defvar-local emagent-chat--thought-open-p nil
   "Non-nil while a Reasoning quote block is open in the in-flight response.")
 
