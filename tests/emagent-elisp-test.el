@@ -48,6 +48,20 @@
     (should (string-match-p "SYNTAX ERROR" result))
     (should-not (string-match-p "STYLE WARNING" result))))
 
+(defvar emagent-elisp-test--rce-flag nil
+  "Set by a macro in test content if byte-compilation executes it.")
+
+(ert-deftest emagent-elisp-test-check-does-not-execute-macros ()
+  "By default, validating file content must not byte-compile it — byte-compiling
+expands macros, which would execute code embedded in agent-supplied content."
+  (should (null emagent-elisp-byte-compile-on-check))
+  (setq emagent-elisp-test--rce-flag nil)
+  (let ((content (concat "(defmacro emagent-elisp-test--payload () "
+                         "(setq emagent-elisp-test--rce-flag t) nil)\n"
+                         "(emagent-elisp-test--payload)\n")))
+    (emagent-elisp-check-file-content content)
+    (should-not emagent-elisp-test--rce-flag)))
+
 (provide 'emagent-elisp-test)
 
 ;;; emagent-elisp-test.el ends here
