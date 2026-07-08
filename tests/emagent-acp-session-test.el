@@ -339,6 +339,31 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
         (should scheduled)
         (should (= 1 (length (map-elt state :permission-queue))))))))
 
+(ert-deftest emagent-acp-session-test-permission-handler-error-cancels ()
+  "When the permission handler errors, the popped request is replied to with
+`cancelled' so the agent does not hang, and busy is released."
+  (let* ((state (emagent-test--make-acp-state))
+         (request '((id . "req-err")
+                    (params . ((title . "Allow?")
+                               (options . [((optionId . "allow_once")
+                                            (kind . "allow_once"))])))))
+         (responses nil))
+    (map-put! state :permission-queue (list request))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--handle-one-permission)
+          (lambda (&rest _) (error "boom in handler")))
+         ((symbol-function 'emagent-acp-send-response)
+          (cl-function (lambda (&key response &allow-other-keys)
+                         (push response responses))))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--schedule-permission-drain)
+          (lambda (&rest _) nil)))
+      (emagent-acp--drain-permission-queue-now state)
+      (should (null (map-elt state :permission-busy)))
+      (should (= 1 (length responses)))
+      (should (equal "cancelled"
+                     (map-nested-elt (car responses) '(:result outcome outcome)))))))
+
 (ert-deftest emagent-acp-session-test-permission-interactive-drains-deferred ()
   (let* ((state (emagent-test--make-acp-state))
          (request '((id . "req1")

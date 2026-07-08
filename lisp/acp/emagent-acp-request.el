@@ -167,6 +167,26 @@ non-blockingly and returns; ON-COMPLETE is called after the user responds."
             (emagent-tools--buttons-prompt
              question emagent-acp--permission-emagent-choices buf after-response))))))))
 
+(defun emagent-acp--cancel-permission-request (state request)
+  "Reply `cancelled' to permission REQUEST so the waiting agent does not hang.
+Used when a request is abandoned by an error, interrupt, or teardown rather
+than by a user decision."
+  (when-let ((request-id (map-elt request 'id)))
+    (ignore-errors
+      (emagent-acp-send-response
+       :client (map-elt state :client)
+       :response (emagent-acp-make-session-request-permission-response
+                  :request-id request-id :cancelled t)))))
+
+(defun emagent-acp--cancel-outstanding-permissions (state)
+  "Reply `cancelled' to every queued permission request, then clear the queue.
+Leaves `:permission-busy' untouched: an in-flight interactive prompt owns its
+own response.  Call from interrupt/teardown so abandoned requests never leave
+the agent blocked."
+  (dolist (request (map-elt state :permission-queue))
+    (emagent-acp--cancel-permission-request state request))
+  (map-put! state :permission-queue nil))
+
 (defun emagent-acp--drain-permission-queue-now (state)
   "Process one queued permission request.
 
@@ -201,10 +221,15 @@ callback when the user decides."
                  (if (emagent-acp--permission-interactive-p state)
                      (emagent-acp--schedule-permission-drain state)
                    (emagent-acp--drain-permission-queue-now state)))))
-          (error
+          ((error quit)
+           ;; The request was already popped; reply `cancelled' so the agent is
+           ;; not left blocked, release busy, and drain whatever remains.
            (emagent-log "permission handler error: %s" (error-message-string err))
+           (emagent-acp--cancel-permission-request state request)
            (map-put! state :permission-busy nil)
-           (emagent-acp--refresh-mode-line state)))))))
+           (emagent-acp--refresh-mode-line state)
+           (when (map-elt state :permission-queue)
+             (emagent-acp--schedule-permission-drain state))))))))
 
 (defun emagent-acp--drain-permission-queue (state)
   "Process queued permission requests one at a time.
