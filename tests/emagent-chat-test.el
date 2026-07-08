@@ -787,6 +787,27 @@ same markup outside the block is converted."
     (should (string-match-p "arr\\[i\\](fn)" out))
     (should (string-match-p "done.Next" out))))
 
+(ert-deftest emagent-chat-test-markup-escapes-interior-src-delimiters ()
+  "A fenced block documenting Org (literal #+END_SRC in its body) stays one
+block: the interior delimiters are comma-escaped, so neither our matcher nor
+Org closes early and the trailing prose is still converted."
+  (let ((out (emagent-chat--convert-agent-markup
+              (concat "How a block looks:\n\n"
+                      "```org\n"
+                      "#+BEGIN_SRC emacs-lisp\n"
+                      "(+ 1 2)\n"
+                      "#+END_SRC\n"
+                      "```\n\n"
+                      "See [docs](http://x) after."))))
+    ;; Interior delimiters escaped, so exactly one block is matched.
+    (should (string-match-p "^,#\\+END_SRC" out))
+    (let ((n 0) (pos 0))
+      (while (string-match emagent-chat--src-block-re out pos)
+        (setq n (1+ n) pos (match-end 0)))
+      (should (= n 1)))
+    ;; Trailing prose after the real terminator is still transformed.
+    (should (string-match-p "\\[\\[http://x\\]\\[docs\\]\\]" out))))
+
 (ert-deftest emagent-chat-test-markup-normalizes-crlf ()
   "CRLF output is normalized to LF so src blocks still segment and no ^M leaks."
   (let ((out (emagent-chat--convert-agent-markup
