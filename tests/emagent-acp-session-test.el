@@ -966,6 +966,35 @@ the emagent gate can show what was edited instead of a bare arrow line."
     (should (= -32601 (emagent-test--response-error-code
                         (car emagent-test--captured-responses))))))
 
+(ert-deftest emagent-acp-session-test-fs-read-confined-without-session-root ()
+  "With no session root (propertyless chat buffer) but a known project directory,
+an absolute path outside it is still denied — the boundary falls back to the
+project directory rather than opening up unconfined access."
+  (emagent-test--with-temp-project
+   (lambda (dir)
+     (let* ((client (emagent-test--make-test-client
+                     :response-sender #'emagent-test--capture-response-sender))
+            (state (emagent-test--make-acp-state client))
+            ;; A sibling of DIR under the temp root, outside the project.
+            (outside (expand-file-name
+                      "emagent-escape.txt"
+                      (file-name-directory (directory-file-name dir))))
+            (request `((id . 9) (method . "fs/read_text_file")
+                       (params . ((path . ,outside))))))
+       (setq emagent-test--captured-responses nil)
+       (write-region "secret" nil outside)
+       (unwind-protect
+           (progn
+             ;; The test chat buffer carries no project property.
+             (should (null (emagent-acp--fs-session-root state)))
+             (let ((emagent-acp-file-access t))
+               (emagent-acp--on-fs-read :state state :emagent-acp-request request))
+             (let ((resp (car emagent-test--captured-responses)))
+               (should resp)
+               (should-not (emagent-test--response-content resp))
+               (should (emagent-test--response-error-code resp))))
+         (ignore-errors (delete-file outside)))))))
+
 (ert-deftest emagent-acp-session-test-on-fs-write ()
   (emagent-test--with-temp-project
    (lambda (dir)
