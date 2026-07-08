@@ -88,6 +88,32 @@
                      (emagent-acp--permission-validate tool-call)
                      "execute:rm" nil))))))
 
+(ert-deftest emagent-policy-test-stored-grant-does-not-silence-confirm ()
+  "A stored fingerprint grant must not auto-approve a policy :confirm command:
+an `execute:rm' grant (e.g. from `rm foo.log') cannot auto-run `rm -rf /'."
+  (emagent-test--with-mocks
+      (((symbol-function 'emagent-permissions-global-fingerprints)
+        (lambda () '("execute:rm")))
+       ((symbol-function 'emagent-permissions-session-fingerprints) (lambda (_) nil))
+       ((symbol-function 'emagent-permissions-project-fingerprints) (lambda (_) nil)))
+    (let* ((state (emagent-test--make-acp-state))
+           (args (make-hash-table :test 'equal))
+           (tool-call `((kind . "execute") (arguments . ,args))))
+      (puthash "command" "rm -rf /" args)
+      (let ((emagent-acp-auto-approve-permissions nil))
+        ;; The grant matches the fingerprint but policy says :confirm → no auto.
+        (should (member "execute:rm" (emagent-permissions-global-fingerprints)))
+        (should-not (emagent-acp--permission-gate-auto-approve-p
+                     state tool-call
+                     (emagent-acp--permission-validate tool-call)
+                     "execute:rm" nil))
+        ;; Allow-all (session) is the explicit opt-out and still auto-approves.
+        (map-put! state :session-auto-approve t)
+        (should (emagent-acp--permission-gate-auto-approve-p
+                 state tool-call
+                 (emagent-acp--permission-validate tool-call)
+                 "execute:rm" nil))))))
+
 (ert-deftest emagent-policy-test-elisp-blocked ()
   (let ((result (emagent-policy-check-elisp "(kill-emacs)")))
     (should (eq (car result) :deny))
