@@ -31,6 +31,11 @@ Thinking block."
     (insert "\n")
     (setq emagent-chat--response-body-start (copy-marker (point) nil)
           emagent-chat--assistant-marker (copy-marker (point) nil)
+          emagent-chat--response-end-marker
+          (save-excursion
+            (if (re-search-forward (emagent-chat--user-heading-re) nil t)
+                (copy-marker (line-beginning-position) nil)
+              'point-max))
           emagent-chat--thought-marker nil
           emagent-chat--thought-open-p nil
           emagent-chat--reasoning-streamed-p nil)))
@@ -158,6 +163,7 @@ the hide when the response is fully complete and the session is idle."
   (setq emagent-chat--assistant-marker nil
         emagent-chat--response-body-start nil
         emagent-chat--response-content-marker nil
+        emagent-chat--response-end-marker nil
         emagent-chat--thought-open-p nil
         emagent-chat--thought-marker nil
         emagent-chat--reasoning-streamed-p nil

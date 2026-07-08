@@ -67,7 +67,34 @@ owned marker (not re-searched), and multi-chunk streaming renders in order."
          (emagent-chat-append-assistant "two ")
          (emagent-chat-append-assistant "three"))
        (let ((text (substring-no-properties (buffer-string))))
-         (should (string-match-p "one two three" text)))))))
+         (should (string-match-p "one two three" text)))
+       ;; Last exchange in the buffer: the end marker is the point-max sentinel.
+       (should (eq 'point-max emagent-chat--response-end-marker))))))
+
+(ert-deftest emagent-chat-integration-test-end-marker-bounds-mid-buffer ()
+  "Re-evaluating an earlier prompt owns a live end marker at the following
+exchange's heading, so the region is bounded there rather than at point-max."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (let ((at (emagent-chat--insert-user-heading-with-text "first")))
+         (emagent-chat--begin-response at)
+         (emagent-chat-finish-assistant "first answer"))
+       (goto-char (point-max))
+       (emagent-chat--insert-user-heading-with-text "LATER")
+       (goto-char (point-min))
+       (let ((at (progn (re-search-forward (emagent-chat--user-heading-re))
+                        (line-end-position))))
+         (emagent-chat--begin-response at)
+         ;; End marker is a live marker sitting at/above the LATER heading.
+         (should (markerp emagent-chat--response-end-marker))
+         (should (< (marker-position emagent-chat--response-end-marker)
+                    (point-max)))
+         (emagent-chat-finish-assistant "revised"))
+       (let ((text (substring-no-properties (buffer-string))))
+         (should (string-match-p "revised" text))
+         (should (string-match-p "LATER" text)))))))
 
 (ert-deftest emagent-chat-integration-test-streamed-code-block-preserved ()
   "Streaming a completed code block must not rewrite its interior backticks or
