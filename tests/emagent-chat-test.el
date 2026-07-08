@@ -699,6 +699,33 @@ signal), so finalizing a response containing one does not crash."
   (should (string= "plain\n#+BEGIN_SRC elisp"
                    (emagent-chat--escape-reasoning-text "plain\n#+BEGIN_SRC elisp"))))
 
+(ert-deftest emagent-chat-test-markup-preserves-code-interiors ()
+  "Prose transforms must not rewrite the inside of a code block: fenced
+backticks, markdown headings, and org-star lines survive verbatim while the
+same markup outside the block is converted."
+  (let ((out (emagent-chat--convert-agent-markup
+              (concat "Run `date` now.\n\n"
+                      "```sh\n"
+                      "echo `pwd`\n"
+                      "## not a heading\n"
+                      "* not a bullet\n"
+                      "```\n\n"
+                      "## Real Heading"))))
+    ;; Inline code and heading OUTSIDE the block are converted.
+    (should (string-match-p "Run =date= now" out))
+    (should (string-match-p "^\\*\\* Real Heading" out))
+    ;; Code INTERIOR is untouched.
+    (should (string-match-p "echo `pwd`" out))
+    (should (string-match-p "^## not a heading" out))
+    (should (string-match-p "^\\* not a bullet" out))))
+
+(ert-deftest emagent-chat-test-demote-preserves-code-stars ()
+  "Heading demotion skips org-star lines inside src blocks."
+  (let ((out (emagent-chat--demote-response-headings
+              "* Heading\n#+BEGIN_SRC sh\n* starred code line\n#+END_SRC\n")))
+    (should (string-match-p "^\\*\\*\\* Heading" out))
+    (should (string-match-p "^\\* starred code line" out))))
+
 (ert-deftest emagent-chat-test-close-unclosed-code-fence ()
   (let ((out (emagent-chat--convert-agent-markup "text\n```elisp\n(+ 1 2)\n")))
     (should (string-match-p "#\\+BEGIN_SRC elisp" out))
