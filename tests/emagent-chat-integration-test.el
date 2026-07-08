@@ -90,8 +90,8 @@ double-stars, while inline markup in surrounding prose is still converted."
      (let* ((client (emagent-test--make-test-client))
             (state (emagent-test--make-acp-state client buffer)))
        (setq emagent-acp-stream-to-buffer t)
-       (map-put! state :cb-chunk #'emagent-chat-append-assistant)
-       (map-put! state :busy t)
+       (setf (emagent-acp-state-cb-chunk state) #'emagent-chat-append-assistant)
+       (setf (emagent-acp-state-busy state) t)
        (with-current-buffer buffer
          (goto-char (point-max))
          (emagent-chat--begin-response (point))

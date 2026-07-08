@@ -49,7 +49,7 @@ fs/* handlers would resolve agent-supplied paths with no project confinement."
                     method)))
 
 (cl-defun emagent-acp--on-fs-read (&key state emagent-acp-request)
-  (let ((client (map-elt state :client))
+  (let ((client (emagent-acp-state-client state))
         (request-id (map-elt emagent-acp-request 'id))
         (path (map-nested-elt emagent-acp-request '(params path))))
     (if (not emagent-acp-file-access)
@@ -92,7 +92,7 @@ fs/* handlers would resolve agent-supplied paths with no project confinement."
                                               :message (error-message-string err))))))))))
 
 (cl-defun emagent-acp--on-fs-write (&key state emagent-acp-request)
-  (let ((client (map-elt state :client))
+  (let ((client (emagent-acp-state-client state))
         (request-id (map-elt emagent-acp-request 'id))
         (path (map-nested-elt emagent-acp-request '(params path)))
         (resolved (emagent-tools--root-directory

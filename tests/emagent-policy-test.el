@@ -148,7 +148,7 @@ an `execute:rm' grant (e.g. from `rm foo.log') cannot auto-run `rm -rf /'."
                      (emagent-acp--permission-validate tool-call)
                      "execute:rm" nil))
         ;; Allow-all (session) is the explicit opt-out and still auto-approves.
-        (map-put! state :session-auto-approve t)
+        (setf (emagent-acp-state-session-auto-approve state) t)
         (should (emagent-acp--permission-gate-auto-approve-p
                  state tool-call
                  (emagent-acp--permission-validate tool-call)

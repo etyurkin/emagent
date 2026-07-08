@@ -22,7 +22,7 @@
 
 (defun emagent-acp--agent-launch-string (state)
   "Return the agent argv as a single shell-like string, or nil."
-  (when-let ((client (map-elt state :client))
+  (when-let ((client (emagent-acp-state-client state))
              (cmd (map-elt client :command)))
     (string-trim
      (mapconcat #'identity
@@ -40,9 +40,9 @@
 
 (defun emagent-acp--external-tool-gate-add (state reason)
   "Record REASON (a symbol) in STATE's external-tool-gate hint list."
-  (unless (memq reason (map-elt state :external-tool-gate-reasons))
-    (map-put! state :external-tool-gate-reasons
-              (cons reason (map-elt state :external-tool-gate-reasons)))))
+  (unless (memq reason (emagent-acp-state-external-tool-gate-reasons state))
+    (setf (emagent-acp-state-external-tool-gate-reasons state)
+              (cons reason (emagent-acp-state-external-tool-gate-reasons state)))))
 
 (defun emagent-acp--infer-external-tool-gate-from-agent (state)
   "Infer likely SDK-side tool gates from the agent executable (see defcustom)."
@@ -78,10 +78,10 @@
 (defun emagent-acp--maybe-log-external-tool-gate-proactive (state)
   "Log a one-time proactive hint after `initialize' when we inferred SDK gates."
   (when emagent-acp-external-tool-gate-hints
-    (unless (map-elt state :external-tool-gate-proactive-logged)
-      (when-let ((reasons (map-elt state :external-tool-gate-reasons))
+    (unless (emagent-acp-state-external-tool-gate-proactive-logged state)
+      (when-let ((reasons (emagent-acp-state-external-tool-gate-reasons state))
                  (msg (emagent-acp--format-external-tool-gate-proactive-hint reasons)))
-        (map-put! state :external-tool-gate-proactive-logged t)
+        (setf (emagent-acp-state-external-tool-gate-proactive-logged state) t)
         (emagent-log "emagent: external tool permission hint — %s" msg)))))
 
 (defun emagent-acp--infer-external-tool-gate-from-initialize-response (state response)
@@ -103,8 +103,8 @@
   (when (and emagent-acp-external-tool-gate-hints
              (emagent-acp--external-refusal-text-p text))
     (emagent-acp--external-tool-gate-add state 'observed-refusal-in-stream)
-    (unless (map-elt state :external-tool-refusal-logged)
-      (map-put! state :external-tool-refusal-logged t)
+    (unless (emagent-acp-state-external-tool-refusal-logged state)
+      (setf (emagent-acp-state-external-tool-refusal-logged state) t)
       (emagent-log (concat "emagent: agent output looks like a tool was refused "
                            "outside Emacs (ACP approval alone is not enough); "
                            "check the agent/SDK permission or sandbox settings.")))))

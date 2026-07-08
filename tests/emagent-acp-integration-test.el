@@ -10,9 +10,9 @@
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
      (let ((state (emagent-test--start-connected-session buffer)))
-       (should (map-elt state :ready))
-       (should (map-elt state :initialized))
-       (should (string= "test-session" (map-elt state :session-id))))))
+       (should (emagent-acp-state-ready state))
+       (should (emagent-acp-state-initialized state))
+       (should (string= "test-session" (emagent-acp-state-session-id state))))))
 
 (ert-deftest emagent-acp-integration-test-notification-streams-chunk ()
   (emagent-test--with-emagent-buffer
@@ -20,8 +20,8 @@
      (let* ((client (emagent-test--make-test-client))
             (state (emagent-test--make-acp-state client buffer)))
        (setq emagent-acp-stream-to-buffer t)
-       (map-put! state :cb-chunk #'emagent-chat-append-assistant)
-       (map-put! state :busy t)
+       (setf (emagent-acp-state-cb-chunk state) #'emagent-chat-append-assistant)
+       (setf (emagent-acp-state-busy state) t)
        (with-current-buffer buffer
          (goto-char (point-max))
          (emagent-chat--begin-response (point)))
@@ -34,7 +34,7 @@
        (with-current-buffer buffer
          (should (string-match-p "Hello world"
                                  (substring-no-properties (buffer-string)))))
-       (should (string= "Hello world" (map-elt state :assistant-text))))))
+       (should (string= "Hello world" (emagent-acp-state-assistant-text state))))))
 
 (ert-deftest emagent-acp-integration-test-send-prompt ()
   (emagent-test--with-emagent-buffer
@@ -63,7 +63,7 @@
              (let ((at (emagent-chat--insert-user-heading-with-text "ping")))
                (emagent-chat--begin-response at))
              (emagent-acp-send-prompt "ping"))
-           (should (map-elt emagent-acp--session :busy))
+           (should (emagent-acp-state-busy emagent-acp--session))
            (should (car prompt-request))
            (should (string= "session/prompt"
                             (map-elt (car prompt-request) :method)))))))))))

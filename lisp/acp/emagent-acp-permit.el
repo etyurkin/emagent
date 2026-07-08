@@ -30,10 +30,10 @@
 (defun emagent-acp--hydrate-session-permissions (state session-id)
   "Load ~/.emagent session permissions for SESSION-ID into STATE."
   (when (and session-id (not (string-empty-p session-id)))
-    (map-put! state :permission-auto-allow
+    (setf (emagent-acp-state-permission-auto-allow state)
               (copy-sequence (emagent-permissions-session-fingerprints session-id)))
     (when (emagent-permissions-session-auto-approve-p session-id)
-      (map-put! state :session-auto-approve t))))
+      (setf (emagent-acp-state-session-auto-approve state) t))))
 
 (declare-function emagent-acp--send-request "emagent-acp")
 (declare-function emagent-acp--emit-tool-call-display "emagent-acp")
@@ -235,13 +235,13 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
 
 (defun emagent-acp--permission-auto-allowed-p (state fingerprint chat-buffer)
   "Return non-nil when FINGERPRINT is auto-approved for STATE or CHAT-BUFFER."
-  (or (map-elt state :session-auto-approve)
+  (or (emagent-acp-state-session-auto-approve state)
       (and fingerprint
-           (or (member fingerprint (or (map-elt state :permission-auto-allow) nil))
+           (or (member fingerprint (or (emagent-acp-state-permission-auto-allow state) nil))
                (member fingerprint (emagent-permissions-global-fingerprints))
                (member fingerprint
                        (emagent-permissions-session-fingerprints
-                        (map-elt state :session-id)))
+                        (emagent-acp-state-session-id state)))
                (and chat-buffer (buffer-live-p chat-buffer)
                     (with-current-buffer chat-buffer
                       (or (member fingerprint (emagent-session-allowed-permissions))
@@ -262,16 +262,16 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
 (defun emagent-acp--permission-stored-auto-choice (state fingerprint chat-buffer)
   "Return the stored user CHOICE that auto-approves FINGERPRINT, or nil."
   (cond
-   ((map-elt state :session-auto-approve) :allow-all)
+   ((emagent-acp-state-session-auto-approve state) :allow-all)
    ((and fingerprint (member fingerprint (emagent-permissions-global-fingerprints)))
     :allow-always)
    ((and fingerprint
-         (member fingerprint (or (map-elt state :permission-auto-allow) nil)))
+         (member fingerprint (or (emagent-acp-state-permission-auto-allow state) nil)))
     :allow-session)
    ((and fingerprint
          (member fingerprint
                  (emagent-permissions-session-fingerprints
-                  (map-elt state :session-id))))
+                  (emagent-acp-state-session-id state))))
     :allow-session)
    ((and fingerprint chat-buffer (buffer-live-p chat-buffer)
          (with-current-buffer chat-buffer
@@ -307,9 +307,9 @@ renders of the same line keep the decision suffix instead of dropping it."
                 (base (emagent-acp--tool-call-label merged))
                 (label (emagent-acp--permission-decision-label base choice))
                 (buf (emagent-acp--chat-buffer state)))
-      (when-let ((decisions (map-elt state :tool-call-decisions)))
+      (when-let ((decisions (emagent-acp-state-tool-call-decisions state)))
         (puthash id choice decisions))
-      (when-let ((cb (map-elt state :cb-tool-call)))
+      (when-let ((cb (emagent-acp-state-cb-tool-call state)))
         (let ((spec (emagent-acp--tool-call-block-spec merged)))
           (with-current-buffer buf
             (funcall cb id label (car spec) (cdr spec))))))))
@@ -329,7 +329,7 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
   (let ((deny (and validation (eq (car validation) :deny)))
         (confirm (and validation (eq (car validation) :confirm))))
     (and (not deny)
-         (or (map-elt state :session-auto-approve)
+         (or (emagent-acp-state-session-auto-approve state)
              (and (not confirm)
                   (or (emagent-acp--permission-auto-allowed-p state fingerprint chat-buffer)
                       (eq emagent-acp-auto-approve-permissions t)
@@ -341,16 +341,16 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
   "Record user CHOICE for FINGERPRINT in STATE."
   (pcase choice
     (:allow-all
-     (map-put! state :session-auto-approve t)
-     (when-let ((session-id (map-elt state :session-id)))
+     (setf (emagent-acp-state-session-auto-approve state) t)
+     (when-let ((session-id (emagent-acp-state-session-id state)))
        (emagent-permissions-set-session-auto-approve session-id))
      (emagent-log "permission: allow all (session)"))
     (:allow-session
      (when fingerprint
-       (map-put! state :permission-auto-allow
-                 (append (or (map-elt state :permission-auto-allow) nil)
+       (setf (emagent-acp-state-permission-auto-allow state)
+                 (append (or (emagent-acp-state-permission-auto-allow state) nil)
                          (list fingerprint)))
-       (when-let ((session-id (map-elt state :session-id)))
+       (when-let ((session-id (emagent-acp-state-session-id state)))
          (emagent-permissions-add-session-fingerprint session-id fingerprint))))
     (:allow-always
      (when fingerprint
@@ -569,18 +569,18 @@ Edit prompts prefer a unified diff; patch edits fall back to a hunk preview."
 
 (defun emagent-acp--permission-interactive-p (state)
   "Return non-nil when ACP permission prompts may need user input."
-  (and (not (map-elt state :session-auto-approve))
+  (and (not (emagent-acp-state-session-auto-approve state))
        (not (eq emagent-acp-auto-approve-permissions t))))
 
 
 (defun emagent-acp--schedule-permission-drain (state)
   "Run `emagent-acp--drain-permission-queue-now' outside the ACP process filter."
-  (unless (or (map-elt state :permission-drain-timer)
-              (map-elt state :permission-busy))
-    (map-put! state :permission-drain-timer
+  (unless (or (emagent-acp-state-permission-drain-timer state)
+              (emagent-acp-state-permission-busy state))
+    (setf (emagent-acp-state-permission-drain-timer state)
               (run-at-time 0 nil
                            (lambda ()
-                             (map-put! state :permission-drain-timer nil)
+                             (setf (emagent-acp-state-permission-drain-timer state) nil)
                              (emagent-acp--drain-permission-queue-now state))))))
 
 (provide 'emagent-acp-permit)

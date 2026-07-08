@@ -57,7 +57,7 @@
 
 (defun emagent-acp--agent-rss-mb (state)
   "Return the agent process RSS in MB via `process-attributes', or nil."
-  (when-let* ((client (map-elt state :client))
+  (when-let* ((client (emagent-acp-state-client state))
               (proc (and client (map-elt client :process)))
               ((processp proc))
               (pid (process-id proc))
@@ -68,23 +68,23 @@
 
 (defun emagent-acp--start-rss-timer (state)
   "Start a repeating timer that refreshes :agent-rss in STATE every 15 s."
-  (when-let ((old (map-elt state :agent-rss-timer)))
+  (when-let ((old (emagent-acp-state-agent-rss-timer state)))
     (cancel-timer old))
-  (map-put! state :agent-rss-timer
+  (setf (emagent-acp-state-agent-rss-timer state)
             (run-with-timer
              5 15
              (lambda ()
-               (if (buffer-live-p (map-elt state :chat-buffer))
+               (if (buffer-live-p (emagent-acp-state-chat-buffer state))
                    (let ((mb (emagent-acp--agent-rss-mb state)))
-                     (map-put! state :agent-rss mb)
+                     (setf (emagent-acp-state-agent-rss state) mb)
                      (emagent-acp--refresh-mode-line state))
                  (emagent-acp--stop-rss-timer state))))))
 
 (defun emagent-acp--stop-rss-timer (state)
   "Cancel the RSS polling timer for STATE."
-  (when-let ((timer (and state (map-elt state :agent-rss-timer))))
+  (when-let ((timer (and state (emagent-acp-state-agent-rss-timer state))))
     (cancel-timer timer)
-    (map-put! state :agent-rss-timer nil)))
+    (setf (emagent-acp-state-agent-rss-timer state) nil)))
 
 (defun emagent-acp--turn-phase (state)
   "Return the lifecycle phase of STATE's current turn.
@@ -99,98 +99,104 @@ One of:
 This derives the phase from the turn flags so callers share one vocabulary for
 the turn state machine.  The flags remain the underlying representation for now."
   (cond
-   ((map-elt state :busy) 'streaming)
-   ((map-elt state :prompt-finishing)
-    (if (map-elt state :prompt-finalized) 'done 'finalizing))
+   ((emagent-acp-state-busy state) 'streaming)
+   ((emagent-acp-state-prompt-finishing state)
+    (if (emagent-acp-state-prompt-finalized state) 'done 'finalizing))
    (t 'idle)))
 
 (defun emagent-acp--connected-p ()
   "Return non-nil when the current buffer has a live, ready ACP session."
   (and emagent-acp--session
-       (map-elt emagent-acp--session :ready)
-       (let ((client (map-elt emagent-acp--session :client)))
+       (emagent-acp-state-ready emagent-acp--session)
+       (let ((client (emagent-acp-state-client emagent-acp--session)))
          (and client (emagent-acp--client-started-p client)))))
 
 (defun emagent-acp--cancel-state-timers (state)
   "Cancel every timer stored in STATE and clear its slot.
 Prevents a reconnect or shutdown from leaving repeating/pending timers
 (RSS poll, watchdog, finish, permission drain) pointed at dead state."
-  (dolist (key '(:agent-rss-timer :prompt-watchdog-timer
-                 :finish-timer :permission-drain-timer))
-    (when-let ((timer (map-elt state key)))
-      (when (timerp timer) (cancel-timer timer))
-      (map-put! state key nil))))
+  (dolist (timer (list (emagent-acp-state-agent-rss-timer state)
+                       (emagent-acp-state-prompt-watchdog-timer state)
+                       (emagent-acp-state-finish-timer state)
+                       (emagent-acp-state-permission-drain-timer state)))
+    (when (timerp timer) (cancel-timer timer)))
+  (setf (emagent-acp-state-agent-rss-timer state) nil
+        (emagent-acp-state-prompt-watchdog-timer state) nil
+        (emagent-acp-state-finish-timer state) nil
+        (emagent-acp-state-permission-drain-timer state) nil))
 
 (defun emagent-acp--teardown-stale-session ()
   "Shut down a dead or incomplete ACP session without clearing persisted ids."
   (when-let* ((state emagent-acp--session))
     (emagent-acp--cancel-state-timers state)
-    (when-let ((client (map-elt state :client)))
+    (when-let ((client (emagent-acp-state-client state)))
       (ignore-errors (emagent-acp-shutdown :client client))))
   (setq emagent-acp--session nil))
 
-(cl-defun emagent-acp--make-state (&key client chat-buffer on-reveal)
-  "Return a mutable session state table for Emacs 30 `map-put!'.
+(defun emagent-acp--make-usage ()
+  "Return a fresh usage hash table."
+  (let ((u (make-hash-table :test 'eq)))
+    (puthash :context-used nil u)
+    (puthash :context-size nil u)
+    (puthash :total-tokens 0 u)
+    u))
 
-Plain alists cannot grow via `map-put!' on Emacs 30; hash tables can."
-  (let ((state (make-hash-table :test 'eq))
-        (usage (make-hash-table :test 'eq)))
-    (puthash :context-used nil usage)
-    (puthash :context-size nil usage)
-    (puthash :total-tokens 0 usage)
-    (puthash :client client state)
-    (puthash :chat-buffer chat-buffer state)
-    (puthash :session-id nil state)
-    (puthash :config-options nil state)
-    (puthash :usage usage state)
-    (puthash :initialized nil state)
-    (puthash :mcp-http nil state)
-    (puthash :permission-queue nil state)
-    (puthash :permission-busy nil state)
-    (puthash :permission-drain-timer nil state)
-    (puthash :deferred-complete-response nil state)
-    (puthash :session-auto-approve nil state)
-    (puthash :permission-auto-allow nil state)
-    (puthash :external-tool-gate-reasons nil state)
-    (puthash :external-tool-gate-proactive-logged nil state)
-    (puthash :external-tool-refusal-logged nil state)
-    (puthash :ready nil state)
-    (puthash :busy nil state)
-    (puthash :assistant-text "" state)
-    (puthash :thought-text "" state)
-    (puthash :thought-buffer "" state)
-    (puthash :prompt-finalized nil state)
-    (puthash :prompt-finishing nil state)
-    (puthash :prompt-generation 0 state)
-    (puthash :finish-token nil state)
-    (puthash :finish-timer nil state)
-    (puthash :prompt-watchdog nil state)
-    (puthash :extra-context nil state)
-    (puthash :compress-pending nil state)
-    (puthash :replaying-history nil state)
-    (puthash :current-tool nil state)
-    (puthash :current-tool-kind nil state)
-    (puthash :tool-call-titles (make-hash-table :test 'equal) state)
-    (puthash :tool-call-inputs (make-hash-table :test 'equal) state)
-    (puthash :tool-call-labels (make-hash-table :test 'equal) state)
-    (puthash :tool-call-decisions (make-hash-table :test 'equal) state)
-    (puthash :tool-call-pending (make-hash-table :test 'equal) state)
-    (puthash :provider nil state)
-    (puthash :tool-resolve-queue nil state)
-    (puthash :tool-resolve-worker nil state)
-    (puthash :tool-resolve-attempts (make-hash-table :test 'equal) state)
-    (puthash :cb-chunk nil state)
-    (puthash :cb-thought nil state)
-    (puthash :cb-finish nil state)
-    (puthash :cb-fail nil state)
-    (puthash :cb-slash-commands nil state)
-    (puthash :cb-tool-call nil state)
-    (puthash :cb-permission nil state)
-    (puthash :cb-status nil state)
-    (puthash :agent-rss nil state)
-    (puthash :agent-rss-timer nil state)
-    (puthash :on-reveal on-reveal state)
-    state))
+(cl-defstruct (emagent-acp-state
+               (:constructor emagent-acp--state-create)
+               (:copier nil))
+  "Mutable per-buffer ACP session state.
+
+Replaces the former untyped hash table so field access is checked at
+byte-compile time.  Slots that are themselves maps (usage and the tool-call /
+tool-resolve tables, keyed by id) remain hash tables."
+  ;; Connection
+  client chat-buffer on-reveal provider mcp-http initialized
+  ;; Session
+  session-id config-options (usage (emagent-acp--make-usage))
+  session-auto-approve permission-auto-allow
+  external-tool-gate-reasons external-tool-gate-proactive-logged
+  external-tool-refusal-logged
+  agent-rss agent-rss-timer
+  ;; Turn
+  ready busy
+  (assistant-text "") (thought-text "") (thought-buffer "")
+  prompt-finalized prompt-finishing (prompt-generation 0)
+  finish-token finish-timer prompt-watchdog prompt-watchdog-timer
+  extra-context compress-pending replaying-history
+  continue-attempts deferred-complete-response
+  current-tool current-tool-kind tool-call-since-last-chunk
+  (tool-call-titles (make-hash-table :test 'equal))
+  (tool-call-inputs (make-hash-table :test 'equal))
+  (tool-call-labels (make-hash-table :test 'equal))
+  (tool-call-decisions (make-hash-table :test 'equal))
+  (tool-call-pending (make-hash-table :test 'equal))
+  tool-resolve-queue tool-resolve-worker
+  (tool-resolve-attempts (make-hash-table :test 'equal))
+  ;; Permission gate
+  permission-queue permission-busy permission-drain-timer
+  ;; Callbacks (wired by the app; see emagent.el)
+  cb-chunk cb-thought cb-finish cb-fail cb-slash-commands
+  cb-tool-call cb-permission cb-status)
+
+(cl-defun emagent-acp--make-state (&key client chat-buffer on-reveal)
+  "Return a fresh `emagent-acp-state' for a session."
+  (emagent-acp--state-create :client client
+                             :chat-buffer chat-buffer
+                             :on-reveal on-reveal))
+
+(defun emagent-acp--set-callback (state key value)
+  "Set the :cb-* callback slot KEY on STATE to VALUE.
+Bridges the keyword-keyed callback alist wired by the app to typed slots."
+  (pcase key
+    (:cb-chunk          (setf (emagent-acp-state-cb-chunk state) value))
+    (:cb-thought        (setf (emagent-acp-state-cb-thought state) value))
+    (:cb-finish         (setf (emagent-acp-state-cb-finish state) value))
+    (:cb-fail           (setf (emagent-acp-state-cb-fail state) value))
+    (:cb-slash-commands (setf (emagent-acp-state-cb-slash-commands state) value))
+    (:cb-tool-call      (setf (emagent-acp-state-cb-tool-call state) value))
+    (:cb-permission     (setf (emagent-acp-state-cb-permission state) value))
+    (:cb-status         (setf (emagent-acp-state-cb-status state) value))
+    (_ (emagent-log "unknown callback key %S" key))))
 
 (provide 'emagent-acp-state)
 ;;; emagent-acp-state.el ends here

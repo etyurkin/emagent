@@ -135,7 +135,7 @@ non-blockingly and returns; ON-COMPLETE is called after the user responds."
                     (outcome (map-nested-elt response '(:result outcome))))
                (emagent-log "permission response: question=%s outcome=%s choice=%s"
                             question (or outcome "?") choice)
-               (emagent-acp-send-response :client (map-elt state :client) :response response))
+               (emagent-acp-send-response :client (emagent-acp-state-client state) :response response))
              (when on-complete (funcall on-complete)))))
       (cond
        ((and validation (eq (car validation) :deny))
@@ -154,15 +154,15 @@ non-blockingly and returns; ON-COMPLETE is called after the user responds."
                (lambda (choice)
                  (when choice
                    (emagent-acp--show-permission-decision state tool-call choice))
-                 (when (map-elt state :busy)
+                 (when (emagent-acp-state-busy state)
                    (emagent-acp--schedule-prompt-watchdog state))
                  (emagent-acp--refresh-mode-line state)
                  (funcall respond (or choice :cancel)))))
           (if (and buf (buffer-live-p buf)
-                   (map-elt state :cb-permission)
+                   (emagent-acp-state-cb-permission state)
                    (with-current-buffer buf (emagent-chat--open-response-p)))
               (with-current-buffer buf
-                (funcall (map-elt state :cb-permission)
+                (funcall (emagent-acp-state-cb-permission state)
                          question emagent-acp--permission-emagent-choices
                          after-response tool-call))
             (emagent-tools--buttons-prompt
@@ -175,7 +175,7 @@ than by a user decision."
   (when-let ((request-id (map-elt request 'id)))
     (ignore-errors
       (emagent-acp-send-response
-       :client (map-elt state :client)
+       :client (emagent-acp-state-client state)
        :response (emagent-acp-make-session-request-permission-response
                   :request-id request-id :cancelled t)))))
 
@@ -184,9 +184,9 @@ than by a user decision."
 Leaves `:permission-busy' untouched: an in-flight interactive prompt owns its
 own response.  Call from interrupt/teardown so abandoned requests never leave
 the agent blocked."
-  (dolist (request (map-elt state :permission-queue))
+  (dolist (request (emagent-acp-state-permission-queue state))
     (emagent-acp--cancel-permission-request state request))
-  (map-put! state :permission-queue nil))
+  (setf (emagent-acp-state-permission-queue state) nil))
 
 (defun emagent-acp--drain-permission-queue-now (state)
   "Process one queued permission request.
@@ -194,20 +194,20 @@ the agent blocked."
 For auto-deny/auto-approve: synchronous.  For interactive prompts: inserts
 the dialog non-blockingly and returns; the response is sent from the button
 callback when the user decides."
-  (if (and (map-elt state :permission-queue)
+  (if (and (emagent-acp-state-permission-queue state)
            (active-minibuffer-window))
       ;; Minibuffer is active — inserting a dialog would conflict.  Poll.
-      (unless (or (map-elt state :permission-drain-timer)
-                  (map-elt state :permission-busy))
-        (map-put! state :permission-drain-timer
+      (unless (or (emagent-acp-state-permission-drain-timer state)
+                  (emagent-acp-state-permission-busy state))
+        (setf (emagent-acp-state-permission-drain-timer state)
                   (run-at-time 0.3 nil
                                (lambda ()
-                                 (map-put! state :permission-drain-timer nil)
+                                 (setf (emagent-acp-state-permission-drain-timer state) nil)
                                  (emagent-acp--drain-permission-queue-now state)))))
-    (unless (map-elt state :permission-busy)
-      (when-let ((request (car (map-elt state :permission-queue))))
-        (map-put! state :permission-queue (cdr (map-elt state :permission-queue)))
-        (map-put! state :permission-busy t)
+    (unless (emagent-acp-state-permission-busy state)
+      (when-let ((request (car (emagent-acp-state-permission-queue state))))
+        (setf (emagent-acp-state-permission-queue state) (cdr (emagent-acp-state-permission-queue state)))
+        (setf (emagent-acp-state-permission-busy state) t)
         (emagent-acp--refresh-mode-line state)
         (condition-case err
             (emagent-acp--handle-one-permission
@@ -215,10 +215,10 @@ callback when the user decides."
              :emagent-acp-request request
              :on-complete
              (lambda ()
-               (map-put! state :permission-busy nil)
+               (setf (emagent-acp-state-permission-busy state) nil)
                (emagent-acp--refresh-mode-line state)
                (emagent-acp--maybe-complete-deferred-prompt state)
-               (when (map-elt state :permission-queue)
+               (when (emagent-acp-state-permission-queue state)
                  (if (emagent-acp--permission-interactive-p state)
                      (emagent-acp--schedule-permission-drain state)
                    (emagent-acp--drain-permission-queue-now state)))))
@@ -227,9 +227,9 @@ callback when the user decides."
            ;; not left blocked, release busy, and drain whatever remains.
            (emagent-log "permission handler error: %s" (error-message-string err))
            (emagent-acp--cancel-permission-request state request)
-           (map-put! state :permission-busy nil)
+           (setf (emagent-acp-state-permission-busy state) nil)
            (emagent-acp--refresh-mode-line state)
-           (when (map-elt state :permission-queue)
+           (when (emagent-acp-state-permission-queue state)
              (emagent-acp--schedule-permission-drain state))))))))
 
 (defun emagent-acp--drain-permission-queue (state)
@@ -237,14 +237,14 @@ callback when the user decides."
 
 Interactive prompts are deferred to the next event cycle so
 `recursive-edit' never runs inside the ACP process filter."
-  (when (map-elt state :permission-queue)
+  (when (emagent-acp-state-permission-queue state)
     (if (emagent-acp--permission-interactive-p state)
         (emagent-acp--schedule-permission-drain state)
       (emagent-acp--drain-permission-queue-now state))))
 
 (cl-defun emagent-acp--on-permission (&key state emagent-acp-request)
-  (map-put! state :permission-queue
-            (append (map-elt state :permission-queue) (list emagent-acp-request)))
+  (setf (emagent-acp-state-permission-queue state)
+            (append (emagent-acp-state-permission-queue state) (list emagent-acp-request)))
   (emagent-acp--drain-permission-queue state))
 
 (cl-defun emagent-acp--on-request (&key state emagent-acp-request)
@@ -257,7 +257,7 @@ Interactive prompts are deferred to the next event cycle so
      (emagent-acp--on-permission :state state :emagent-acp-request emagent-acp-request))
     (_
      (emagent-acp-send-response
-      :client (map-elt state :client)
+      :client (emagent-acp-state-client state)
       :response `((:request-id . ,(map-elt emagent-acp-request 'id))
                   (:error . ,(emagent-acp-make-error
                               :code -32601

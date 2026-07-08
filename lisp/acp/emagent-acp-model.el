@@ -54,11 +54,11 @@
 
 (defun emagent-acp--save-config-options (state emagent-acp-config-options)
   (when emagent-acp-config-options
-    (map-put! state :config-options
+    (setf (emagent-acp-state-config-options state)
               (emagent-acp--normalize-config-options emagent-acp-config-options))))
 
 (defun emagent-acp--config-options (state)
-  (map-elt state :config-options))
+  (emagent-acp-state-config-options state))
 
 (defun emagent-acp--config-option-by-category (state category)
   (seq-find (lambda (option)

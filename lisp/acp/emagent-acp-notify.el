@@ -57,26 +57,26 @@
       (pcase update-type
         ("agent_message_chunk"
          (let ((text (or (map-nested-elt emagent-acp-notification '(params update content text)) "")))
-           (unless (map-elt state :replaying-history)
+           (unless (emagent-acp-state-replaying-history state)
              (when (and (not (string-empty-p text))
-                        (map-elt state :tool-call-since-last-chunk)
-                        (not (string-empty-p (or (map-elt state :assistant-text) ""))))
+                        (emagent-acp-state-tool-call-since-last-chunk state)
+                        (not (string-empty-p (or (emagent-acp-state-assistant-text state) ""))))
                (setq text (concat "\n\n" text)))
-             (map-put! state :tool-call-since-last-chunk nil)
+             (setf (emagent-acp-state-tool-call-since-last-chunk state) nil)
              (emagent-acp--detect-external-refusal-in-text state text)
-             (map-put! state :assistant-text (concat (map-elt state :assistant-text) text))
-             (when (map-elt state :prompt-finishing)
+             (setf (emagent-acp-state-assistant-text state) (concat (emagent-acp-state-assistant-text state) text))
+             (when (emagent-acp-state-prompt-finishing state)
                (emagent-acp--schedule-prompt-render state))
              (when-let ((buf (and (emagent-acp--stream-to-buffer-p state)
                                  (emagent-acp--chat-buffer state))))
                (with-current-buffer buf
-                 (when-let ((cb (map-elt state :cb-chunk)))
+                 (when-let ((cb (emagent-acp-state-cb-chunk state)))
                    (funcall cb text)))))))
         ("agent_thought_chunk"
          (let ((text (or (map-nested-elt emagent-acp-notification '(params update content text)) "")))
            (emagent-acp--thought-chunk state text)))
         ("tool_call"
-         (map-put! state :tool-call-since-last-chunk t)
+         (setf (emagent-acp-state-tool-call-since-last-chunk state) t)
          (emagent-acp--on-tool-call state (map-nested-elt emagent-acp-notification '(params update))))
         ("tool_call_update"
          (emagent-acp--on-tool-call state (map-nested-elt emagent-acp-notification '(params update))))
@@ -94,7 +94,7 @@
          (let ((commands (map-nested-elt emagent-acp-notification
                                          '(params update availableCommands))))
            (when-let* ((buffer (emagent-acp--chat-buffer state))
-                       (cb (map-elt state :cb-slash-commands)))
+                       (cb (emagent-acp-state-cb-slash-commands state)))
              (with-current-buffer buffer
                (funcall cb commands)))))
         (_ nil)))))
@@ -102,27 +102,27 @@
 (cl-defun emagent-acp--subscribe (&key state)
   (let ((buffer (emagent-acp--chat-buffer state)))
     (emagent-acp-subscribe-to-errors
-     :client (map-elt state :client)
+     :client (emagent-acp-state-client state)
      :buffer buffer
      :on-error
      (lambda (emagent-acp-error)
        (let ((message (or (map-elt emagent-acp-error 'message)
                           (format "%s" emagent-acp-error))))
          (emagent-acp--log-agent-stderr message)
-         (when (and (map-elt state :busy)
+         (when (and (emagent-acp-state-busy state)
                     (emagent-acp--fatal-agent-error-p message))
            (emagent-acp--abort-prompt state message))
          (when (emagent-acp--stderr-notify-p emagent-acp-error)
            (emagent-acp--notify-user state (format "emagent error: %s" message))))))
     (emagent-acp-subscribe-to-notifications
-     :client (map-elt state :client)
+     :client (emagent-acp-state-client state)
      :buffer buffer
      :on-notification
      (lambda (notification)
        (emagent-acp--on-notification :state state
                                      :emagent-acp-notification notification)))
     (emagent-acp-subscribe-to-requests
-     :client (map-elt state :client)
+     :client (emagent-acp-state-client state)
      :buffer buffer
      :on-request
      (lambda (request)
