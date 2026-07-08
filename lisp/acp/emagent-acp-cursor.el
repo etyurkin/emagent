@@ -149,7 +149,9 @@
  :tool-resolve-active-p #'emagent-acp-cursor--tool-resolve-active-p
  :generic-title-p #'emagent-acp-cursor--generic-title-p
  :external-gate-reason #'emagent-acp-cursor--external-gate-reason
- :normalize-slash-prompt #'emagent-acp-cursor--normalize-slash-prompt)
+ :normalize-slash-prompt #'emagent-acp-cursor--normalize-slash-prompt
+ ;; Cursor does not expose context-window figures over ACP.
+ :context-usage-unavailable-p (lambda (_state) t))
 
 (provide 'emagent-acp-cursor)
 ;;; emagent-acp-cursor.el ends here

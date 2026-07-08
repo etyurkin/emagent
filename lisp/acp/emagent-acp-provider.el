@@ -27,7 +27,8 @@
                                                  tool-resolve-active-p
                                                  generic-title-p
                                                  external-gate-reason
-                                                 normalize-slash-prompt)
+                                                 normalize-slash-prompt
+                                                 context-usage-unavailable-p)
   "Register provider SYMBOL with adapter hooks."
   (puthash symbol
            (list :detect detect
@@ -38,8 +39,13 @@
                  :tool-resolve-active-p tool-resolve-active-p
                  :generic-title-p generic-title-p
                  :external-gate-reason external-gate-reason
-                 :normalize-slash-prompt normalize-slash-prompt)
+                 :normalize-slash-prompt normalize-slash-prompt
+                 :context-usage-unavailable-p context-usage-unavailable-p)
            emagent-acp--provider-specs))
+
+(defun emagent-acp--provider-context-usage-unavailable-p (state)
+  "Return non-nil when STATE's provider cannot report context-window usage."
+  (and (emagent-acp--provider-hook state :context-usage-unavailable-p state) t))
 
 (defun emagent-acp--provider-spec (state)
   "Return the adapter property list for STATE's provider, or nil."
