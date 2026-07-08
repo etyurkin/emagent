@@ -215,16 +215,26 @@ callback when the user decides."
              :emagent-acp-request request
              :on-complete
              (lambda ()
+               ;; This runs AFTER the request has been answered (respond fired
+               ;; inside handle-one-permission).  Clear busy first, then isolate
+               ;; the continuation's errors so they cannot fall through to the
+               ;; outer handler and send a second `cancelled' for this id.
                (setf (emagent-acp-state-permission-busy state) nil)
                (emagent-acp--refresh-mode-line state)
-               (emagent-acp--maybe-complete-deferred-prompt state)
-               (when (emagent-acp-state-permission-queue state)
-                 (if (emagent-acp--permission-interactive-p state)
-                     (emagent-acp--schedule-permission-drain state)
-                   (emagent-acp--drain-permission-queue-now state)))))
+               (condition-case cont-err
+                   (progn
+                     (emagent-acp--maybe-complete-deferred-prompt state)
+                     (when (emagent-acp-state-permission-queue state)
+                       (if (emagent-acp--permission-interactive-p state)
+                           (emagent-acp--schedule-permission-drain state)
+                         (emagent-acp--drain-permission-queue-now state))))
+                 ((error quit)
+                  (emagent-log "permission on-complete error: %s"
+                               (error-message-string cont-err))))))
           ((error quit)
-           ;; The request was already popped; reply `cancelled' so the agent is
-           ;; not left blocked, release busy, and drain whatever remains.
+           ;; The request was popped but NOT yet answered (the failure came from
+           ;; building/inserting the prompt, before respond): reply `cancelled'
+           ;; so the agent is not left blocked, release busy, and drain the rest.
            (emagent-log "permission handler error: %s" (error-message-string err))
            (emagent-acp--cancel-permission-request state request)
            (setf (emagent-acp-state-permission-busy state) nil)
