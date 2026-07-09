@@ -37,20 +37,9 @@ to be on Emacs's own =exec-path= (e.g. =cursor-agent=, =claude-agent-acp=).
 
 * Install
 
-** From MELPA
-
-With [[https://melpa.org][MELPA]] in your =package-archives=:
-
-#+BEGIN_SRC emacs-lisp
-(use-package emagent
-  :ensure t
-  :commands (emagent emagent-mode)
-  :custom (emagent-default-provider (if (equal (getenv "EMAGENT_AGENT") "claude")
-                                       'claude
-                                     'cursor)))
-#+END_SRC
-
-Or without =use-package=: =M-x package-install RET emagent RET=.
+emagent is not on MELPA yet — the recipe is under review
+([[https://github.com/melpa/melpa/pull/10081][melpa/melpa#10081]]).  Until it
+lands, install from source with Elpaca.
 
 ** From source (Elpaca)
 
@@ -58,14 +47,24 @@ Or without =use-package=: =M-x package-install RET emagent RET=.
 (use-package emagent
   :ensure (:host github :repo "etyurkin/emagent" :depth 1
            :files (:defaults ("lisp" . ("lisp/*/*.el"))))
-  :commands (emagent emagent-mode)
-  :custom (emagent-default-provider (if (equal (getenv "EMAGENT_AGENT") "claude")
-                                       'claude
-                                     'cursor)))
+  :commands (emagent emagent-mode))
 #+END_SRC
 
-Set =EMAGENT_AGENT= to =claude= or =cursor= to pick the default provider when
-Emacs starts.
+** From MELPA (once the recipe is merged)
+
+With [[https://melpa.org][MELPA]] in your =package-archives=:
+
+#+BEGIN_SRC emacs-lisp
+(use-package emagent
+  :ensure t
+  :commands (emagent emagent-mode))
+#+END_SRC
+
+Or without =use-package=: =M-x package-install RET emagent RET=.
+
+emagent probes for =cursor-agent= and =claude-agent-acp= and uses whichever is
+installed, asking which to use only when both are.  To set the default in that
+case, customize =emagent-default-provider= (=cursor= by default).
 
 For a local clone, add =:load-path "~/path/to/emagent"= (the repo root, not =lisp/=).
 Modules live under =lisp/= grouped by feature; =emagent.el= registers those paths at load time.
@@ -84,16 +83,26 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =C-c C-c=                             | Send =* user>= block; execute src block inside one; else org's =C-c C-c= |
 | =C-c ?=                               | Command palette (transient): model, attach, new prompt, log, project, trust, … |
 | =ESC ESC=                             | Interrupt agent response                         |
+| =TAB=                                 | Complete a =/slash= command, else org-cycle      |
+| =C-p= / =C-n=                          | Prompt history on the input line, else move by line |
+| =C-a=                                 | Start of your input (past =user>=), else start of line |
+| =C-y=                                 | Paste a clipboard image as a =[[file:…]]= link, else yank |
 | =C-x k=                               | Kill buffer and disconnect agent                 |
 | =M-x emagent-chat-insert-last-response= | Insert last response into another buffer        |
 | =M-x emagent-chat-insert-src-block=   | Pick a src block from last response and insert  |
 
-Only =C-c C-c= (send) and =ESC ESC= (interrupt) are bound directly; every other
-command lives in the =C-c ?= palette.  =C-c C-c= sends only on a =* user>=
-prompt and otherwise falls through to org's own =C-c C-c=, so tables,
-checkboxes, and src blocks keep working — emagent shadows only =C-c ?= itself
-(org's =org-table-field-info=, available from the palette's Table entry when
-point is in a table).
+Direct bindings are kept minimal: =C-c C-c= (send), =ESC ESC= (interrupt),
+=C-c ?= (palette), plus a few input-line overrides that fall through to their
+default org/motion behavior outside the prompt — =TAB= (complete a =/slash=
+command, else org-cycle), =C-p= / =C-n= (prompt history on the input line, else
+move by line), =C-a= (start of your input past the =user>= prefix, else start
+of line), and =C-y= (paste a clipboard image as a =[[file:…]]= link, else
+yank).  Every other command lives in the =C-c ?= palette.
+
+=C-c C-c= sends only on a =* user>= prompt and otherwise falls through to org's
+own =C-c C-c=, so tables, checkboxes, and src blocks keep working — emagent
+shadows only =C-c ?= itself (org's =org-table-field-info=, available from the
+palette's Table entry when point is in a table).
 
 ** Project directory and agent
 
@@ -124,8 +133,10 @@ directory interactively.
 =M-x emagent-set-model= (or =C-c ?= → model) changes the model for the rest of
 the session and persists it to =#+EMAGENT_MODEL=.
 
+** Per-turn model override (=/model=)
+
 For a one-off, type =/model= inside a prompt and pick from the current agent's
-models — the token becomes a link (=[[emagent://AGENT/MODEL][short]]=, shown as
+models.  The token becomes a link (=[[emagent://AGENT/MODEL][short]]=, shown as
 the short model name, full =agent/model= on hover) and emagent runs *that turn*
 on the chosen model, showing =** Thinking (model)=, then restores the buffer
 model.  The link is client-side only: it is stripped from the text sent to the
