@@ -266,9 +266,8 @@ Only used when terminal-notifier is installed."
 (defconst emagent-chat-initial-comment
   "# -*- mode: emagent -*-
 # This buffer is a scratch pad for chatting with emagent.
-#
 # Type after '* username> ' and press C-c C-c to send.
-# C-c C-c   send (on a src block: execute with org-babel instead)
+#
 # C-c ?     command palette: model, attach, new prompt, log, project, trust, …
 # ESC ESC   interrupt agent response
 # C-x k     kill buffer and disconnect agent
