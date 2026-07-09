@@ -119,6 +119,9 @@ Run \\[emagent-mode] to reconnect a saved session."
   (emagent-chat--sync-user-zone-marker)
   (add-hook 'completion-at-point-functions
             #'emagent-chat-slash-command-completion-at-point -90 t)
+  ;; Face `/model' override markers even inside org headings (prompt / Thinking).
+  (font-lock-add-keywords
+   nil '((emagent-chat--fontify-turn-model 0 'emagent-chat-turn-model prepend)) 'append)
   (setq-local imenu-create-index-function #'emagent-chat--imenu-create-index)
   (font-lock-add-keywords nil emagent-chat--tool-line-font-lock-keywords 'append)
   (setq-local bookmark-make-record-function #'emagent-chat--bookmark-make-record)
