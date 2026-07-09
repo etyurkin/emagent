@@ -81,7 +81,7 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =M-x emagent-set-model=               | Change ACP model mid-session                     |
 | =M-x emagent-set-project-directory=   | Change project directory (moves session, reconnects) |
 | =M-x emagent-reset-permissions=       | Reset stored permissions (project, session, or global) |
-| =C-c C-c=                             | Send =* user>= block; execute src block when inside one |
+| =C-c C-c=                             | Send =* user>= block; execute src block inside one; else org's =C-c C-c= |
 | =C-c ?=                               | Command palette (transient): model, attach, new prompt, log, project, trust, … |
 | =ESC ESC=                             | Interrupt agent response                         |
 | =C-x k=                               | Kill buffer and disconnect agent                 |
@@ -89,8 +89,11 @@ Modules live under =lisp/= grouped by feature; =emagent.el= registers those path
 | =M-x emagent-chat-insert-src-block=   | Pick a src block from last response and insert  |
 
 Only =C-c C-c= (send) and =ESC ESC= (interrupt) are bound directly; every other
-command lives in the =C-c ?= palette, so emagent leaves the org-mode keymap
-untouched.
+command lives in the =C-c ?= palette.  =C-c C-c= sends only on a =* user>=
+prompt and otherwise falls through to org's own =C-c C-c=, so tables,
+checkboxes, and src blocks keep working — emagent shadows only =C-c ?= itself
+(org's =org-table-field-info=, available from the palette's Table entry when
+point is in a table).
 
 ** Project directory and agent
 
@@ -122,11 +125,13 @@ directory interactively.
 the session and persists it to =#+EMAGENT_MODEL=.
 
 For a one-off, type =/model= inside a prompt and pick from the current agent's
-models — the token is replaced with the model name (e.g. =commit and push, use
-haiku=) and emagent runs *that turn* on the chosen model, showing =** Thinking
-\(haiku)=, then restores the buffer model.  Editing the model word out before
-sending cancels the override.  If the turn fails, emagent asks whether to keep
-the model so a =retry=/=continue= reuses it.
+models — the token becomes a link (=[[emagent://AGENT/MODEL][short]]=, shown as
+the short model name, full =agent/model= on hover) and emagent runs *that turn*
+on the chosen model, showing =** Thinking (model)=, then restores the buffer
+model.  The link is client-side only: it is stripped from the text sent to the
+agent, so the marker never reaches the model.  Delete the link to cancel the
+override.  If the turn fails, emagent asks whether to keep the model so a
+=retry=/=continue= reuses it.
 
 If both =cursor-agent= and =claude-agent-acp= are installed, emagent prompts
 which to use (defaulting to =emagent-default-provider=).  Agent, session id,
