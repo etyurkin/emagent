@@ -129,6 +129,37 @@ or concurrent chat buffers would alias one table.")
 (defvar-local emagent-chat--on-send nil
   "Function called with user input when sending.")
 
+(defvar-local emagent-chat--send-pending nil
+  "Non-nil from send until `emagent-acp-send-prompt' dispatches the turn.
+
+Covers connecting, per-turn model switches (`/model'), and other pre-dispatch
+work.  The mode line shows a spinner during this window so large resumed
+sessions do not look idle while the agent re-hydrates context for a new model.")
+
+(defvar-local emagent-chat--send-token nil
+  "Token for the in-flight pre-dispatch send; cleared on cancel or dispatch.")
+
+(defun emagent-chat--send-active-p (token)
+  "Return non-nil when TOKEN is still the active pre-dispatch send."
+  (and emagent-chat--send-pending (eq emagent-chat--send-token token)))
+
+(defun emagent-chat--send-pending-begin ()
+  "Mark the buffer as preparing a send and refresh the mode line."
+  (setq emagent-chat--send-pending t
+        emagent-chat--send-token (cl-gensym "emagent-send"))
+  (when (fboundp 'emagent-chat--refresh-mode-line)
+    (emagent-chat--refresh-mode-line))
+  (when (fboundp 'emagent-chat--spinner-ensure-running)
+    (emagent-chat--spinner-ensure-running)))
+
+(defun emagent-chat--send-pending-end ()
+  "Clear the pre-dispatch send marker and refresh the mode line."
+  (when emagent-chat--send-pending
+    (setq emagent-chat--send-pending nil
+          emagent-chat--send-token nil)
+    (when (fboundp 'emagent-chat--refresh-mode-line)
+      (emagent-chat--refresh-mode-line))))
+
 (defvar-local emagent-chat--turn-model nil
   "Model id overriding the buffer model for the in-flight turn, or nil.
 
@@ -261,6 +292,12 @@ Used for the trailing (Allow: Session) / (Denied) annotation."
 
 (defconst emagent-chat-default-slug "emagent")
 
+(defvar-local emagent-chat--switching-model-p nil
+  "Non-nil while the open response shows a `** Switching model' headline.")
+
+(defconst emagent-chat-switching-headline "** Switching model"
+  "Org subsection headline shown while a per-turn `/model' switch is in flight.")
+
 (defconst emagent-chat-thinking-headline "** Thinking"
   "Org subsection headline holding streamed reasoning and tool lines.")
 
@@ -271,17 +308,22 @@ Used for the trailing (Allow: Session) / (Denied) annotation."
   "Placeholder body line shown until a prompt finishes rendering.")
 
 (defconst emagent-chat--thinking-headline-re
-  "^\\*\\* Thinking\\(?: ([^)\n]*)\\)?[ \t]*$"
+  "^\\*\\* Thinking\\(?: (\\[\\[emagent://[^][]+\\]\\[[^][]*\\]\\])\\| \\[\\[emagent://[^][]+\\]\\[[^][]*\\]\\]\\)?[ \t]*$"
   "Regexp matching the Thinking subsection headline.
-The optional ` (MODEL)' suffix marks a per-turn model override (see
-`emagent-chat--turn-model').")
+An optional model link marks a per-turn override
+(see `emagent-chat--turn-model'); both `** Thinking ([[…]])' and
+`** Thinking [[…]]' forms are recognized.")
+
+(defconst emagent-chat--switching-headline-re
+  "^\\*\\* Switching model to .+…[ \t]*$"
+  "Regexp matching the transient model-switch subsection headline.")
 
 (defconst emagent-chat--response-headline-re
   "^\\*\\* Response[ \t]*$"
   "Regexp matching the Response subsection headline.")
 
 (defconst emagent-chat--subsection-headline-re
-  "^\\*\\* \\(?:Thinking\\|Response\\|Request permissions\\)\\(?:[ \t]\\|$\\)"
+  "^\\*\\* \\(?:Thinking\\|Switching model\\|Response\\|Request permissions\\)\\(?:[ \t]\\|$\\)"
   "Regexp matching any emagent response subsection headline.")
 
 (defconst emagent-chat--reasoning-begin-re emagent-chat--thinking-headline-re
@@ -447,7 +489,21 @@ response is open."
 (defalias 'emagent-chat-set-project-directory #'emagent-session-set-project-directory)
 (defalias 'emagent-chat-project-directory #'emagent-session-project-directory)
 (defalias 'emagent-chat-model #'emagent-session-model)
-(defalias 'emagent-chat-model-display #'emagent-session-model-display)
+(declare-function emagent-acp-current-model-id "emagent-acp")
+
+(defun emagent-chat-model-display ()
+  "Return a short model label for the mode line.
+Prefer the pending `/model' target while preparing a send, then the live ACP
+session model (including transient per-turn switches), otherwise the buffer's
+saved #+EMAGENT_MODEL."
+  (let ((id (cond
+              ((and emagent-chat--send-pending emagent-chat--turn-model)
+               emagent-chat--turn-model)
+              ((and emagent-acp--session (emagent-acp-state-ready emagent-acp--session))
+               (emagent-acp-current-model-id))
+              (t (emagent-session-model)))))
+    (when id (emagent-session-model-display id))))
+
 (defalias 'emagent-chat-set-agent #'emagent-session-set-agent)
 (defalias 'emagent-chat-agent #'emagent-session-agent)
 (defalias 'emagent-chat-allowed-tools #'emagent-session-allowed-tools)
@@ -543,12 +599,14 @@ ignored so chat rendering never stalls on OS notifications."
           (error nil))))))
 
 
+(declare-function emagent-chat--font-lock-response-tail "emagent-chat-markup")
+
 (defun emagent-chat--flush-deferred-font-lock ()
-  "Font-lock the current buffer when a deferred flush was requested."
+  "Font-lock the response tail when a deferred flush was requested."
   (when (and emagent-chat--font-lock-deferred-p
              (emagent-chat--buffer-active-p))
     (setq emagent-chat--font-lock-deferred-p nil)
-    (font-lock-flush)))
+    (emagent-chat--font-lock-response-tail)))
 
 (declare-function emagent-chat--align-org-tables-in-region "emagent-chat-markup")
 

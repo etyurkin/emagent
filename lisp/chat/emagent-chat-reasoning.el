@@ -14,6 +14,8 @@
 (require 'emagent-chat-header)
 (require 'emagent-chat-markup)
 
+(declare-function emagent-chat--model-link "emagent-chat")
+
 (defun emagent-chat--open-reasoning-begin ()
   "Return point at the `** Thinking' headline in the open response body.
 Read from the owned `emagent-chat--thinking-headline-marker' when set; otherwise
@@ -21,7 +23,11 @@ locate the headline by search and cache it."
   (if (and emagent-chat--thinking-headline-marker
            (marker-position emagent-chat--thinking-headline-marker)
            (emagent-chat--open-response-p))
-      (marker-position emagent-chat--thinking-headline-marker)
+      (save-excursion
+        (goto-char emagent-chat--thinking-headline-marker)
+        (beginning-of-line)
+        (when (looking-at emagent-chat--thinking-headline-re)
+          (marker-position emagent-chat--thinking-headline-marker)))
     (when-let ((bounds (emagent-chat--open-response-body-bounds)))
       (save-excursion
         (goto-char (car bounds))
@@ -29,6 +35,85 @@ locate the headline by search and cache it."
           (setq emagent-chat--thinking-headline-marker
                 (copy-marker (match-beginning 0) nil))
           (match-beginning 0))))))
+
+(defun emagent-chat--open-switching-begin ()
+  "Return point at the `** Switching model' headline, or nil."
+  (if (and emagent-chat--thinking-headline-marker
+           (marker-position emagent-chat--thinking-headline-marker)
+           emagent-chat--switching-model-p
+           (emagent-chat--open-response-p))
+      (save-excursion
+        (goto-char emagent-chat--thinking-headline-marker)
+        (beginning-of-line)
+        (when (looking-at emagent-chat--switching-headline-re)
+          (marker-position emagent-chat--thinking-headline-marker)))
+    (when-let ((bounds (emagent-chat--open-response-body-bounds)))
+      (save-excursion
+        (goto-char (car bounds))
+        (when (re-search-forward emagent-chat--switching-headline-re (cdr bounds) t)
+          (setq emagent-chat--thinking-headline-marker
+                (copy-marker (match-beginning 0) nil)
+                emagent-chat--switching-model-p t)
+          (match-beginning 0))))))
+
+(defun emagent-chat--thinking-headline-text (&optional model-id)
+  "Return the `** Thinking' headline, optionally suffixing MODEL-ID link."
+  (if model-id
+      (concat emagent-chat-thinking-headline " "
+              (emagent-chat--model-link model-id))
+    emagent-chat-thinking-headline))
+
+(defun emagent-chat--switching-headline-text (model-id)
+  "Return the `** Switching model' headline for per-turn MODEL-ID."
+  (concat emagent-chat-switching-headline " to "
+          (emagent-chat--model-link model-id) "…"))
+
+(defun emagent-chat--insert-switching-scaffold ()
+  "Insert a `** Switching model' subsection at the response body start."
+  (when (and emagent-chat--turn-model
+             emagent-chat--response-body-start
+             (marker-position emagent-chat--response-body-start))
+    (goto-char emagent-chat--response-body-start)
+    (setq emagent-chat--thinking-headline-marker (copy-marker (point) nil)
+          emagent-chat--switching-model-p t
+          emagent-chat--thought-open-p nil
+          emagent-chat--thought-marker nil)
+    (insert (emagent-chat--switching-headline-text emagent-chat--turn-model) "\n")
+    (setq emagent-chat--assistant-marker (copy-marker (point) nil))))
+
+(defun emagent-chat--promote-switching-to-thinking ()
+  "Replace a `** Switching model' headline with `** Thinking'."
+  (when-let ((beg (emagent-chat--open-switching-begin)))
+    (goto-char beg)
+    (delete-region (line-beginning-position) (line-end-position))
+    (insert (emagent-chat--thinking-headline-text emagent-chat--turn-model))
+    (unless (bolp) (insert "\n"))
+    (setq emagent-chat--switching-model-p nil
+          emagent-chat--thought-open-p t
+          emagent-chat--thought-marker (copy-marker (point) nil)
+          emagent-chat--assistant-marker (copy-marker (point) nil))))
+
+(defun emagent-chat--clear-switching-scaffold ()
+  "Remove a `** Switching model' headline from the open response, if present."
+  (when-let ((beg (emagent-chat--open-switching-begin)))
+    (let ((inhibit-read-only t))
+      (emagent-chat--writable)
+      (goto-char beg)
+      (delete-region (line-beginning-position)
+                     (min (point-max) (1+ (line-end-position)))))
+    (setq emagent-chat--switching-model-p nil
+          emagent-chat--thinking-headline-marker nil)))
+
+(defun emagent-chat--insert-reasoning-scaffold ()
+  "Insert an empty `** Thinking' subsection at the response body start."
+  (when (and emagent-chat--response-body-start
+             (marker-position emagent-chat--response-body-start))
+    (goto-char emagent-chat--response-body-start)
+    (setq emagent-chat--thinking-headline-marker (copy-marker (point) nil))
+    (insert (emagent-chat--thinking-headline-text emagent-chat--turn-model) "\n")
+    (setq emagent-chat--thought-marker (point-marker)
+          emagent-chat--thought-open-p t
+          emagent-chat--assistant-marker (point-marker))))
 
 (defun emagent-chat--thinking-content-end (begin limit)
   "Return where the Thinking content ends after BEGIN, before LIMIT.
@@ -51,26 +136,11 @@ reasoning streamed with no Response below."
     ;; the end of the region.
     limit))
 
-(defun emagent-chat--insert-reasoning-scaffold ()
-  "Insert an empty `** Thinking' subsection at the response body start."
-  (when (and emagent-chat--response-body-start
-             (marker-position emagent-chat--response-body-start))
-    (goto-char emagent-chat--response-body-start)
-    (setq emagent-chat--thinking-headline-marker (copy-marker (point) nil))
-    (insert (if emagent-chat--turn-model
-                (concat emagent-chat-thinking-headline " ("
-                        (emagent-chat--model-link emagent-chat--turn-model)
-                        ")")
-              emagent-chat-thinking-headline)
-            "\n")
-    (setq emagent-chat--thought-marker (point-marker)
-          emagent-chat--thought-open-p t
-          emagent-chat--assistant-marker (point-marker))
-    (emagent-chat--maybe-font-lock-flush)))
-
 (defun emagent-chat--ensure-reasoning-scaffold ()
   "Ensure the open response has a `** Thinking' subsection ready to stream."
   (when (emagent-chat--open-response-p)
+    (when (emagent-chat--open-switching-begin)
+      (emagent-chat--promote-switching-to-thinking))
     (cond
      (emagent-chat--thought-open-p
       (emagent-chat--sync-thought-marker))
