@@ -231,14 +231,23 @@ long as the `/' is preceded by the heading, the line start, or whitespace."
 
 ;;;###autoload
 (defun emagent-chat-tab ()
-  "On a slash-command line, complete; otherwise org-cycle."
+  "On a slash-command token, complete or run it; otherwise org-cycle."
   (interactive)
-  (cond
-   ;; Client commands (/model) are always completable; agent commands merge in.
-   ((emagent-chat--slash-token-bounds)
-    (call-interactively #'completion-at-point))
-   (t
-    (call-interactively #'emagent-chat-cycle-or-org-cycle))))
+  (let* ((bounds (emagent-chat--slash-token-bounds))
+         (name (and bounds
+                    (buffer-substring-no-properties (1+ (car bounds)) (cdr bounds)))))
+    (cond
+     ;; A complete client command (e.g. fully-typed /model) runs directly, since
+     ;; `completion-at-point' would treat an exact sole match as nothing to do
+     ;; and never fire the exit-function.
+     ((and name (emagent-chat--client-slash-command name))
+      (emagent-chat--run-client-slash-command name))
+     ;; Otherwise complete: client commands (/model) are always offered, agent
+     ;; commands merge in once the session publishes them.
+     (bounds
+      (call-interactively #'completion-at-point))
+     (t
+      (call-interactively #'emagent-chat-cycle-or-org-cycle)))))
 
 (provide 'emagent-chat-slash)
 ;;; emagent-chat-slash.el ends here
