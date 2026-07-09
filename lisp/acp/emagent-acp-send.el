@@ -20,6 +20,7 @@
 (declare-function emagent-chat-begin-thought "emagent-chat-render")
 (declare-function emagent-chat--open-response-p "emagent-chat")
 (declare-function emagent-chat--send-pending-end "emagent-chat")
+(declare-function emagent-acp--chat-buffer "emagent-acp-usage")
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 
@@ -276,6 +277,10 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
   (emagent-acp--cancel-prompt-render state)
   (emagent-acp--clear-thought-buffer state)
   (emagent-acp--schedule-prompt-watchdog state)
+  (when (fboundp 'emagent-chat--send-pending-end)
+    (when-let ((buf (emagent-acp--chat-buffer state)))
+      (with-current-buffer buf
+        (emagent-chat--send-pending-end))))
   ;; Push the now-busy status; the mode line starts the spinner from it.
   (emagent-acp--refresh-mode-line state))
 

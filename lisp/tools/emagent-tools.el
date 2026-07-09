@@ -143,6 +143,22 @@ ACP chat sessions use `session/request_permission' instead; a second MCP
 prompt would not block the agent and is ignored.")
 
 
+(defun emagent-tools--apply-button-line-keymap (beg end keymap)
+  "Attach KEYMAP to the button line spanning BEG through END (exclusive).
+Shortcuts then work anywhere on that line, including at line beginning."
+  (when (and beg end keymap (< beg end))
+    (let ((line-beg (save-excursion (goto-char beg) (line-beginning-position))))
+      (put-text-property line-beg (1- end) 'keymap keymap))))
+
+(defun emagent-tools--goto-first-button (pos)
+  "Move point to the first button at or after POS; return non-nil on success."
+  (when pos
+    (goto-char pos)
+    (or (button-at (point))
+        (when-let ((btn (next-button (max (1- pos) (point-min)))))
+          (goto-char (button-start btn))
+          t))))
+
 (defun emagent-tools--focus-inline-buttons (chat-buffer button-pos)
   "Move point to BUTTON-POS in CHAT-BUFFER so button keymaps accept shortcuts."
   (when (and chat-buffer (buffer-live-p chat-buffer) button-pos)
@@ -150,11 +166,13 @@ prompt would not block the agent and is ignored.")
                         (marker-position button-pos)
                       button-pos)))
       (if-let ((win (get-buffer-window chat-buffer)))
-          (with-selected-window win
-            (goto-char pos)
-            (recenter -3))
+          (progn
+            (select-window win)
+            (with-current-buffer chat-buffer
+              (emagent-tools--goto-first-button pos)
+              (recenter -3)))
         (with-current-buffer chat-buffer
-          (goto-char pos))))))
+          (emagent-tools--goto-first-button pos))))))
 
 (defun emagent-tools--buttons-prompt (prompt choices chat-buffer callback &optional preamble)
   "Insert optional PREAMBLE, PROMPT, and CHOICES as buttons in CHAT-BUFFER.
@@ -222,7 +240,12 @@ nil or dead, calling CALLBACK with the chosen value."
                    'follow-link t)
                   (insert "  ")))
               (insert "\n")
-              (setq end-mark (copy-marker (point) nil)))))
+              (setq end-mark (copy-marker (point) nil))
+              (when first-button
+                (emagent-tools--apply-button-line-keymap
+                 (marker-position first-button)
+                 (marker-position end-mark)
+                 btn-keymap)))))
         (emagent-tools--focus-inline-buttons chat-buffer first-button)))))
 
 (defun emagent-tools--remember-allowed-tool (tool-name)
