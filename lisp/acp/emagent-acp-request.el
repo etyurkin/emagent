@@ -64,10 +64,18 @@
   "Return the command or path to show on the permission ? line."
   (let* ((tool-call (map-nested-elt emagent-acp-request '(params toolCall)))
          (detail (and tool-call (emagent-acp--tool-call-detail-from-tool-call tool-call)))
-         (title (emagent-acp--permission-prompt-title emagent-acp-request)))
+         (title (emagent-acp--permission-prompt-title emagent-acp-request))
+         (name (and title (replace-regexp-in-string "\\`Allow \\(.*\\)[?]\\'" "\\1" title))))
     (cond
-     ((emagent-acp--human-tool-detail-p detail) detail)
-     (title (replace-regexp-in-string "\\`Allow \\(.*\\)[?]\\'" "\\1" title))
+     ((emagent-acp--human-tool-detail-p detail)
+      ;; A shell detail is self-explanatory ("make test"), but an MCP
+      ;; tool's raw-input fragment ("--oneline -10") is meaningless
+      ;; without the tool's name — prepend it.
+      (if (and name (string-match-p "\\`mcp__" name)
+               (not (string-match-p (regexp-quote name) detail)))
+          (format "%s %s" name detail)
+        detail))
+     (name name)
      (t "Permission request"))))
 
 (defun emagent-acp--permission-prompt-title (emagent-acp-request)
