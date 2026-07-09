@@ -171,22 +171,30 @@ from ~/.cursor/commands and .cursor/commands/.")
                       (emagent-chat--command-skill-part name))))
 
 (defun emagent-chat--slash-token-bounds ()
-  "Return (START . END) for the slash command token at point, or nil."
+  "Return (START . END) for the slash command token at point, or nil.
+
+Detects a `/name' token that point is within, anywhere on the line — at the
+start (after the user heading) or mid-prompt (e.g. `commit, use /model') — so
+long as the `/' is preceded by the heading, the line start, or whitespace."
   (let ((zone (emagent-chat--user-zone-start))
         (user-point (point)))
     (when (>= user-point zone)
       (save-excursion
-        (beginning-of-line)
-        ;; Skip past user heading prefix when the line is a heading.
-        (when (looking-at (emagent-chat--user-heading-re))
-          (goto-char (match-end 0)))
-        (when (looking-at "/")
-          (let ((start (point))
-                (end (or (and (search-forward-regexp "[ \t]" (line-end-position) t)
-                              (match-beginning 0))
-                         (line-end-position))))
-            (when (<= start user-point end)
-              (cons start end))))))))
+        (let ((floor (line-beginning-position)))
+          ;; Do not scan back into the user heading prefix.
+          (goto-char floor)
+          (when (looking-at (emagent-chat--user-heading-re))
+            (setq floor (match-end 0)))
+          ;; Walk back over the non-whitespace token containing point.
+          (goto-char user-point)
+          (skip-chars-backward "^ \t\n" floor)
+          (when (looking-at "/")
+            (let ((start (point))
+                  (end (progn (goto-char user-point)
+                              (skip-chars-forward "^ \t\n" (line-end-position))
+                              (point))))
+              (when (<= start user-point end)
+                (cons start end)))))))))
 
 ;;;###autoload
 (defun emagent-chat-slash-command-completion-at-point ()
