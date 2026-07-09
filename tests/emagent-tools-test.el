@@ -25,6 +25,15 @@ which yields `exit'), so every subprocess tool hung until it timed out."
     (should (equal "hello" (car result)))
     (should-not (cdr result))))
 
+(ert-deftest emagent-tools-test-git-uses-no-pager ()
+  "git runs with `--no-pager' so log/diff/show never hang on a pager prompt."
+  (let (captured)
+    (cl-letf (((symbol-function 'emagent-tools--run-process-async)
+               (lambda (_cb program &rest args) (setq captured (cons program args))))
+              ((symbol-function 'emagent-tools--root-directory) (lambda (_) "/tmp")))
+      (emagent-tools--run-git-async #'ignore "log" "--oneline")
+      (should (equal '("git" "--no-pager" "log" "--oneline") captured)))))
+
 ;;;; Session root boundary
 
 (ert-deftest emagent-tools-test-within-boundary-p ()
