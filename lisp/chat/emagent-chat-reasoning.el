@@ -56,6 +56,26 @@ locate the headline by search and cache it."
                 emagent-chat--switching-model-p t)
           (match-beginning 0))))))
 
+(defun emagent-chat--open-preparing-begin ()
+  "Return point at the `** Preparing…' headline, or nil."
+  (if (and emagent-chat--thinking-headline-marker
+           (marker-position emagent-chat--thinking-headline-marker)
+           emagent-chat--preparing-p
+           (emagent-chat--open-response-p))
+      (save-excursion
+        (goto-char emagent-chat--thinking-headline-marker)
+        (beginning-of-line)
+        (when (looking-at emagent-chat--preparing-headline-re)
+          (marker-position emagent-chat--thinking-headline-marker)))
+    (when-let ((bounds (emagent-chat--open-response-body-bounds)))
+      (save-excursion
+        (goto-char (car bounds))
+        (when (re-search-forward emagent-chat--preparing-headline-re (cdr bounds) t)
+          (setq emagent-chat--thinking-headline-marker
+                (copy-marker (match-beginning 0) nil)
+                emagent-chat--preparing-p t)
+          (match-beginning 0))))))
+
 (defun emagent-chat--thinking-headline-text (&optional model-id)
   "Return the `** Thinking' headline, optionally suffixing MODEL-ID link."
   (if model-id
@@ -76,9 +96,23 @@ locate the headline by search and cache it."
     (goto-char emagent-chat--response-body-start)
     (setq emagent-chat--thinking-headline-marker (copy-marker (point) nil)
           emagent-chat--switching-model-p t
+          emagent-chat--preparing-p nil
           emagent-chat--thought-open-p nil
           emagent-chat--thought-marker nil)
     (insert (emagent-chat--switching-headline-text emagent-chat--turn-model) "\n")
+    (setq emagent-chat--assistant-marker (copy-marker (point) nil))))
+
+(defun emagent-chat--insert-preparing-scaffold ()
+  "Insert a `** Preparing…' subsection at the response body start."
+  (when (and emagent-chat--response-body-start
+             (marker-position emagent-chat--response-body-start))
+    (goto-char emagent-chat--response-body-start)
+    (setq emagent-chat--thinking-headline-marker (copy-marker (point) nil)
+          emagent-chat--preparing-p t
+          emagent-chat--switching-model-p nil
+          emagent-chat--thought-open-p nil
+          emagent-chat--thought-marker nil)
+    (insert emagent-chat-preparing-headline "\n")
     (setq emagent-chat--assistant-marker (copy-marker (point) nil))))
 
 (defun emagent-chat--promote-switching-to-thinking ()
@@ -93,6 +127,18 @@ locate the headline by search and cache it."
           emagent-chat--thought-marker (copy-marker (point) nil)
           emagent-chat--assistant-marker (copy-marker (point) nil))))
 
+(defun emagent-chat--promote-preparing-to-thinking ()
+  "Replace a `** Preparing…' headline with `** Thinking'."
+  (when-let ((beg (emagent-chat--open-preparing-begin)))
+    (goto-char beg)
+    (delete-region (line-beginning-position) (line-end-position))
+    (insert (emagent-chat--thinking-headline-text emagent-chat--turn-model))
+    (unless (bolp) (insert "\n"))
+    (setq emagent-chat--preparing-p nil
+          emagent-chat--thought-open-p t
+          emagent-chat--thought-marker (copy-marker (point) nil)
+          emagent-chat--assistant-marker (copy-marker (point) nil))))
+
 (defun emagent-chat--clear-switching-scaffold ()
   "Remove a `** Switching model' headline from the open response, if present."
   (when-let ((beg (emagent-chat--open-switching-begin)))
@@ -103,6 +149,22 @@ locate the headline by search and cache it."
                      (min (point-max) (1+ (line-end-position)))))
     (setq emagent-chat--switching-model-p nil
           emagent-chat--thinking-headline-marker nil)))
+
+(defun emagent-chat--clear-preparing-scaffold ()
+  "Remove a `** Preparing…' headline from the open response, if present."
+  (when-let ((beg (emagent-chat--open-preparing-begin)))
+    (let ((inhibit-read-only t))
+      (emagent-chat--writable)
+      (goto-char beg)
+      (delete-region (line-beginning-position)
+                     (min (point-max) (1+ (line-end-position)))))
+    (setq emagent-chat--preparing-p nil
+          emagent-chat--thinking-headline-marker nil)))
+
+(defun emagent-chat--clear-transient-reasoning-scaffold ()
+  "Remove any transient preparing/switching headline from the open response."
+  (emagent-chat--clear-switching-scaffold)
+  (emagent-chat--clear-preparing-scaffold))
 
 (defun emagent-chat--insert-reasoning-scaffold ()
   "Insert an empty `** Thinking' subsection at the response body start."
@@ -141,6 +203,8 @@ reasoning streamed with no Response below."
   (when (emagent-chat--open-response-p)
     (when (emagent-chat--open-switching-begin)
       (emagent-chat--promote-switching-to-thinking))
+    (when (emagent-chat--open-preparing-begin)
+      (emagent-chat--promote-preparing-to-thinking))
     (cond
      (emagent-chat--thought-open-p
       (emagent-chat--sync-thought-marker))
