@@ -911,6 +911,28 @@ Org closes early and the trailing prose is still converted."
     (should (looking-at-p
              (regexp-quote "** Thinking [[emagent://haiku][haiku]]")))))
 
+(ert-deftest emagent-chat-test-preparing-scaffold-promotes-to-thinking ()
+  "A regular send opens `** Preparing…' and promotes to Thinking on stream."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (goto-char (point-max))
+    (insert "\n")
+    (setq emagent-chat--response-body-start (copy-marker (point) nil))
+    (let ((inhibit-read-only t))
+      (emagent-chat--writable)
+      (emagent-chat--insert-preparing-scaffold))
+    (should emagent-chat--preparing-p)
+    (should-not emagent-chat--thought-open-p)
+    (goto-char (marker-position emagent-chat--thinking-headline-marker))
+    (should (looking-at emagent-chat--preparing-headline-re))
+    (let ((inhibit-read-only t))
+      (emagent-chat--writable)
+      (emagent-chat--ensure-reasoning-scaffold))
+    (should-not emagent-chat--preparing-p)
+    (should emagent-chat--thought-open-p)
+    (goto-char (marker-position emagent-chat--thinking-headline-marker))
+    (should (looking-at-p (regexp-quote "** Thinking")))))
+
 (ert-deftest emagent-chat-test-turn-model-face ()
   "The /model marker renders as a plain org link (default `org-link' face,
 no custom fontification), even on org heading lines (prompt and Thinking)."
@@ -990,6 +1012,21 @@ no custom fontification), even on org heading lines (prompt and Thinking)."
     (should-not (string-match-p emagent-chat--switching-headline-re
                                 (buffer-string)))
     (should (string-match-p "\\*Error:\\* Prompt is too long" (buffer-string)))))
+
+(ert-deftest emagent-chat-test-fail-assistant-clears-preparing ()
+  "A failed send removes a `** Preparing…' scaffold from the buffer."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (goto-char (point-max))
+    (insert "\n")
+    (setq emagent-chat--response-body-start (copy-marker (point) nil))
+    (let ((inhibit-read-only t))
+      (emagent-chat--writable)
+      (emagent-chat--insert-preparing-scaffold))
+    (emagent-chat-fail-assistant "Connection refused")
+    (should-not (string-match-p emagent-chat--preparing-headline-re
+                                (buffer-string)))
+    (should (string-match-p "\\*Error:\\* Connection refused" (buffer-string)))))
 
 (ert-deftest emagent-chat-test-send-pending-spinner ()
   "Pre-dispatch work (model switch, connect) animates the mode-line spinner."
@@ -1455,6 +1492,21 @@ bracket must flush once the following non-`(' text confirms it is not a link."
           (emagent-chat--ensure-reasoning-scaffold)
           (should emagent-chat--thought-open-p)
           (should (markerp emagent-chat--thought-marker))))))))
+
+(ert-deftest emagent-chat-test-permission-prompt-focuses-buttons ()
+  "Permission dialogs move point onto the first button for key shortcuts."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-min))
+          (emagent-chat--begin-response (point-max))
+          (emagent-chat-permission-prompt
+           "make test"
+           '(("Allow once" . :allow-once))
+           (lambda (_) nil))
+          (should (button-at (point)))))))))
 
 (ert-deftest emagent-chat-test-permission-buttons-below-end-quote ()
   (emagent-test--with-emagent-buffer

@@ -27,6 +27,7 @@
 (declare-function emagent-chat--reset-response-state "emagent-chat-render")
 (declare-function emagent-chat--sync-user-zone-marker "emagent-chat-input")
 (declare-function emagent-chat--insert-switching-scaffold "emagent-chat-reasoning")
+(declare-function emagent-chat--insert-preparing-scaffold "emagent-chat-reasoning")
 
 (defun emagent-chat--operation-active-p ()
   "Return non-nil when the buffer has work Esc-Esc should stop."
@@ -138,10 +139,11 @@ Sending a previous prompt replaces its old response."
         (emagent-log "send: %s" (emagent-log-truncate-line input 80))
         (emagent-chat--send-pending-begin)
         (emagent-chat--begin-response response-pos)
-        (when emagent-chat--turn-model
-          (let ((inhibit-read-only t))
-            (emagent-chat--writable)
-            (emagent-chat--insert-switching-scaffold)))
+        (let ((inhibit-read-only t))
+          (emagent-chat--writable)
+          (if emagent-chat--turn-model
+              (emagent-chat--insert-switching-scaffold)
+            (emagent-chat--insert-preparing-scaffold)))
         (when emagent-chat--on-send
           (funcall emagent-chat--on-send input))))))
 

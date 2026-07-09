@@ -295,8 +295,14 @@ Used for the trailing (Allow: Session) / (Denied) annotation."
 (defvar-local emagent-chat--switching-model-p nil
   "Non-nil while the open response shows a `** Switching model' headline.")
 
+(defvar-local emagent-chat--preparing-p nil
+  "Non-nil while the open response shows a `** Preparing…' headline.")
+
 (defconst emagent-chat-switching-headline "** Switching model"
   "Org subsection headline shown while a per-turn `/model' switch is in flight.")
+
+(defconst emagent-chat-preparing-headline "** Preparing…"
+  "Org subsection headline shown while connect/pre-dispatch work runs.")
 
 (defconst emagent-chat-thinking-headline "** Thinking"
   "Org subsection headline holding streamed reasoning and tool lines.")
@@ -318,12 +324,16 @@ An optional model link marks a per-turn override
   "^\\*\\* Switching model to .+…[ \t]*$"
   "Regexp matching the transient model-switch subsection headline.")
 
+(defconst emagent-chat--preparing-headline-re
+  "^\\*\\* Preparing…[ \t]*$"
+  "Regexp matching the transient preparing subsection headline.")
+
 (defconst emagent-chat--response-headline-re
   "^\\*\\* Response[ \t]*$"
   "Regexp matching the Response subsection headline.")
 
 (defconst emagent-chat--subsection-headline-re
-  "^\\*\\* \\(?:Thinking\\|Switching model\\|Response\\|Request permissions\\)\\(?:[ \t]\\|$\\)"
+  "^\\*\\* \\(?:Thinking\\|Switching model\\|Preparing…\\|Response\\|Request permissions\\)\\(?:[ \t]\\|$\\)"
   "Regexp matching any emagent response subsection headline.")
 
 (defconst emagent-chat--reasoning-begin-re emagent-chat--thinking-headline-re
