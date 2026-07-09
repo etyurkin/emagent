@@ -30,14 +30,9 @@
 (declare-function emagent-acp--model-choices "emagent-acp-model")
 (declare-function cl-find "cl-lib")
 
-(defconst emagent-chat--turn-model-property 'emagent-turn-model
-  "Text property stamped on `/model'-inserted text.
-Its value is the model id to use for the turn the prompt is sent in; carrying it
-in the text (rather than a separate variable) ties the override to the prompt as
-edited, so removing the word removes the override.")
-
 (defconst emagent-chat--client-slash-commands
-  '(((name . "model") (description . "switch model for this turn only")))
+  '(((name . "model")
+     (description . "switch model for this turn (marker stripped before send)")))
   "Slash commands emagent handles itself; never sent to the agent.")
 
 (defun emagent-chat--client-slash-command (name)
@@ -46,9 +41,10 @@ edited, so removing the word removes the override.")
             emagent-chat--client-slash-commands))
 
 (defun emagent-chat--slash-model-apply ()
-  "Prompt for a model and replace the `/model' token with it for this turn.
-The inserted model id is stamped with `emagent-chat--turn-model-property' so the
-send path switches to it for the turn and restores the buffer model afterward."
+  "Prompt for a model and replace the `/model' token with its marker link.
+The `[[emagent://AGENT/MODEL][short]]' link makes the send path switch to
+MODEL for this turn (restoring the buffer model afterward); the link is
+stripped from the text sent to the agent."
   (let* ((state (and (fboundp 'emagent-acp--session) (emagent-acp--session)))
          (choices (and state (fboundp 'emagent-acp--model-choices)
                        (emagent-acp--model-choices state nil)))
@@ -63,8 +59,11 @@ send path switches to it for the turn and restores the buffer model afterward."
         (when model-id
           (delete-region (car bounds) (cdr bounds))
           (goto-char (car bounds))
-          (insert (propertize model-id
-                              emagent-chat--turn-model-property model-id))))))))
+          ;; An org link: agent/short-model as text, full id as target
+          ;; (shown on hover).  Org fontifies it, it survives saving the
+          ;; session file, deleting it cancels the override, and send strips
+          ;; it from the outgoing prompt.
+          (insert (emagent-chat--model-link model-id))))))))
 
 (defun emagent-chat--run-client-slash-command (name)
   "Run the client slash command NAME (dispatch after completion)."

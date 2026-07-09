@@ -62,10 +62,12 @@ Sending a previous prompt replaces its old response."
       (user-error "Not on a user prompt"))
     (let* ((raw (string-trim (buffer-substring-no-properties
                               (car bounds) (cdr bounds))))
-           (input (string-trim (emagent-chat--strip-user-heading raw)))
-           ;; A `/model'-stamped model in the prompt overrides the buffer
-           ;; model for this turn.  With no stamp, keep whatever override is
-           ;; sticky (a prior failure may have chosen to keep one).
+           ;; The `/model' link overrides the buffer model for this turn; it
+           ;; is client UI, stripped from what the agent receives.  With no
+           ;; link, keep whatever override is sticky (a prior failure may
+           ;; have chosen to keep one).
+           (input (emagent-chat--strip-model-links
+                   (string-trim (emagent-chat--strip-user-heading raw))))
            (override (emagent-chat--region-turn-model (car bounds) (cdr bounds))))
       (when (string-empty-p input)
         (user-error "Prompt is empty"))

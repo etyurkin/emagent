@@ -66,7 +66,13 @@ Runs late on `org-mode-hook' so it overrides user hooks (e.g. org-modern
   (setq-local org-src-fontify-natively t
               org-ellipsis "…"
               org-fontify-quote-and-verse-blocks t
-              org-cycle-hide-block-startup t)
+              org-cycle-hide-block-startup t
+              ;; Render `[[link][text]]' as just TEXT regardless of the
+              ;; user's global setting — the `/model' marker and any links
+              ;; in agent output should read as links, not raw markup.
+              org-link-descriptive t)
+  (when font-lock-mode
+    (font-lock-flush))
   (emagent-chat--setup-buffer-display))
 
 (defun emagent-chat--setup-faces-deferred ()
@@ -120,9 +126,6 @@ Run \\[emagent-mode] to reconnect a saved session."
   (emagent-chat--sync-user-zone-marker)
   (add-hook 'completion-at-point-functions
             #'emagent-chat-slash-command-completion-at-point -90 t)
-  ;; Face `/model' override markers even inside org headings (prompt / Thinking).
-  (font-lock-add-keywords
-   nil '((emagent-chat--fontify-turn-model 0 'emagent-chat-turn-model prepend)) 'append)
   (setq-local imenu-create-index-function #'emagent-chat--imenu-create-index)
   (font-lock-add-keywords nil emagent-chat--tool-line-font-lock-keywords 'append)
   (setq-local bookmark-make-record-function #'emagent-chat--bookmark-make-record)
