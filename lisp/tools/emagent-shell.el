@@ -1,7 +1,8 @@
 ;;; emagent-shell.el --- Shell command routing for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Version: 1.1.0
+;; SPDX-License-Identifier: MIT
+;; Version: 1.2.0
 
 ;;; Commentary:
 ;; Intercepts `emagent-tool-run-shell-command' to block unsafe git usage,

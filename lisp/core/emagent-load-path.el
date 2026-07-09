@@ -1,5 +1,10 @@
 ;;; emagent-load-path.el --- Register emagent `lisp/' subdirs on load-path -*- lexical-binding: t; -*-
 
+;; Copyright (C) 2024-2026  Evgeniy Tyurkin
+
+;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; SPDX-License-Identifier: MIT
+
 ;;; Code:
 
 (defconst emagent-elpaca-files

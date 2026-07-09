@@ -2,6 +2,8 @@
 
 ;; Copyright (C) 2024-2026  Evgeniy Tyurkin
 
+;; SPDX-License-Identifier: MIT
+
 ;;; Commentary:
 
 ;; Single entry point for permission and execution-time checks.

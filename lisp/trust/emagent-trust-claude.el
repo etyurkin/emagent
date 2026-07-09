@@ -1,7 +1,8 @@
 ;;; emagent-trust-claude.el --- Claude Code workspace trust -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Version: 1.1.0
+;; SPDX-License-Identifier: MIT
+;; Version: 1.2.0
 
 ;;; Commentary:
 ;;

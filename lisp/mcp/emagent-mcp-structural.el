@@ -1,5 +1,10 @@
 ;;; emagent-mcp-structural.el --- lisp-sitter MCP tools for emagent -*- lexical-binding: t; -*-
 
+;; Copyright (C) 2024-2026  Evgeniy Tyurkin
+
+;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; SPDX-License-Identifier: MIT
+
 ;;; Commentary:
 
 ;; MCP tool entries gated by `emagent-struct-available-p'.  Appended to

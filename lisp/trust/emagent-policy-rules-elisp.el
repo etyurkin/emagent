@@ -2,6 +2,8 @@
 
 ;; Copyright (C) 2024-2026  Evgeniy Tyurkin
 
+;; SPDX-License-Identifier: MIT
+
 ;;; Commentary:
 
 ;; Declarative elisp rules for `emagent-policy-check-elisp'.
