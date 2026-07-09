@@ -102,7 +102,12 @@ the drain).  Numbers, vectors, and empty objects route as no-ops."
 (ert-deftest emagent-acp-routing-test-callback-error-isolated ()
   "A throwing on-success callback must not escape routing (so the drain that
 calls it keeps going); the pending request is still cleared."
-  (let* ((client (emagent-test--route-client
+  ;; The isolation uses `condition-case-unless-debug', which by design does
+  ;; not catch while debugging.  Assert the production (non-debug) guarantee;
+  ;; some batch runners (Emacs 29 CI) enable `debug-on-error'.
+  (let* ((debug-on-error nil)
+         (debug-on-signal nil)
+         (client (emagent-test--route-client
                   (lambda (_r) (error "boom in on-success"))))
          (msg (emagent-acp--make-message
                :json "{}"
