@@ -78,8 +78,9 @@ Runs late on `org-mode-hook' so it overrides user hooks (e.g. org-modern
 (define-derived-mode emagent-mode org-mode "Emagent"
   "Major mode for emagent chat scratch buffers.
 
-Derived from `org-mode'.  Type naturally, then \\[emagent-chat-send] to send
-the line at point.  Select a region first to send multiline text.
+Derived from `org-mode'.  Type after the `* user>' stub, then
+\\[emagent-chat-send] to send the prompt at point (its heading line
+plus any body lines).
 On a slash-command line (plugin skills such as /workflow:dev), \\[emagent-chat-tab]
 completes available commands.  Agent responses are inserted between
 `** Thinking' / `** Response' subsections (TAB folds them as Org headlines).
@@ -197,26 +198,22 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
 
 ;;;; Context-sensitive C-c C-c
 
-(declare-function emagent-chat--user-prompt-input-pos "emagent-chat-input")
-(declare-function emagent-chat--user-zone-start "emagent-chat-input")
+(declare-function emagent-chat--send-bounds "emagent-chat-input")
 
 (defun emagent-chat-send-or-babel ()
   "Execute the src block at point, send the prompt, or defer to org.
 
 Precedence: a `#+BEGIN_SRC ... #+END_SRC' block executes via
-`org-babel-execute-src-block' (even inside the prompt); then anywhere
-sending makes sense — an active region, a `* user>' heading (old
-prompts are re-evaluable), or the user zone — sends via
-`emagent-chat-send'; anywhere else falls through to
-`org-ctrl-c-ctrl-c', so tables realign, checkboxes toggle, and the rest
-of org's C-c C-c keeps working inside session buffers."
+`org-babel-execute-src-block' (even inside a prompt); on or inside a
+`* user>' prompt (old prompts are re-evaluable) `emagent-chat-send'
+sends it; anywhere else falls through to `org-ctrl-c-ctrl-c', so
+tables realign, checkboxes toggle, and the rest of org's C-c C-c keeps
+working inside session buffers."
   (interactive)
   (cond
    ((org-in-src-block-p)
     (call-interactively #'org-babel-execute-src-block))
-   ((or (region-active-p)
-        (emagent-chat--user-prompt-input-pos)
-        (>= (point) (emagent-chat--user-zone-start)))
+   ((emagent-chat--send-bounds)
     (call-interactively #'emagent-chat-send))
    (t
     (call-interactively #'org-ctrl-c-ctrl-c))))

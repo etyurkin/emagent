@@ -50,32 +50,40 @@ partial response, and sends `btw, TEXT' as a new prompt."
       (funcall emagent-chat--on-send text))))
 
 (defun emagent-chat-send ()
-  "Send region or line at point to the agent (C-c C-c).
+  "Send the `* user>' prompt at point to the agent (C-c C-c).
 
-With an active region, send the selection.  Otherwise send the current
-line (or nearest preceding sendable line in the user zone).  The text is
-formatted as a '* username> ' org heading in the buffer; the heading
-prefix is stripped before the text is sent to the agent."
+Point must be on the prompt's heading line or in its body lines.  The
+prompt is sent as-is (heading prefix stripped); nothing in the buffer
+is rewritten, so text properties like the `/model' stamp survive.
+Sending a previous prompt replaces its old response."
   (interactive)
-  (let* ((bounds (emagent-chat--send-bounds))
-         (raw (string-trim (buffer-substring-no-properties
-                            (car bounds) (cdr bounds))))
-         ;; A `/model'-stamped model in the prompt overrides the buffer model for
-         ;; this turn; read it before `--format-as-user-heading' strips the text
-         ;; properties.  With no stamp, keep whatever override is sticky (a prior
-         ;; failure may have chosen to keep one).
-         (override (emagent-chat--region-turn-model (car bounds) (cdr bounds))))
-    (when (string-empty-p raw)
-      (user-error "No sendable text at point"))
-    (when override
-      (setq emagent-chat--turn-model override))
-    (let* ((response-pos (emagent-chat--format-as-user-heading bounds raw))
-           (input (string-trim (emagent-chat--strip-user-heading raw))))
-      (emagent-chat--delete-following-response response-pos)
-      (emagent-log "send: %s" (emagent-log-truncate-line input 80))
-      (emagent-chat--begin-response response-pos)
-      (when emagent-chat--on-send
-        (funcall emagent-chat--on-send input)))))
+  (let ((bounds (emagent-chat--send-bounds)))
+    (unless bounds
+      (user-error "Not on a user prompt"))
+    (let* ((raw (string-trim (buffer-substring-no-properties
+                              (car bounds) (cdr bounds))))
+           (input (string-trim (emagent-chat--strip-user-heading raw)))
+           ;; A `/model'-stamped model in the prompt overrides the buffer
+           ;; model for this turn.  With no stamp, keep whatever override is
+           ;; sticky (a prior failure may have chosen to keep one).
+           (override (emagent-chat--region-turn-model (car bounds) (cdr bounds))))
+      (when (string-empty-p input)
+        (user-error "Prompt is empty"))
+      (when override
+        (setq emagent-chat--turn-model override))
+      (let ((response-pos
+             (save-excursion
+               (goto-char (cdr bounds))
+               (end-of-line)
+               (if (eobp)
+                   (let ((inhibit-read-only t)) (insert "\n"))
+                 (forward-line 1))
+               (point))))
+        (emagent-chat--delete-following-response response-pos)
+        (emagent-log "send: %s" (emagent-log-truncate-line input 80))
+        (emagent-chat--begin-response response-pos)
+        (when emagent-chat--on-send
+          (funcall emagent-chat--on-send input))))))
 
 (declare-function emagent-acp-interrupt "emagent-acp")
 
