@@ -2,7 +2,7 @@
 
 ;; Not linked into Elpaca builds; documents the package for tooling.
 
-(define-package "emagent" "1.2.0"
+(define-package "emagent" "1.2.1"
   "Emacs-native ACP chat assistant"
   '((emacs "29.1")))
 
