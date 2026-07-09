@@ -377,17 +377,40 @@ stays responsive because no polling loop is used."
 Uses pure Emacs search when `emagent-acp-prefer-emacs' is non-nil."
   (emagent-tools--run-async-sync #'emagent-tool-grep-async pattern path))
 
+(defconst emagent-tools--list-files-ignored-dirs
+  '(".git" ".build" ".venv" ".cache" ".elpaca" "node_modules" "__pycache__"
+    "dist" "target" "out")
+  "Directory names `emagent-tool-list-files' skips outside git repos.")
+
+(defun emagent-tools--list-files-walk (root)
+  "List files under ROOT recursively, skipping well-known artifact dirs."
+  (string-join
+   (mapcar (lambda (file) (file-relative-name file root))
+           (directory-files-recursively
+            root "[^.].*" nil
+            (lambda (dir)
+              (not (member (file-name-nondirectory (directory-file-name dir))
+                           emagent-tools--list-files-ignored-dirs)))))
+   "\n"))
+
 (defun emagent-tool-list-files (&optional path)
-  "List files under PATH relative to PATH, one per line."
-  (let ((root (emagent-tools--root-directory path)))
-    (string-join
-     (mapcar (lambda (file)
-               (file-relative-name file root))
-             (seq-filter
-              (lambda (file)
-                (not (string-match-p "/\\.git/" file)))
-              (directory-files-recursively root "[^.].*" nil t)))
-     "\n")))
+  "List project files under PATH relative to PATH, one per line.
+
+Inside a git repository this is what git considers the project:
+tracked plus untracked-but-not-ignored files (`git ls-files'), so
+build artifacts and other gitignored trees don't flood the result.
+Elsewhere it walks the tree, skipping
+`emagent-tools--list-files-ignored-dirs'."
+  (let* ((root (emagent-tools--root-directory path))
+         (default-directory root))
+    (or (when (and (executable-find "git")
+                   (locate-dominating-file root ".git"))
+          (with-temp-buffer
+            (when (zerop (call-process "git" nil t nil "ls-files"
+                                       "--cached" "--others"
+                                       "--exclude-standard"))
+              (string-trim-right (buffer-string)))))
+        (emagent-tools--list-files-walk root))))
 
 (defun emagent-tools--glob-to-regexp (glob)
   "Convert a simple shell GLOB to a regexp."
