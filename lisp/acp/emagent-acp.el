@@ -129,6 +129,27 @@ Choices:
        (emagent-permissions-reset-global)
        (message "emagent: cleared all global permissions")))))
 
+(defun emagent-acp-current-model-id ()
+  "Return the ACP session model id for the current buffer, or nil."
+  (when-let ((state (emagent-acp--session)))
+    (emagent-acp--current-model-id state nil)))
+
+(defun emagent-acp-set-model-transient (model-id on-done)
+  "Switch this buffer's ACP session model to MODEL-ID without persisting it.
+The buffer model (`emagent-chat-model') is left unchanged, so this is a
+per-turn override.  ON-DONE is called once the switch resolves (success or
+failure) so the caller can proceed to send the prompt."
+  (let ((state (emagent-acp--session)))
+    (if state
+        (emagent-acp--config-option-set-model-id
+         :state state
+         :session-id (emagent-acp-state-session-id state)
+         :model-id model-id
+         :persist nil
+         :on-success on-done
+         :on-failure (lambda (&rest _) (when on-done (funcall on-done))))
+      (when on-done (funcall on-done)))))
+
 (defun emagent-set-model ()
   "Set the ACP model for the current emagent session."
   (interactive)

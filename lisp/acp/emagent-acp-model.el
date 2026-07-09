@@ -224,7 +224,11 @@ when advertised, then the agent's current model."
      (t nil))))
 
 (cl-defun emagent-acp--config-option-set-model-id (&key state session-id model-id
-                                                        on-success on-failure)
+                                                        on-success on-failure
+                                                        (persist t))
+  "Switch the ACP session model to MODEL-ID.
+When PERSIST is non-nil (the default) also record MODEL-ID as the buffer model;
+pass nil for a transient per-turn switch that must not change the buffer model."
   (if-let ((model-option (emagent-acp--model-config-option state)))
       (emagent-acp--send-request
        :state state
@@ -239,7 +243,7 @@ when advertised, then the agent's current model."
                        (emagent-acp--config-option-set-value state
                                                              (map-elt model-option :id)
                                                              model-id))
-                     (emagent-acp--persist-model-id state model-id)
+                     (when persist (emagent-acp--persist-model-id state model-id))
                      (emagent-acp--progress
                       state
                       (format "model %s"
@@ -258,7 +262,7 @@ when advertised, then the agent's current model."
                :session-id session-id
                :model-id model-id)
      :on-success (lambda (_response)
-                   (emagent-acp--persist-model-id state model-id)
+                   (when persist (emagent-acp--persist-model-id state model-id))
                    (emagent-acp--notify-user
                     state
                     (format "emagent: model %s" model-id))

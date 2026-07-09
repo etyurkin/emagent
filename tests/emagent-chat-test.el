@@ -808,6 +808,44 @@ Org closes early and the trailing prose is still converted."
     ;; Trailing prose after the real terminator is still transformed.
     (should (string-match-p "\\[\\[http://x\\]\\[docs\\]\\]" out))))
 
+(ert-deftest emagent-chat-test-turn-model-region-scan ()
+  "A `/model'-stamped model in the prompt is read back by the region scanner."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (insert "commit, use ")
+    (insert (propertize "haiku" emagent-chat--turn-model-property "haiku"))
+    (should (equal "haiku"
+                   (emagent-chat--region-turn-model (point-min) (point-max))))
+    ;; Only the stamped text carries it; plain text does not.
+    (should-not (emagent-chat--region-turn-model (point-min) (+ (point-min) 6)))))
+
+(ert-deftest emagent-chat-test-turn-model-thinking-indicator ()
+  "The Thinking headline shows the per-turn model; the regex still matches both."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (goto-char (point-max))
+    (setq emagent-chat--turn-model "haiku"
+          emagent-chat--response-body-start (copy-marker (point) nil))
+    (emagent-chat--insert-reasoning-scaffold)
+    (goto-char (marker-position emagent-chat--thinking-headline-marker))
+    (should (looking-at-p "\\*\\* Thinking (haiku)"))
+    (should (string-match-p emagent-chat--thinking-headline-re "** Thinking (haiku)"))
+    (should (string-match-p emagent-chat--thinking-headline-re "** Thinking"))))
+
+(ert-deftest emagent-chat-test-turn-model-restore-clears ()
+  "A successful turn restores the base model and clears the override state."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (setq emagent-chat--turn-model "haiku"
+          emagent-chat--turn-model-base "sonnet")
+    (let (restored)
+      (cl-letf (((symbol-function 'emagent-acp-set-model-transient)
+                 (lambda (m _cb) (setq restored m))))
+        (emagent--restore-turn-model))
+      (should (equal "sonnet" restored))
+      (should-not emagent-chat--turn-model)
+      (should-not emagent-chat--turn-model-base))))
+
 (ert-deftest emagent-chat-test-markup-normalizes-crlf ()
   "CRLF output is normalized to LF so src blocks still segment and no ^M leaks."
   (let ((out (emagent-chat--convert-agent-markup

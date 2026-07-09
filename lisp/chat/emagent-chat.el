@@ -127,6 +127,30 @@ or concurrent chat buffers would alias one table.")
 (defvar-local emagent-chat--on-send nil
   "Function called with user input when sending.")
 
+(defvar-local emagent-chat--turn-model nil
+  "Model id overriding the buffer model for the in-flight turn, or nil.
+
+Set at send from the `emagent-chat--turn-model-property' that `/model' stamps on
+the prompt.  It drives the transient ACP model switch and the `** Thinking
+\(MODEL)' indicator.  Cleared when a turn completes successfully or when a
+post-failure dialog declines to keep it; kept across a failure so `retry' reuses
+the model.")
+
+(defvar-local emagent-chat--turn-model-base nil
+  "Session model to restore to when a per-turn override ends, or nil.
+Captured (once) from the live session model just before the first override
+switch, so restoring returns to whatever the session was really on.")
+
+(defun emagent-chat--region-turn-model (start end)
+  "Return the per-turn model id stamped between START and END, or nil."
+  (let ((pos start) model)
+    (while (and (< pos end) (not model))
+      (setq model (get-text-property pos emagent-chat--turn-model-property))
+      (setq pos (or (next-single-property-change
+                     pos emagent-chat--turn-model-property nil end)
+                    end)))
+    model))
+
 (defvar-local emagent-chat--on-attach nil
   "Function called with attachment text.")
 
@@ -185,8 +209,10 @@ Used for the trailing (Allow: Session) / (Denied) annotation."
   "Placeholder body line shown until a prompt finishes rendering.")
 
 (defconst emagent-chat--thinking-headline-re
-  "^\\*\\* Thinking[ \t]*$"
-  "Regexp matching the Thinking subsection headline.")
+  "^\\*\\* Thinking\\(?: ([^)\n]*)\\)?[ \t]*$"
+  "Regexp matching the Thinking subsection headline.
+The optional ` (MODEL)' suffix marks a per-turn model override (see
+`emagent-chat--turn-model').")
 
 (defconst emagent-chat--response-headline-re
   "^\\*\\* Response[ \t]*$"
