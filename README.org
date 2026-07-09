@@ -116,6 +116,18 @@ and causes the next reconnect to fail.
 =default-directory= (or =~/=).  Prefix argument (=C-u M-x emagent=) picks the
 directory interactively.
 
+** Switching the model
+
+=M-x emagent-set-model= (or =C-c ?= → model) changes the model for the rest of
+the session and persists it to =#+EMAGENT_MODEL=.
+
+For a one-off, type =/model= inside a prompt and pick from the current agent's
+models — the token is replaced with the model name (e.g. =commit and push, use
+haiku=) and emagent runs *that turn* on the chosen model, showing =** Thinking
+\(haiku)=, then restores the buffer model.  Editing the model word out before
+sending cancels the override.  If the turn fails, emagent asks whether to keep
+the model so a =retry=/=continue= reuses it.
+
 If both =cursor-agent= and =claude-agent-acp= are installed, emagent prompts
 which to use (defaulting to =emagent-default-provider=).  Agent, session id,
 model, and project directory are saved in the buffer header as
