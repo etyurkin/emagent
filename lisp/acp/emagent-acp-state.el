@@ -24,6 +24,9 @@
 (defvar-local emagent-acp--session nil
   "ACP session state for the current emagent buffer.")
 
+(defvar-local emagent-acp--when-connected-queue nil
+  "Callbacks waiting for `emagent-acp--connected-p' in this buffer.")
+
 (defun emagent-acp--make-usage ()
   "Return a fresh usage hash table."
   (let ((u (make-hash-table :test 'eq)))
@@ -55,6 +58,7 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
   ready busy
   (assistant-text "") (thought-text "") (thought-buffer "")
   prompt-finalized prompt-finishing (prompt-generation 0)
+  prompt-retry-gen
   finish-token finish-timer prompt-watchdog prompt-watchdog-timer
   extra-context compress-pending replaying-history
   continue-attempts deferred-complete-response
@@ -152,6 +156,34 @@ underlying representation for now."
    ((emagent-acp-state-prompt-finishing state)
     (if (emagent-acp-state-prompt-finalized state) 'done 'finalizing))
    (t 'idle)))
+
+(declare-function emagent-acp--client-started-p "emagent-acp-protocol")
+
+(defun emagent-acp--connecting-p ()
+  "Return non-nil when an ACP session is starting but not yet ready."
+  (and emagent-acp--session
+       (not (emagent-acp-state-ready emagent-acp--session))
+       ;; From first `emagent-acp-start' until `session-ready': keep any
+       ;; additional `ensure-connected' calls from tearing the attempt down.
+       ;; After init, require a live client so a dead half-session can reconnect.
+       (or (not (emagent-acp-state-initialized emagent-acp--session))
+           (and (emagent-acp-state-client emagent-acp--session)
+                (emagent-acp--client-started-p
+                 (emagent-acp-state-client emagent-acp--session))))))
+
+(defun emagent-acp--run-when-connected-queue ()
+  "Run and clear `emagent-acp--when-connected-queue'."
+  (while emagent-acp--when-connected-queue
+    (let ((fn (pop emagent-acp--when-connected-queue)))
+      (condition-case err
+          (funcall fn)
+        (error
+         (emagent-log "connect callback failed: %s"
+                      (error-message-string err)))))))
+
+(defun emagent-acp--clear-when-connected-queue ()
+  "Drop queued `emagent-acp-ensure-connected' callbacks without running them."
+  (setq emagent-acp--when-connected-queue nil))
 
 (defun emagent-acp--connected-p ()
   "Return non-nil when the current buffer has a live, ready ACP session."

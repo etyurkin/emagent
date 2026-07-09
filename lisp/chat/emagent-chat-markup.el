@@ -422,12 +422,33 @@ Emacs itself is unfocused).  It is nil only when no visible frame displays the
 buffer (every window hidden or the frame iconified)."
   (and (get-buffer-window-list (or buffer (current-buffer)) nil 'visible) t))
 
+(defun emagent-chat--font-lock-region-start ()
+  "Return a start position for incremental font-lock in the current buffer.
+Fontifies from the open response (when present) or the user zone — never the
+whole session log, which can be hundreds of thousands of characters."
+  (or (and (boundp 'emagent-chat--response-body-start)
+           emagent-chat--response-body-start
+           (marker-position emagent-chat--response-body-start))
+      (and (fboundp 'emagent-chat--user-zone-start)
+           (emagent-chat--user-zone-start))
+      (point-min)))
+
+(defun emagent-chat--font-lock-response-tail ()
+  "Re-fontify the response tail without flushing the entire session buffer."
+  (when font-lock-mode
+    (let ((start (emagent-chat--font-lock-region-start))
+          (end (point-max)))
+      (when (< start end)
+        (condition-case nil
+            (font-lock-fontify-region start end)
+          (error nil))))))
+
 (defun emagent-chat--maybe-font-lock-flush ()
-  "Run org font-lock when active; defer otherwise."
+  "Run org font-lock on the response tail when active; defer otherwise."
   (if (emagent-chat--buffer-active-p)
       (progn
         (setq emagent-chat--font-lock-deferred-p nil)
-        (font-lock-flush))
+        (emagent-chat--font-lock-response-tail))
     (setq emagent-chat--font-lock-deferred-p t)))
 
 (provide 'emagent-chat-markup)

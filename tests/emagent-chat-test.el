@@ -881,11 +881,35 @@ Org closes early and the trailing prose is still converted."
     ;; No session agent in a temp buffer, so the link path is the bare
     ;; model id and the text is the short name.
     (should (looking-at-p
-             (regexp-quote "** Thinking ([[emagent://haiku][haiku]])")))
+             (regexp-quote "** Thinking [[emagent://haiku][haiku]]")))
     (should (string-match-p emagent-chat--thinking-headline-re
                             (buffer-substring-no-properties
                              (point) (line-end-position))))
     (should (string-match-p emagent-chat--thinking-headline-re "** Thinking"))))
+
+(ert-deftest emagent-chat-test-turn-model-switching-scaffold ()
+  "A `/model' send opens `** Switching model' and promotes to Thinking."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (goto-char (point-max))
+    (insert "\n")
+    (setq emagent-chat--turn-model "haiku"
+          emagent-chat--response-body-start (copy-marker (point) nil))
+    (let ((inhibit-read-only t))
+      (emagent-chat--writable)
+      (emagent-chat--insert-switching-scaffold))
+    (should emagent-chat--switching-model-p)
+    (should-not emagent-chat--thought-open-p)
+    (goto-char (marker-position emagent-chat--thinking-headline-marker))
+    (should (looking-at emagent-chat--switching-headline-re))
+    (let ((inhibit-read-only t))
+      (emagent-chat--writable)
+      (emagent-chat--ensure-reasoning-scaffold))
+    (should-not emagent-chat--switching-model-p)
+    (should emagent-chat--thought-open-p)
+    (goto-char (marker-position emagent-chat--thinking-headline-marker))
+    (should (looking-at-p
+             (regexp-quote "** Thinking [[emagent://haiku][haiku]]")))))
 
 (ert-deftest emagent-chat-test-turn-model-face ()
   "The /model marker renders as a plain org link (default `org-link' face,
@@ -898,12 +922,27 @@ no custom fontification), even on org heading lines (prompt and Thinking)."
           emagent-chat--response-body-start (copy-marker (point) nil))
     (emagent-chat--insert-reasoning-scaffold)
     (font-lock-ensure)
-    (dolist (needle '("run it [[" "Thinking ([["))
+    (dolist (needle '("run it [[" "Thinking [["))
       (goto-char (point-min))
       (search-forward needle)
       (search-forward "][")  ; into the description
       (let ((face (get-text-property (point) 'face)))
         (should (memq 'org-link (if (listp face) face (list face))))))))
+
+(ert-deftest emagent-chat-test-slash-model-connects-first ()
+  "/model calls `emagent-acp-ensure-connected' when no session is active yet."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (goto-char (point-max))
+    (insert "* etyurkin> use /model")
+    (search-backward "/model")
+    (setq emagent-acp--session nil)
+    (let ((called nil))
+      (cl-letf (((symbol-function 'emagent-acp--connected-p) (lambda () nil))
+                ((symbol-function 'emagent-acp-ensure-connected)
+                 (lambda (&rest _) (setq called t))))
+        (emagent-chat--slash-model-apply)
+        (should called)))))
 
 (ert-deftest emagent-chat-test-turn-model-restore-clears ()
   "A successful turn restores the base model and clears the override state."
@@ -918,6 +957,79 @@ no custom fontification), even on org heading lines (prompt and Thinking)."
       (should (equal "sonnet" restored))
       (should-not emagent-chat--turn-model)
       (should-not emagent-chat--turn-model-base))))
+
+(ert-deftest emagent-chat-test-turn-model-fatal-failure-restores ()
+  "Permanent prompt failures restore the buffer model without a keep dialog."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (setq emagent-chat--turn-model "haiku"
+          emagent-chat--turn-model-base "sonnet")
+    (let ((prompted nil))
+      (cl-letf (((symbol-function 'emagent-tools--buttons-prompt)
+                 (lambda (&rest _) (setq prompted t)))
+                ((symbol-function 'emagent-acp-set-model-transient)
+                 (lambda (_ _cb) nil)))
+        (emagent--turn-model-on-failure
+         "prompt failed: Internal error: Prompt is too long"))
+      (should-not prompted)
+      (should-not emagent-chat--turn-model)
+      (should-not emagent-chat--turn-model-base))))
+
+(ert-deftest emagent-chat-test-fail-assistant-clears-switching ()
+  "A failed send removes a `** Switching model' scaffold from the buffer."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (goto-char (point-max))
+    (insert "\n")
+    (setq emagent-chat--turn-model "haiku"
+          emagent-chat--response-body-start (copy-marker (point) nil))
+    (let ((inhibit-read-only t))
+      (emagent-chat--writable)
+      (emagent-chat--insert-switching-scaffold))
+    (emagent-chat-fail-assistant "Prompt is too long")
+    (should-not (string-match-p emagent-chat--switching-headline-re
+                                (buffer-string)))
+    (should (string-match-p "\\*Error:\\* Prompt is too long" (buffer-string)))))
+
+(ert-deftest emagent-chat-test-send-pending-spinner ()
+  "Pre-dispatch work (model switch, connect) animates the mode-line spinner."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (setq emagent-chat--status '(:busy nil :waiting-permission nil))
+    (should-not (emagent-chat--spinner-active-p))
+    (emagent-chat--send-pending-begin)
+    (should emagent-chat--send-pending)
+    (should (emagent-chat--spinner-active-p))
+    (setq emagent-chat--turn-model "haiku")
+    (let ((head (car (emagent-chat--mode-line-strings))))
+      (should (string-match-p "Switching" head)))
+    ;; `:busy' alone must not hide the pre-dispatch label.
+    (setq emagent-chat--status '(:busy t :waiting-permission nil))
+    (let ((head (car (emagent-chat--mode-line-strings))))
+      (should (string-match-p "Switching" head))
+      (should-not (string-match-p "Thinking" head)))
+    (setq emagent-chat--status '(:busy nil :waiting-permission nil))
+    (emagent-chat--send-pending-end)
+    (should-not emagent-chat--send-pending)
+    (should-not (emagent-chat--spinner-active-p))))
+
+(ert-deftest emagent-chat-test-interrupt-cancels-send-pending ()
+  "ESC ESC stops pre-dispatch work and clears the Preparing spinner."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (insert "* etyurkin> hello\n")
+    (setq emagent-chat--status '(:busy nil :waiting-permission nil))
+    (emagent-chat--send-pending-begin)
+    (emagent-chat--begin-response (point-max))
+    (let ((queued t))
+      (cl-letf (((symbol-function 'emagent-acp--clear-when-connected-queue)
+                 (lambda () (setq queued nil))))
+        (let ((inhibit-message t))
+          (emagent-chat-interrupt))
+        (should (not queued))
+        (should-not emagent-chat--send-pending)
+        (should-not (emagent-chat--spinner-active-p))
+        (should-not (emagent-chat--open-response-p))))))
 
 (ert-deftest emagent-chat-test-markup-normalizes-crlf ()
   "CRLF output is normalized to LF so src blocks still segment and no ^M leaks."

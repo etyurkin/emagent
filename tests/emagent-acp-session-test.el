@@ -1069,13 +1069,18 @@ project directory rather than opening up unconfined access."
 (ert-deftest emagent-acp-session-test-fatal-agent-error-p ()
   (should (emagent-acp--fatal-agent-error-p "request timed out"))
   (should (emagent-acp--fatal-agent-error-p "failed with status 500"))
-  (should-not (emagent-acp--fatal-agent-error-p "still working")))
+  (should-not (emagent-acp--fatal-agent-error-p "still working"))
+  (should-not
+   (emagent-acp--fatal-agent-error-p
+    "Internal error: API Error: Unable to connect to API (ConnectionRefused)")))
 
 (ert-deftest emagent-acp-session-test-retriable-prompt-error-p ()
   (should (emagent-acp--retriable-prompt-error-p
            "Error: RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh"))
   (should (emagent-acp--retriable-prompt-error-p "read ECONNRESET"))
   (should (emagent-acp--retriable-prompt-error-p "socket hang up"))
+  (should (emagent-acp--retriable-prompt-error-p
+           "Internal error: API Error: Unable to connect to API (ConnectionRefused)"))
   (should-not (emagent-acp--retriable-prompt-error-p "failed with status 400"))
   (should-not (emagent-acp--retriable-prompt-error-p nil)))
 
@@ -1130,6 +1135,23 @@ project directory rather than opening up unconfined access."
     (should (= (emagent-acp--prompt-retry-delay 1) 1.5))
     (should (= (emagent-acp--prompt-retry-delay 2) 3.0))
     (should (= (emagent-acp--prompt-retry-delay 3) 6.0))))
+
+(ert-deftest emagent-acp-session-test-prompt-retry-pending-guards-abort ()
+  "Stderr for a retriable failure must not abort while a retry is scheduled."
+  (let* ((state (emagent-test--make-acp-state))
+         (message "Internal error: API Error: Unable to connect to API (ConnectionRefused)")
+         (aborted nil))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-prompt-generation state) 2
+          (emagent-acp-state-prompt-retry-gen state) 2)
+    (cl-letf (((symbol-function 'emagent-acp--abort-prompt)
+               (lambda (_s _m) (setq aborted t))))
+      (when (and (emagent-acp-state-busy state)
+                 (emagent-acp--fatal-agent-error-p message)
+                 (not (emagent-acp--prompt-retry-pending-p state)))
+        (emagent-acp--abort-prompt state message)))
+    (should-not aborted)
+    (should-not (emagent-acp--fatal-agent-error-p message))))
 
 (ert-deftest emagent-acp-session-test-tool-call-displayable-p ()
   (let* ((state (emagent-test--make-acp-state))

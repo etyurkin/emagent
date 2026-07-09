@@ -27,6 +27,7 @@
 (declare-function emagent-chat-cycle-or-org-cycle "emagent-chat")
 (declare-function emagent-acp-ensure-connected "emagent-acp")
 (declare-function emagent-acp--session "emagent-acp")
+(declare-function emagent-acp--connected-p "emagent-acp")
 (declare-function emagent-acp--model-choices "emagent-acp-model")
 (declare-function cl-find "cl-lib")
 
@@ -40,19 +41,14 @@
   (seq-find (lambda (c) (equal (map-elt c 'name) name))
             emagent-chat--client-slash-commands))
 
-(defun emagent-chat--slash-model-apply ()
-  "Prompt for a model and replace the `/model' token with its marker link.
-The `[[emagent://AGENT/MODEL][short]]' link makes the send path switch to
-MODEL for this turn (restoring the buffer model afterward); the link is
-stripped from the text sent to the agent."
-  (let* ((state (and (fboundp 'emagent-acp--session) (emagent-acp--session)))
-         (choices (and state (fboundp 'emagent-acp--model-choices)
-                       (emagent-acp--model-choices state nil)))
-         (bounds (emagent-chat--slash-token-bounds)))
+(defun emagent-chat--slash-model-apply-1 (bounds)
+  "Prompt for a model and replace BOUNDS with the `/model' marker link."
+  (let* ((state emagent-acp--session)
+         (choices (and state (emagent-acp--model-choices state nil))))
     (cond
      ((not choices)
-      (emagent-log "no models available yet — connect the agent first"))
-     (bounds
+      (message "emagent: no models available yet — connect the agent first"))
+     (t
       (let* ((selection (completing-read "Model for this turn: "
                                          (mapcar #'car choices) nil t))
              (model-id (cdr (assoc-string selection choices))))
@@ -64,6 +60,26 @@ stripped from the text sent to the agent."
           ;; session file, deleting it cancels the override, and send strips
           ;; it from the outgoing prompt.
           (insert (emagent-chat--model-link model-id))))))))
+
+(defun emagent-chat--slash-model-apply ()
+  "Prompt for a model and replace the `/model' token with its marker link.
+The `[[emagent://AGENT/MODEL][short]]' link makes the send path switch to
+MODEL for this turn (restoring the buffer model afterward); the link is
+stripped from the text sent to the agent."
+  (unless (derived-mode-p 'emagent-mode)
+    (user-error "Turn on emagent-mode in this buffer first"))
+  (let ((bounds (emagent-chat--slash-token-bounds))
+        (buf (current-buffer)))
+    (unless bounds
+      (user-error "No `/model' token at point"))
+    (if (emagent-acp--connected-p)
+        (emagent-chat--slash-model-apply-1 bounds)
+      (emagent-acp-ensure-connected
+       :on-ready
+       (lambda ()
+         (with-current-buffer buf
+           (emagent-chat--slash-model-apply-1
+            (or (emagent-chat--slash-token-bounds) bounds))))))))
 
 (defun emagent-chat--run-client-slash-command (name)
   "Run the client slash command NAME (dispatch after completion)."
