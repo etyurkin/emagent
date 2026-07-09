@@ -886,7 +886,16 @@ the emagent gate can show what was edited instead of a bare arrow line."
   (should (string= "compile"
                    (emagent-acp--permission-question-line
                     '((params . ((title . "Allow compile?")
-                                 (toolCall . ((title . "compile"))))))))))
+                                 (toolCall . ((title . "compile")))))))))
+  ;; An MCP tool's bare input fragment gets the tool name prepended —
+  ;; "? --oneline -10" alone says nothing about what is being allowed.
+  (let ((args (make-hash-table :test 'equal)))
+    (puthash "command" "--oneline -10" args)
+    (should (string= "mcp__emagent__git_log --oneline -10"
+                     (emagent-acp--permission-question-line
+                      `((params . ((title . "Allow mcp__emagent__git_log?")
+                                   (toolCall . ((toolCallId . "tool_gl")
+                                                (arguments . ,args)))))))))))
 
 (ert-deftest emagent-acp-session-test-tool-call-truncate ()
   (should (= 121 (length (emagent-acp--tool-call-truncate (make-string 200 ?x)))))
