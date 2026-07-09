@@ -197,16 +197,29 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
 
 ;;;; Context-sensitive C-c C-c
 
-(defun emagent-chat-send-or-babel ()
-  "Send the prompt at point, or execute a src block when point is inside one.
+(declare-function emagent-chat--user-prompt-input-pos "emagent-chat-input")
+(declare-function emagent-chat--user-zone-start "emagent-chat-input")
 
-On a `#+BEGIN_SRC ... #+END_SRC' block, delegates to
-`org-babel-execute-src-block' so code blocks in agent responses are
-executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'."
+(defun emagent-chat-send-or-babel ()
+  "Execute the src block at point, send the prompt, or defer to org.
+
+Precedence: a `#+BEGIN_SRC ... #+END_SRC' block executes via
+`org-babel-execute-src-block' (even inside the prompt); then anywhere
+sending makes sense — an active region, a `* user>' heading (old
+prompts are re-evaluable), or the user zone — sends via
+`emagent-chat-send'; anywhere else falls through to
+`org-ctrl-c-ctrl-c', so tables realign, checkboxes toggle, and the rest
+of org's C-c C-c keeps working inside session buffers."
   (interactive)
-  (if (org-in-src-block-p)
-      (call-interactively #'org-babel-execute-src-block)
-    (call-interactively #'emagent-chat-send)))
+  (cond
+   ((org-in-src-block-p)
+    (call-interactively #'org-babel-execute-src-block))
+   ((or (region-active-p)
+        (emagent-chat--user-prompt-input-pos)
+        (>= (point) (emagent-chat--user-zone-start)))
+    (call-interactively #'emagent-chat-send))
+   (t
+    (call-interactively #'org-ctrl-c-ctrl-c))))
 
 ;;;; Imenu
 
@@ -232,8 +245,12 @@ executable without leaving `emagent-mode'.  Otherwise calls `emagent-chat-send'.
               ["Extract response"
                ("r" "Insert last response into buffer" emagent-chat-insert-last-response)
                ("s" "Insert src block into buffer" emagent-chat-insert-src-block)]
+              ;; org's own `C-c ?' command, shadowed by this palette; shown
+              ;; only when point is in a table, where it is meaningful.
+              ["Table" :if org-at-table-p
+               ("f" "Field info (org's C-c ?)" org-table-field-info)]
               ["Session"
-               ("m" "Set model" emagent-set-model)
+               ("m" "Set session model (/model = one turn)" emagent-set-model)
                ("p" "Change project directory" emagent-set-project-directory)
                ("P" "Reset permissions" emagent-reset-permissions)
                ("t" "Trust workspace on disk" emagent-trust-workspace)

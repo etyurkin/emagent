@@ -60,8 +60,10 @@
 ;; Direct keys are kept minimal: send, interrupt, the palette, and a few
 ;; input-aware overrides that fall through to their org/default behavior outside
 ;; the prompt zone (TAB completes /slash commands then org-cycles; C-a, C-n/C-p,
-;; C-y).  Every other command lives in the `C-c ?' palette (`emagent-dispatch'),
-;; so emagent does not shadow the rest of the org-mode keymap.
+;; C-y; C-c C-c runs babel in src blocks, sends where sending makes sense, and
+;; falls through to `org-ctrl-c-ctrl-c' everywhere else).  Every other command
+;; lives in the `C-c ?' palette (`emagent-dispatch').  The one org binding
+;; knowingly shadowed is `C-c ?' itself (org-table-field-info).
 (define-key emagent-mode-map (kbd "C-c C-c") #'emagent-chat-send-or-babel)
 (define-key emagent-mode-map (kbd "ESC ESC") #'emagent-chat-interrupt)
 (define-key emagent-mode-map (kbd "C-c ?")   #'emagent-dispatch)
