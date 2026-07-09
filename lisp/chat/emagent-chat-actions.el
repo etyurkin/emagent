@@ -59,9 +59,16 @@ prefix is stripped before the text is sent to the agent."
   (interactive)
   (let* ((bounds (emagent-chat--send-bounds))
          (raw (string-trim (buffer-substring-no-properties
-                            (car bounds) (cdr bounds)))))
+                            (car bounds) (cdr bounds))))
+         ;; A `/model'-stamped model in the prompt overrides the buffer model for
+         ;; this turn; read it before `--format-as-user-heading' strips the text
+         ;; properties.  With no stamp, keep whatever override is sticky (a prior
+         ;; failure may have chosen to keep one).
+         (override (emagent-chat--region-turn-model (car bounds) (cdr bounds))))
     (when (string-empty-p raw)
       (user-error "No sendable text at point"))
+    (when override
+      (setq emagent-chat--turn-model override))
     (let* ((response-pos (emagent-chat--format-as-user-heading bounds raw))
            (input (string-trim (emagent-chat--strip-user-heading raw))))
       (emagent-chat--delete-following-response response-pos)
