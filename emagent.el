@@ -154,18 +154,68 @@ once the session is ready; ON-REVEAL runs when the chat buffer should be shown."
                         :callbacks
                         `((:cb-chunk          . ,#'emagent-chat-append-assistant)
                           (:cb-thought        . ,#'emagent-chat-append-thought)
-                          (:cb-finish         . ,#'emagent-chat-finish-assistant)
-                          (:cb-fail           . ,#'emagent-chat-fail-assistant)
+                          (:cb-finish         . ,(lambda (&rest args)
+                                                    (apply #'emagent-chat-finish-assistant args)
+                                                    (emagent--restore-turn-model)))
+                          (:cb-fail           . ,(lambda (&rest args)
+                                                    (apply #'emagent-chat-fail-assistant args)
+                                                    (emagent--turn-model-on-failure)))
                           (:cb-slash-commands . ,#'emagent-chat-set-slash-commands)
                           (:cb-tool-call      . ,#'emagent-chat-show-tool-call)
                           (:cb-permission     . ,#'emagent-chat-permission-prompt)
                           (:cb-status         . ,#'emagent-chat-set-status))))))
 
 (defun emagent--send-prompt (user-text)
-  "Ensure connection and send USER-TEXT from the current buffer."
-  (emagent-acp-ensure-connected
-   :on-ready (lambda ()
-               (emagent-acp-send-prompt user-text))))
+  "Ensure connection and send USER-TEXT from the current buffer.
+When a per-turn model override (`emagent-chat--turn-model', set by `/model') is
+active and differs from the session model, switch to it transiently first, then
+send; the buffer model is restored when the turn ends (see
+`emagent-chat-finish-assistant' / `emagent-chat-fail-assistant')."
+  (let ((buf (current-buffer))
+        (turn-model emagent-chat--turn-model))
+    (emagent-acp-ensure-connected
+     :on-ready
+     (lambda ()
+       (with-current-buffer buf
+         (let ((current (emagent-acp-current-model-id)))
+           (if (and turn-model (not (equal turn-model current)))
+               (progn
+                 ;; Remember the real session model to restore to (only the
+                 ;; first time, so a sticky post-failure override still points
+                 ;; back at the original global model).
+                 (unless emagent-chat--turn-model-base
+                   (setq emagent-chat--turn-model-base current))
+                 (emagent-acp-set-model-transient
+                  turn-model
+                  (lambda ()
+                    (with-current-buffer buf (emagent-acp-send-prompt user-text)))))
+             (emagent-acp-send-prompt user-text))))))))
+
+(declare-function emagent-tools--buttons-prompt "emagent-tools")
+
+(defun emagent--restore-turn-model ()
+  "Restore the session model overridden by `/model' and clear the override.
+Called on a successful turn: switches back to the captured base model and clears
+`emagent-chat--turn-model' so the next prompt uses the buffer model again."
+  (when emagent-chat--turn-model
+    (when emagent-chat--turn-model-base
+      (emagent-acp-set-model-transient emagent-chat--turn-model-base #'ignore))
+    (setq emagent-chat--turn-model nil
+          emagent-chat--turn-model-base nil)))
+
+(defun emagent--turn-model-on-failure ()
+  "After a failed turn with a `/model' override, ask whether to keep it.
+The session is left on the override; a Yes keeps it (so `retry'/`continue' reuse
+the model), a No restores the buffer model.  Rendered as an in-buffer button
+dialog like the permission prompt."
+  (when emagent-chat--turn-model
+    (emagent-tools--buttons-prompt
+     (format "Continue with %s for the next prompt?" emagent-chat--turn-model)
+     '(("Yes, keep it" . keep) ("No, use the buffer model" . restore))
+     (current-buffer)
+     (lambda (choice)
+       (when (eq choice 'restore)
+         (emagent--restore-turn-model))))))
 
 (defun emagent-chat--wire-buffer ()
   "Attach per-buffer emagent callbacks."

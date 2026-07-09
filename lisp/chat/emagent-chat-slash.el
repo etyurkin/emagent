@@ -26,7 +26,50 @@
 (declare-function emagent-chat--user-heading-re "emagent-chat")
 (declare-function emagent-chat-cycle-or-org-cycle "emagent-chat")
 (declare-function emagent-acp-ensure-connected "emagent-acp")
+(declare-function emagent-acp--session "emagent-acp")
+(declare-function emagent-acp--model-choices "emagent-acp-model")
 (declare-function cl-find "cl-lib")
+
+(defconst emagent-chat--turn-model-property 'emagent-turn-model
+  "Text property stamped on `/model'-inserted text.
+Its value is the model id to use for the turn the prompt is sent in; carrying it
+in the text (rather than a separate variable) ties the override to the prompt as
+edited, so removing the word removes the override.")
+
+(defconst emagent-chat--client-slash-commands
+  '(((name . "model") (description . "switch model for this turn only")))
+  "Slash commands emagent handles itself; never sent to the agent.")
+
+(defun emagent-chat--client-slash-command (name)
+  "Return the client slash-command plist named NAME, or nil."
+  (seq-find (lambda (c) (equal (map-elt c 'name) name))
+            emagent-chat--client-slash-commands))
+
+(defun emagent-chat--slash-model-apply ()
+  "Prompt for a model and replace the `/model' token with it for this turn.
+The inserted model id is stamped with `emagent-chat--turn-model-property' so the
+send path switches to it for the turn and restores the buffer model afterward."
+  (let* ((state (and (fboundp 'emagent-acp--session) (emagent-acp--session)))
+         (choices (and state (fboundp 'emagent-acp--model-choices)
+                       (emagent-acp--model-choices state nil)))
+         (bounds (emagent-chat--slash-token-bounds)))
+    (cond
+     ((not choices)
+      (emagent-log "no models available yet — connect the agent first"))
+     (bounds
+      (let* ((selection (completing-read "Model for this turn: "
+                                         (mapcar #'car choices) nil t))
+             (model-id (cdr (assoc-string selection choices))))
+        (when model-id
+          (delete-region (car bounds) (cdr bounds))
+          (goto-char (car bounds))
+          (insert (propertize model-id
+                              emagent-chat--turn-model-property model-id))))))))
+
+(defun emagent-chat--run-client-slash-command (name)
+  "Run the client slash command NAME (dispatch after completion)."
+  (pcase name
+    ("model" (emagent-chat--slash-model-apply))))
 
 (defvar emagent-chat-provider)
 (defvar-local emagent-chat-slash-commands nil
@@ -149,11 +192,14 @@ from ~/.cursor/commands and .cursor/commands/.")
 (defun emagent-chat-slash-command-completion-at-point ()
   "Complete agent slash commands at point."
   (when-let* ((bounds (emagent-chat--slash-token-bounds))
-              (commands emagent-chat-slash-commands)
               (slash-start (car bounds))
               (end (cdr bounds))
               (prefix (buffer-substring-no-properties slash-start end))
-              ((string-prefix-p "/" prefix)))
+              ((string-prefix-p "/" prefix))
+              ;; Client commands (e.g. /model) are always offered; agent
+              ;; commands are merged in once the session publishes them.
+              (commands (append emagent-chat--client-slash-commands
+                                emagent-chat-slash-commands)))
     ;; Start the completion region AFTER the "/" so the framework sees the
     ;; bare name (e.g. "relax", "session:relax") as its input.  This lets
     ;; any completion style (basic, orderless, flex) filter naturally without
@@ -167,6 +213,12 @@ from ~/.cursor/commands and .cursor/commands/.")
                                                :test #'string=)
                                       'description)
                              "")))
+          :exit-function
+          (lambda (str status)
+            ;; A client command runs its handler instead of staying as text.
+            (when (and (memq status '(finished sole exact))
+                       (emagent-chat--client-slash-command str))
+              (emagent-chat--run-client-slash-command str)))
           :exclusive t)))
 
 ;;;###autoload
@@ -174,11 +226,9 @@ from ~/.cursor/commands and .cursor/commands/.")
   "On a slash-command line, complete; otherwise org-cycle."
   (interactive)
   (cond
-   ((and (emagent-chat--slash-token-bounds) emagent-chat-slash-commands)
-    (call-interactively #'completion-at-point))
+   ;; Client commands (/model) are always completable; agent commands merge in.
    ((emagent-chat--slash-token-bounds)
-    (emagent-acp-ensure-connected)
-    (emagent-log "slash commands load after the agent connects"))
+    (call-interactively #'completion-at-point))
    (t
     (call-interactively #'emagent-chat-cycle-or-org-cycle))))
 
