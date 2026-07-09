@@ -17,6 +17,7 @@
 (require 'map)
 (require 'emagent-log)
 (require 'emagent-acp-custom)
+(require 'emagent-acp-state)
 (require 'emagent-acp-protocol)
 (require 'emagent-tools)
 (require 'emagent-chat)
