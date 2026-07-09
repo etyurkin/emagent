@@ -847,18 +847,30 @@ Org closes early and the trailing prose is still converted."
     (should (string-match-p "\\[\\[http://x\\]\\[docs\\]\\]" out))))
 
 (ert-deftest emagent-chat-test-turn-model-region-scan ()
-  "A `/model'-stamped model in the prompt is read back by the region scanner."
+  "The `/model' link in the prompt is read back by the region scanner."
   (with-temp-buffer
     (delay-mode-hooks (emagent-mode))
-    (insert "commit, use ")
-    (insert (propertize "haiku" emagent-chat--turn-model-property "haiku"))
-    (should (equal "haiku"
+    (insert "commit ")
+    (insert "[[emagent://claude/claude-haiku-4-5][haiku]]")
+    ;; The model id is the path after the agent segment.
+    (should (equal "claude-haiku-4-5"
                    (emagent-chat--region-turn-model (point-min) (point-max))))
-    ;; Only the stamped text carries it; plain text does not.
+    ;; Only the link carries it; plain text does not.
     (should-not (emagent-chat--region-turn-model (point-min) (+ (point-min) 6)))))
 
+(ert-deftest emagent-chat-test-turn-model-strip ()
+  "The `/model' link never reaches the agent; prose and other links do."
+  (should (equal "what's the status? make it brief"
+                 (emagent-chat--strip-model-links
+                  "what's the status? [[emagent://claude/claude-haiku-4-5][haiku]] make it brief")))
+  (should (equal "no marker here"
+                 (emagent-chat--strip-model-links "no marker here")))
+  ;; A user's own org link is not mistaken for the model marker.
+  (should (equal "see [[https://x][docs]]"
+                 (emagent-chat--strip-model-links "see [[https://x][docs]]"))))
+
 (ert-deftest emagent-chat-test-turn-model-thinking-indicator ()
-  "The Thinking headline shows the per-turn model; the regex still matches both."
+  "The Thinking headline shows the per-turn model link; the regex matches both."
   (with-temp-buffer
     (delay-mode-hooks (emagent-mode))
     (goto-char (point-max))
@@ -866,27 +878,32 @@ Org closes early and the trailing prose is still converted."
           emagent-chat--response-body-start (copy-marker (point) nil))
     (emagent-chat--insert-reasoning-scaffold)
     (goto-char (marker-position emagent-chat--thinking-headline-marker))
-    (should (looking-at-p "\\*\\* Thinking (haiku)"))
-    (should (string-match-p emagent-chat--thinking-headline-re "** Thinking (haiku)"))
+    ;; No session agent in a temp buffer, so the link path is the bare
+    ;; model id and the text is the short name.
+    (should (looking-at-p
+             (regexp-quote "** Thinking ([[emagent://haiku][haiku]])")))
+    (should (string-match-p emagent-chat--thinking-headline-re
+                            (buffer-substring-no-properties
+                             (point) (line-end-position))))
     (should (string-match-p emagent-chat--thinking-headline-re "** Thinking"))))
 
 (ert-deftest emagent-chat-test-turn-model-face ()
-  "The /model marker is faced with `emagent-chat-turn-model' via font-lock, even
-on org heading lines (prompt and Thinking) where a plain face is overridden."
+  "The /model marker renders as a plain org link (default `org-link' face,
+no custom fontification), even on org heading lines (prompt and Thinking)."
   (with-temp-buffer
     (emagent-mode)
     (goto-char (point-max))
-    (insert "* etyurkin> use "
-            (propertize "haiku" emagent-chat--turn-model-property "haiku") "\n")
+    (insert "* etyurkin> run it [[emagent://haiku][haiku]]\n")
     (setq emagent-chat--turn-model "haiku"
           emagent-chat--response-body-start (copy-marker (point) nil))
     (emagent-chat--insert-reasoning-scaffold)
     (font-lock-ensure)
-    (dolist (needle '("use " "Thinking ("))
+    (dolist (needle '("run it [[" "Thinking ([["))
       (goto-char (point-min))
       (search-forward needle)
+      (search-forward "][")  ; into the description
       (let ((face (get-text-property (point) 'face)))
-        (should (memq 'emagent-chat-turn-model (if (listp face) face (list face))))))))
+        (should (memq 'org-link (if (listp face) face (list face))))))))
 
 (ert-deftest emagent-chat-test-turn-model-restore-clears ()
   "A successful turn restores the base model and clears the override state."

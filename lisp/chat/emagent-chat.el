@@ -132,45 +132,77 @@ or concurrent chat buffers would alias one table.")
 (defvar-local emagent-chat--turn-model nil
   "Model id overriding the buffer model for the in-flight turn, or nil.
 
-Set at send from the `emagent-chat--turn-model-property' that `/model' stamps on
-the prompt.  It drives the transient ACP model switch and the `** Thinking
-\(MODEL)' indicator.  Cleared when a turn completes successfully or when a
-post-failure dialog declines to keep it; kept across a failure so `retry' reuses
-the model.")
+Set at send from the `emagent://AGENT/MODEL' link that `/model' inserts
+in the prompt.  It drives the transient ACP model switch and the
+`** Thinking (MODEL)' indicator.  Cleared when a turn completes
+successfully or when a post-failure dialog declines to keep it; kept
+across a failure so `retry' reuses the model.")
 
 (defvar-local emagent-chat--turn-model-base nil
   "Session model to restore to when a per-turn override ends, or nil.
 Captured (once) from the live session model just before the first override
 switch, so restoring returns to whatever the session was really on.")
 
-(defun emagent-chat--region-turn-model (start end)
-  "Return the per-turn model id stamped between START and END, or nil."
-  (let ((pos start) model)
-    (while (and (< pos end) (not model))
-      (setq model (get-text-property pos emagent-chat--turn-model-property))
-      (setq pos (or (next-single-property-change
-                     pos emagent-chat--turn-model-property nil end)
-                    end)))
-    model))
+(defconst emagent-chat--model-link-re
+  "\\[\\[emagent://\\([^][]+\\)\\]\\(?:\\[\\([^][]*\\)\\]\\)?\\]"
+  "Matches a `/model' override link `[[emagent://AGENT/MODEL][short]]'.
+Group 1 is the link target `AGENT/MODEL' (shown on hover); group 2 the
+short model label shown as the link text.  Being an org link, the
+marker is fontified by org, survives saving the session to disk, and
+reveals the full agent/model id on hover.  The `emagent://' scheme
+tags this as the model marker so unrelated links a user pastes are not
+mistaken for it.")
 
-(defun emagent-chat--fontify-turn-model (limit)
-  "Font-lock matcher for `/model'-stamped text up to LIMIT.
-Faces the override marker via font-lock so it survives on org heading lines
-\(prompt and `** Thinking'), where a plain `face' text property is overridden."
-  (let ((pos (point)))
-    (while (and (< pos limit)
-                (not (get-text-property pos emagent-chat--turn-model-property)))
-      (setq pos (or (next-single-property-change
-                     pos emagent-chat--turn-model-property nil limit)
-                    limit)))
-    (when (and (< pos limit)
-               (get-text-property pos emagent-chat--turn-model-property))
-      (let ((end (or (next-single-property-change
-                      pos emagent-chat--turn-model-property nil limit)
-                     limit)))
-        (set-match-data (list pos end))
-        (goto-char end)
-        t))))
+(defun emagent-chat--model-link-path-id (path)
+  "Return the model id from a link PATH `AGENT/MODEL' (or bare MODEL).
+PATH may carry a leading `//' authority slash from the raw link.  The
+agent is the first segment; the model id is the rest, so model ids are
+returned intact even if they contain slashes."
+  (let ((path (string-remove-prefix "//" path)))
+    (if (string-match "/" path)
+        (substring path (match-end 0))
+      path)))
+
+(defun emagent-chat--region-turn-model (start end)
+  "Return the model id of the first `/model' link between START and END."
+  (save-excursion
+    (goto-char start)
+    (when (re-search-forward emagent-chat--model-link-re end t)
+      (emagent-chat--model-link-path-id (match-string-no-properties 1)))))
+
+(defun emagent-chat--strip-model-links (text)
+  "Remove `/model' override links from outgoing TEXT.
+The marker is client UI — the slash command is documented as never sent
+to the agent."
+  (string-trim
+   (replace-regexp-in-string
+    (concat "[ \t]*" emagent-chat--model-link-re) "" text)))
+
+(defun emagent-chat--model-link (model-id)
+  "Return the `/model' marker link for MODEL-ID.
+The visible text is the short model name; the link target is
+`agent/full-model-id', revealed on hover.  The `emagent://' scheme
+(never shown) tags this as the model marker so unrelated links a user
+pastes are not mistaken for it."
+  (let* ((agent (emagent-chat-agent))
+         (short (or (emagent-model-normalize-id model-id) model-id))
+         (path (if agent (format "%s/%s" agent model-id) model-id)))
+    (format "[[emagent://%s][%s]]" path short)))
+
+(defun emagent-chat--follow-model-link (path &optional _prefix)
+  "Describe the `/model' override link PATH when activated."
+  (message "Model for this turn: %s (delete the link to cancel)"
+           (string-remove-prefix "//" path)))
+
+(defun emagent-chat--model-link-help-echo (_window object position)
+  "Tooltip for a `/model' link: the `agent/model' target."
+  (with-current-buffer (if (bufferp object) object (current-buffer))
+    (save-excursion
+      (goto-char position)
+      (when (or (looking-at emagent-chat--model-link-re)
+                (and (search-backward "[[" (max (point-min) (- position 200)) t)
+                     (looking-at emagent-chat--model-link-re)))
+        (format "Model for this turn: %s" (match-string-no-properties 1))))))
 
 (defvar-local emagent-chat--on-attach nil
   "Function called with attachment text.")
@@ -203,12 +235,14 @@ Used for the trailing (Allow: Session) / (Denied) annotation."
   "Face for the permission question line in the Thinking block."
   :group 'emagent-chat)
 
-(defface emagent-chat-turn-model
-  '((t (:inherit warning :slant italic)))
-  "Face for a per-turn model override (from `/model') in the prompt and the
-`** Thinking (MODEL)' headline.  Inherits `warning' (theme yellow) so it is not
-a hard-coded color."
-  :group 'emagent-chat)
+;; The `/model' marker is an org link — `[[emagent://AGENT/MODEL][short]]' —
+;; so org owns its fontification entirely (default `org-link' face, no
+;; custom font-lock matcher, no sticky text properties) and the marker
+;; survives saving the session file.
+(org-link-set-parameters
+ "emagent"
+ :follow #'emagent-chat--follow-model-link
+ :help-echo #'emagent-chat--model-link-help-echo)
 
 (defface emagent-model-choice-agent
   '((t (:inherit font-lock-keyword-face)))
