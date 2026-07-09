@@ -857,6 +857,24 @@ Org closes early and the trailing prose is still converted."
     (should (string-match-p emagent-chat--thinking-headline-re "** Thinking (haiku)"))
     (should (string-match-p emagent-chat--thinking-headline-re "** Thinking"))))
 
+(ert-deftest emagent-chat-test-turn-model-face ()
+  "The /model marker is faced with `emagent-chat-turn-model' via font-lock, even
+on org heading lines (prompt and Thinking) where a plain face is overridden."
+  (with-temp-buffer
+    (emagent-mode)
+    (goto-char (point-max))
+    (insert "* etyurkin> use "
+            (propertize "haiku" emagent-chat--turn-model-property "haiku") "\n")
+    (setq emagent-chat--turn-model "haiku"
+          emagent-chat--response-body-start (copy-marker (point) nil))
+    (emagent-chat--insert-reasoning-scaffold)
+    (font-lock-ensure)
+    (dolist (needle '("use " "Thinking ("))
+      (goto-char (point-min))
+      (search-forward needle)
+      (let ((face (get-text-property (point) 'face)))
+        (should (memq 'emagent-chat-turn-model (if (listp face) face (list face))))))))
+
 (ert-deftest emagent-chat-test-turn-model-restore-clears ()
   "A successful turn restores the base model and clears the override state."
   (with-temp-buffer
