@@ -69,6 +69,31 @@
   (should-not (emagent-chat--bare-slash-command-p "hello"))
   (should-not (emagent-chat--bare-slash-command-p "/compress\nmore")))
 
+(ert-deftest emagent-chat-test-slash-token-bounds-midline ()
+  "A `/name' token is detected at point anywhere on the prompt line, and the
+`/model' completion offers the client command; a path like `src/a' is not one."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (goto-char (point-max))
+    (insert "* etyurkin> commit, use /model")
+    (let ((b (emagent-chat--slash-token-bounds)))
+      (should b)
+      (should (equal "/model"
+                     (buffer-substring-no-properties (car b) (cdr b)))))
+    (let ((capf (emagent-chat-slash-command-completion-at-point)))
+      (should (member "model" (nth 2 capf)))
+      (should (plist-member (nthcdr 3 capf) :exit-function)))
+    ;; start-of-line still works
+    (goto-char (point-max))
+    (insert "\n* etyurkin> /mod")
+    (should (equal "/mod"
+                   (let ((b (emagent-chat--slash-token-bounds)))
+                     (buffer-substring-no-properties (car b) (cdr b)))))
+    ;; a path (no leading whitespace before `/') is not a slash command
+    (goto-char (point-max))
+    (insert "\n* etyurkin> see src/a")
+    (should-not (emagent-chat--slash-token-bounds))))
+
 (ert-deftest emagent-chat-test-command-matching ()
   (should (emagent-chat--command-matches-needle-p "/workflow:dev" "workflow"))
   (should (emagent-chat--command-matches-needle-p "/skill:relax" "relax"))
