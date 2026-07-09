@@ -28,10 +28,6 @@
     (goto-char (point-max))
     (insert (emagent-chat--user-heading-prefix))))
 
-(defun emagent-chat--line-text ()
-  (string-trim (buffer-substring-no-properties
-                (line-beginning-position) (line-end-position))))
-
 (defun emagent-chat--user-heading-prefix ()
   "Return the org heading prefix for user turns, e.g. \"* etyurkin> \"."
   (format "* %s> " (user-login-name)))
@@ -180,27 +176,6 @@
         (string-join (cons (substring first (match-end 0)) (cdr lines)) "\n")
       text)))
 
-(defun emagent-chat--format-as-user-heading (bounds raw)
-  "Replace text at BOUNDS with RAW formatted as a user org heading.
-Returns the buffer position after the formatted heading."
-  (let* ((inhibit-read-only t)
-         (prefix (emagent-chat--user-heading-prefix))
-         (already (string-match-p "^\\* " raw))
-         (lines (and (not already) (split-string raw "\n" t)))
-         (formatted (if already
-                        raw
-                      (if (cdr lines)
-                          (concat prefix (car lines) "\n"
-                                  (string-join (cdr lines) "\n"))
-                        (concat prefix (car lines))))))
-    (emagent-chat--writable)
-    (goto-char (car bounds))
-    (delete-region (car bounds) (cdr bounds))
-    (insert formatted)
-    (unless (= (char-before) ?\n)
-      (insert "\n"))
-    (point)))
-
 (defun emagent-chat--delete-following-response (pos)
   "Delete the response subsections after POS, before the next user heading.
 
@@ -239,22 +214,6 @@ up to (but not including) the next `* user>' heading."
       (insert (emagent-chat--user-heading-prefix)))
     (point)))
 
-(defun emagent-chat--sendable-line-p (line)
-  (or (string-empty-p line)
-      (and (not (string-match-p "^#\\+" line))
-           (not (string-match-p "^# " line))
-           (not (string-match-p "^\\* Emagent\\b" line))
-           (not (string-match-p emagent-chat--subsection-headline-re line))
-           (not (string-match-p "^#\\+BEGIN_SRC" line))
-           (not (string-match-p "^#\\+END_SRC" line))
-           ;; Bare stub "* user> " with no text after it is not sendable
-           (not (string-match-p (concat (emagent-chat--user-heading-re) "$") line)))))
-
-(defun emagent-chat--sendable-text-p (text)
-  "Return non-nil when TEXT is user prompt material, not buffer metadata."
-  (and (not (string-empty-p text))
-       (seq-every-p #'emagent-chat--sendable-line-p (split-string text "\n" t))))
-
 (defun emagent-chat--skip-header ()
   (goto-char (point-min))
   (while (and (not (eobp))
@@ -292,30 +251,18 @@ subsection, or the start of the conversation when no response exists yet."
   "Return the buffer position where the next user prompt may begin."
   (emagent-chat--after-last-response))
 
-(defun emagent-chat--send-bounds-backward (end zone-start)
-  "Return bounds for the nearest preceding sendable line before END."
-  (save-excursion
-    (goto-char end)
-    (let (found)
-      (while (and (not found) (>= (line-beginning-position) zone-start))
-        (let ((text (emagent-chat--line-text)))
-          (when (emagent-chat--sendable-text-p text)
-            (setq found (cons (line-beginning-position) (line-end-position)))))
-        (unless found
-          (forward-line -1)))
-      found)))
-
-(defun emagent-chat--user-block-bounds (zone-start)
-  "Return (START . END) for the '* username>' block enclosing point, or nil.
+(defun emagent-chat--user-block-bounds ()
+  "Return (START . END) for the `* username>' block above point, or nil.
 Captures the heading line and all body lines up to the next heading or
-response delimiter."
+response delimiter, trailing whitespace trimmed.  Does not check that
+point is within the block; `emagent-chat--send-bounds' does."
   (let ((user-re (emagent-chat--user-heading-re)))
     (save-excursion
       (let ((heading-pos
              (or (and (looking-at "\\* ") (line-beginning-position))
-                 (and (re-search-backward "^\\* " zone-start t)
+                 (and (re-search-backward "^\\* " (point-min) t)
                       (line-beginning-position)))))
-        (when (and heading-pos (>= heading-pos zone-start)
+        (when (and heading-pos
                    (save-excursion
                      (goto-char heading-pos)
                      (looking-at user-re)))
@@ -335,24 +282,16 @@ response delimiter."
                           (point)))))))))
 
 (defun emagent-chat--send-bounds ()
-  "Return (BEG . END) of text to send at point.
+  "Return (BEG . END) of the `* user>' prompt at point, or nil.
 
-When point is inside a '* user>' heading (anywhere in the buffer), the zone
-check is skipped so the user can re-evaluate any previous prompt."
-  (cond
-   ((region-active-p)
-    (cons (region-beginning) (region-end)))
-   (t
-    (let* ((zone-start (emagent-chat--user-zone-start))
-           (point0 (point))
-           ;; Re-eval: cursor is on/inside a user heading anywhere in buffer.
-           (re-eval (emagent-chat--user-block-bounds (point-min))))
-      (if re-eval
-          re-eval
-        (when (< (line-beginning-position) zone-start)
-          (user-error "Move point below the latest emagent response"))
-        (or (emagent-chat--send-bounds-backward point0 zone-start)
-            (user-error "No sendable text at point")))))))
+Point must be on the prompt's heading line or within its direct body,
+above its response subsections.  Anywhere else there is nothing to
+send; `C-c C-c' then falls through to org."
+  (let ((block (emagent-chat--user-block-bounds)))
+    (when (and block
+               (>= (point) (car block))
+               (<= (line-beginning-position) (cdr block)))
+      block)))
 
 
 

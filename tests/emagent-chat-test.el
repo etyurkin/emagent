@@ -19,17 +19,30 @@
 (ert-deftest emagent-chat-test-buffer-name-for-label ()
   (should (string= "*Emagent foo*" (emagent-chat--buffer-name-for-label "foo"))))
 
-;;;; Sendable text
+;;;; Send bounds
 
-(ert-deftest emagent-chat-test-sendable-line-p ()
-  (should (emagent-chat--sendable-line-p "hello"))
-  (should-not (emagent-chat--sendable-line-p "# comment"))
-  (should-not (emagent-chat--sendable-line-p "#+EMAGENT_PROJECT: x"))
-  (should-not (emagent-chat--sendable-line-p "# --- emagent ---")))
-
-(ert-deftest emagent-chat-test-sendable-text-p ()
-  (should (emagent-chat--sendable-text-p "line one\nline two"))
-  (should-not (emagent-chat--sendable-text-p "# metadata\nprompt")))
+(ert-deftest emagent-chat-test-send-bounds ()
+  "C-c C-c sends only on or inside a `* user>' prompt."
+  (with-temp-buffer
+    (insert (format "* %s> first prompt\nbody line\n\n** Thinking\nstuff\n** Response\n| a | b |\n\n* %s> next"
+                    (user-login-name) (user-login-name)))
+    ;; On the prompt heading.
+    (goto-char (point-min))
+    (should (emagent-chat--send-bounds))
+    ;; In the prompt's direct body.
+    (search-forward "body")
+    (let ((bounds (emagent-chat--send-bounds)))
+      (should bounds)
+      (should (= (car bounds) (point-min))))
+    ;; On a response subsection heading: nothing to send.
+    (search-forward "** Thinking")
+    (should-not (emagent-chat--send-bounds))
+    ;; Inside response content (a table): org's C-c C-c territory.
+    (search-forward "| a |")
+    (should-not (emagent-chat--send-bounds))
+    ;; On a later prompt: re-evaluable.
+    (search-forward "next")
+    (should (emagent-chat--send-bounds))))
 
 
 ;;;; Slash commands
