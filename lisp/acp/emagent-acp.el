@@ -1,7 +1,8 @@
 ;;; emagent-acp.el --- ACP wire-up for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Version: 1.1.0
+;; SPDX-License-Identifier: MIT
+;; Version: 1.2.0
 
 ;;; Code:
 

@@ -2,6 +2,8 @@
 
 ;; Copyright (C) 2024-2025  Evgeniy Tyurkin
 
+;; SPDX-License-Identifier: MIT
+
 ;;; Commentary:
 
 ;; Persists global, session, and project permission choices under

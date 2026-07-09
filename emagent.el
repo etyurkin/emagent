@@ -2,6 +2,8 @@
 
 ;; Copyright (C) 2026  Evgeniy Tyurkin
 
+;; SPDX-License-Identifier: MIT
+
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; URL: https://github.com/etyurkin/emagent
 ;; Version: 1.2.0
