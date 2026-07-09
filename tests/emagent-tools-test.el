@@ -5,6 +5,25 @@
 (require 'ert)
 (require 'emagent-test-utils)
 (require 'emagent-tools)
+(require 'emagent-tools-shell)
+
+;;;; Async subprocess runner
+
+(ert-deftest emagent-tools-test-run-process-async-completes ()
+  "A normally-exiting subprocess fires its callback.
+Regression: the sentinel matched `exited' (never returned by `process-status',
+which yields `exit'), so every subprocess tool hung until it timed out."
+  (skip-unless (executable-find "echo"))
+  (let (result done)
+    (emagent-tools--run-process-async
+     (lambda (out err) (setq result (cons (string-trim out) err) done t))
+     "echo" "hello")
+    (let ((deadline (+ (float-time) 5)))
+      (while (and (not done) (< (float-time) deadline))
+        (accept-process-output nil 0.05)))
+    (should done)
+    (should (equal "hello" (car result)))
+    (should-not (cdr result))))
 
 ;;;; Session root boundary
 

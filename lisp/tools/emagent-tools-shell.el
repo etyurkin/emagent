@@ -103,7 +103,7 @@ For tests and internal callers only — MCP agent tools use the async path."
           (set-process-sentinel
            proc
            (lambda (p _event)
-             (when (memq (process-status p) '(signal exited))
+             (when (memq (process-status p) '(signal exit))
                (let* ((output (with-current-buffer buf (buffer-string)))
                       (status (process-exit-status p))
                       (is-error (or (eq status 'signal)
@@ -138,7 +138,7 @@ For tests and internal callers only — MCP agent tools use the async path."
                               :noquery t
                               :sentinel
                               ,(lambda (p _event)
-                                 (when (memq (process-status p) '(signal exited))
+                                 (when (memq (process-status p) '(signal exit))
                                    (let* ((output (with-current-buffer buf (buffer-string)))
                                           (status (process-exit-status p))
                                           (is-error (or (eq status 'signal)
@@ -192,7 +192,7 @@ For tests and internal callers only — MCP agent tools use the async path."
           (set-process-sentinel
            proc
            (lambda (p _event)
-             (when (memq (process-status p) '(signal exited))
+             (when (memq (process-status p) '(signal exit))
                (let* ((output (with-current-buffer buf (buffer-string)))
                       (status (process-exit-status p))
                       (is-error (or (eq status 'signal)
