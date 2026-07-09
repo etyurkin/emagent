@@ -1057,13 +1057,52 @@ no custom fontification), even on org heading lines (prompt and Thinking)."
     (setq emagent-chat--status '(:busy nil :waiting-permission nil))
     (emagent-chat--send-pending-begin)
     (setq emagent-chat--turn-model nil)
+    (emagent-chat--begin-response (point-max))
+    (emagent-chat--insert-preparing-scaffold)
     (let ((state (emagent-test--make-acp-state nil (current-buffer))))
       (emagent-acp--turn-begin state)
       (should-not emagent-chat--send-pending)
+      (should-not emagent-chat--preparing-p)
+      (let ((text (substring-no-properties (buffer-string))))
+        (should (string-match-p "\\*\\* Thinking" text))
+        (should-not (string-match-p "Preparing" text)))
       (setq emagent-chat--status '(:busy t :waiting-permission nil))
       (let ((head (car (emagent-chat--mode-line-strings))))
         (should (string-match-p "Thinking" head))
         (should-not (string-match-p "Preparing" head))))))
+
+(ert-deftest emagent-chat-test-tool-after-block-stays-adjacent ()
+  "A second tool line after a src block does not grow a blank gap."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-show-tool-call "id1" "Shell" "sh" "cat foo")
+          (emagent-chat-show-tool-call "id2" "git_status")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "#\\+end_src\n→ git_status" text))
+            (should-not (string-match-p "#\\+end_src\n\n→" text)))))))))
+
+(ert-deftest emagent-chat-test-tool-update-does-not-grow-newlines ()
+  "In-place tool-call label updates do not append blank lines."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-show-tool-call "id1" "git")
+          (dotimes (_ 6)
+            (emagent-chat-show-tool-call "id1" "git (Allow: Emacs)"))
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "→ git (Allow: Emacs)" text))
+            (should-not (string-match-p "→ git (Allow: Emacs)\n\n" text)))))))))
 
 (ert-deftest emagent-chat-test-interrupt-clears-send-pending-when-busy ()
   "ESC ESC during thinking clears a stale pre-dispatch marker and spinner."
@@ -1180,6 +1219,22 @@ by a capital letter, so `VDUNGEON.DAT' rendered as `VDUNGEON. DAT'."
           (emagent-chat-show-tool-call "id1" "Read: foo.el")
           (let ((text (substring-no-properties (buffer-string))))
             (should (string-match-p "line one\nline two\n\n→ Read: foo.el" text)))))))))
+
+(ert-deftest emagent-chat-test-thought-leading-blank-chunks-do-not-pile-up ()
+  "Blank-only reasoning deltas cannot grow a run after `** Thinking'."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat--insert-preparing-scaffold)
+          (dotimes (_ 12) (emagent-chat-append-thought "\n"))
+          (emagent-chat-append-thought "First paragraph.")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "\\*\\* Thinking\n+First paragraph\\." text))
+            (should-not (string-match-p "\\*\\* Thinking\n\n\n" text)))))))))
 
 (ert-deftest emagent-chat-test-thought-blank-chunks-do-not-pile-up ()
   "Repeated blank-only reasoning deltas collapse to one blank line.

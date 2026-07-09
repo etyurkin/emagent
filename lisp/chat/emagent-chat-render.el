@@ -443,7 +443,17 @@ close or an interrupting tool call) everything buffered is emitted as-is."
 (defun emagent-chat--finish-tool-line-in-reasoning ()
   "Leave `emagent-chat--thought-marker' on a fresh line after a tool line."
   (goto-char (line-end-position))
-  (insert "\n")
+  (unless (or (eobp) (eq (char-after) ?\n))
+    (insert "\n"))
+  (setq emagent-chat--thought-marker (copy-marker (point) nil)))
+
+(defun emagent-chat--sync-thought-marker-after-tool (end)
+  "Place `emagent-chat--thought-marker' after tool display ending at END."
+  (goto-char (marker-position end))
+  (unless (bolp)
+    (goto-char (line-end-position)))
+  (unless (or (eobp) (eq (char-after) ?\n))
+    (insert "\n"))
   (setq emagent-chat--thought-marker (copy-marker (point) nil)))
 
 (defun emagent-chat--reasoning-after-tool-artifact-p ()
@@ -452,6 +462,29 @@ close or an interrupting tool call) everything buffered is emitted as-is."
     (skip-chars-backward " \t\n")
     (beginning-of-line)
     (looking-at-p "\\(?:→ \\|#\\+[Ee][Nn][Dd]_[Ss][Rr][Cc]\\)")))
+
+(defun emagent-chat--thinking-leading-blank-p ()
+  "Return non-nil when point sits in the blank run after `** Thinking'."
+  (when-let* ((beg (emagent-chat--open-reasoning-begin))
+              (pos (point)))
+    (save-excursion
+      (goto-char beg)
+      (forward-line 1)
+      (let ((start (point)))
+        (and (> pos start)
+             (string-match-p "\\`[ \t\n]*\\'"
+                             (buffer-substring-no-properties start pos)))))))
+
+(defun emagent-chat--collapse-thinking-leading-blanks ()
+  "Delete the blank run after `** Thinking' up to point."
+  (when-let ((beg (emagent-chat--open-reasoning-begin)))
+    (save-excursion
+      (goto-char beg)
+      (forward-line 1)
+      (let ((start (point)))
+        (when (< start (point))
+          (delete-region start (point))
+          (goto-char start))))))
 
 (defun emagent-chat--newlines-before-point ()
   "Return the count of consecutive newlines immediately before point."
@@ -488,7 +521,8 @@ onto the previous one nor grows the blank tail two lines per cycle.  When
 the run separates the content from following text — the `** Response'
 headline, or a tool line's trailing newline — it is structural and is
 re-inserted after TEXT, leaving the marker at the true content end."
-  (let* ((safe (replace-regexp-in-string
+  (cl-block emagent-chat--insert-reasoning-text
+    (let* ((safe (replace-regexp-in-string
                 "\n\\{3,\\}" "\n\n"
                 (emagent-chat--escape-reasoning-text text (not (bolp)))))
          (before (emagent-chat--newlines-before-point))
@@ -502,14 +536,20 @@ re-inserted after TEXT, leaving the marker at the true content end."
       (setq safe (replace-regexp-in-string
                   "\\`\n\\{3,\\}" "\n\n"
                   (concat (make-string after ?\n) safe))))
+    (when (emagent-chat--thinking-leading-blank-p)
+      (setq safe (replace-regexp-in-string "\\`[\n\r]+" "" safe))
+      (if (string-empty-p (string-trim safe))
+          (progn
+            (emagent-chat--collapse-thinking-leading-blanks)
+            (cl-return-from emagent-chat--insert-reasoning-text nil))
+        (emagent-chat--collapse-thinking-leading-blanks)
+        (setq before (emagent-chat--newlines-before-point)
+              after (emagent-chat--newlines-after-point)
+              tail-sep (when (> after 0)
+                         (save-excursion
+                           (forward-char after)
+                           (unless (eobp) (min after 2)))))))
     (cond
-     ;; Right after the `** Thinking' headline: drop any leading blank lines.
-     ((save-excursion
-        (beginning-of-line)
-        (and (looking-at "[ \t]*$")
-             (progn (forward-line -1) t)
-             (looking-at emagent-chat--thinking-headline-re)))
-      (setq safe (replace-regexp-in-string "\\`[\n\r]+" "" safe)))
      ;; Resuming after a tool line/block: keep exactly one blank line of
      ;; separation.
      ((emagent-chat--reasoning-after-tool-artifact-p)
@@ -523,6 +563,8 @@ re-inserted after TEXT, leaving the marker at the true content end."
         (when (> (+ before leading) 2)
           (setq safe (concat (make-string (max 0 (- 2 before)) ?\n)
                              (substring safe leading)))))))
+    (when (string-empty-p safe)
+      (cl-return-from emagent-chat--insert-reasoning-text nil))
     (if (not tail-sep)
         (insert safe)
       ;; Structural separation follows: share it with SAFE's own trailing
@@ -534,7 +576,7 @@ re-inserted after TEXT, leaving the marker at the true content end."
                 safe (substring safe 0 (match-beginning 0))))
         (insert safe)
         (save-excursion
-          (insert (make-string (max tail-sep (min trailing 2)) ?\n)))))))
+          (insert (make-string (max tail-sep (min trailing 2)) ?\n))))))))
 
 (defun emagent-chat--org-verbatim-paths (text)
   "Wrap file paths in org =verbatim= to prevent /italic/ and =verbatim= glitches.
@@ -759,15 +801,16 @@ fontifies with the comment face natively.")
     (emagent-chat--ensure-reasoning-scaffold)))
 
 (defun emagent-chat--separate-before-tool ()
-  "Ensure point starts a fresh line, with a blank line before tool prose.
-Consecutive arrow lines stay adjacent; anything following a src block
-(#+end_src) gets a blank line so blocks don't run together."
+  "Ensure point starts a fresh line before inserting a tool line.
+Consecutive tool lines and src blocks stay adjacent; a blank line is added
+only before the first tool line after prose."
   (unless (bolp) (insert "\n"))
   (unless (or (bobp)
               (save-excursion
                 (forward-line -1)
                 (or (looking-at-p "[ \t]*$")
                     (looking-at-p "→ ")
+                    (looking-at-p "#\\+[Ee][Nn][Dd]_[Ss][Rr][Cc]")
                     (looking-at emagent-chat--thinking-headline-re))))
     (insert "\n")))
 
@@ -897,8 +940,7 @@ Return non-nil when a span was updated."
               (emagent-chat--fontify-tool-line (marker-position start)
                                                (marker-position end)))
             (when emagent-chat--thought-open-p
-              (setq emagent-chat--thought-marker
-                    (emagent-chat--reasoning-stream-marker)))))
+              (emagent-chat--sync-thought-marker-after-tool end))))
         t))))
 
 (defun emagent-chat-show-tool-call (id label &optional lang code)
