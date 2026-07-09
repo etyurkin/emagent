@@ -42,6 +42,7 @@ Thinking block."
           emagent-chat--response-content-marker nil
           emagent-chat--thinking-headline-marker nil
           emagent-chat--switching-model-p nil
+          emagent-chat--preparing-p nil
           emagent-chat--thought-marker nil
           emagent-chat--thought-open-p nil
           emagent-chat--reasoning-streamed-p nil)))
@@ -172,6 +173,7 @@ the hide when the response is fully complete and the session is idle."
         emagent-chat--response-end-marker nil
         emagent-chat--thought-open-p nil
         emagent-chat--switching-model-p nil
+        emagent-chat--preparing-p nil
         emagent-chat--thinking-headline-marker nil
         emagent-chat--thought-marker nil
         emagent-chat--reasoning-streamed-p nil
@@ -931,7 +933,8 @@ Keyboard shortcuts (via keymap text property on the buttons line):
            btn-keymap
            question-beg question-end
            content-beg content-end
-           buttons-beg buttons-end)
+           buttons-beg buttons-end
+           first-button)
       (let ((cleanup
              (lambda ()
                (with-current-buffer buf
@@ -1030,6 +1033,8 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                     (cl-mapc
                      (lambda (choice kh)
                        (let ((val (cdr choice)))
+                         (unless first-button
+                           (setq first-button (copy-marker (point) nil)))
                          (insert-button
                           (concat "[" (car choice) "]")
                           'keymap btn-keymap
@@ -1059,11 +1064,7 @@ Keyboard shortcuts (via keymap text property on the buttons line):
               (emagent-tools--buttons-prompt
                (if content-block "" question)
                choices buf callback preamble))
-          (when-let ((win (get-buffer-window buf)))
-            (with-selected-window win
-              (when (and buttons-beg (marker-position buttons-beg))
-                (goto-char (marker-position buttons-beg))
-                (recenter -3)))))))))
+          (emagent-tools--focus-inline-buttons buf first-button))))))
 
 (defun emagent-chat--response-body-bounds ()
   "Return (CONTENT-START . END) for the `** Response' body, or nil.
@@ -1178,7 +1179,7 @@ buffer shows formatted org while the response is still arriving."
         (let ((inhibit-read-only t))
           (emagent-chat--writable)
           (when (emagent-chat--fail-response-p)
-            (emagent-chat--clear-switching-scaffold)
+            (emagent-chat--clear-transient-reasoning-scaffold)
             (emagent-chat-close-thought)
             (emagent-chat--ensure-response-headline)
             (goto-char (point-max))
@@ -1258,6 +1259,8 @@ A response without any reasoning has no `** Thinking' subsection at all."
           (when (emagent-chat--open-response-p)
             (unless emagent-chat--reasoning-streamed-p
               (emagent-chat--inject-reasoning-thought thought-text))
+            (unless (emagent-chat--open-reasoning-begin)
+              (emagent-chat--clear-transient-reasoning-scaffold))
             (setq hide-at (emagent-chat--open-reasoning-begin))
             (emagent-chat-close-thought)
             (when (emagent-chat--remove-empty-thinking)

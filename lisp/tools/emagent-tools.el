@@ -142,6 +142,19 @@ ACP chat sessions use `session/request_permission' instead; a second MCP
 prompt would not block the agent and is ignored.")
 
 
+(defun emagent-tools--focus-inline-buttons (chat-buffer button-pos)
+  "Move point to BUTTON-POS in CHAT-BUFFER so button keymaps accept shortcuts."
+  (when (and chat-buffer (buffer-live-p chat-buffer) button-pos)
+    (when-let ((pos (if (markerp button-pos)
+                        (marker-position button-pos)
+                      button-pos)))
+      (if-let ((win (get-buffer-window chat-buffer)))
+          (with-selected-window win
+            (goto-char pos)
+            (recenter -3))
+        (with-current-buffer chat-buffer
+          (goto-char pos))))))
+
 (defun emagent-tools--buttons-prompt (prompt choices chat-buffer callback &optional preamble)
   "Insert optional PREAMBLE, PROMPT, and CHOICES as buttons in CHAT-BUFFER.
 CHOICES is a list of (LABEL . VALUE) pairs.  Non-blocking: inserts the dialog
@@ -152,7 +165,7 @@ nil or dead, calling CALLBACK with the chosen value."
       (let* ((labels (mapcar #'car choices))
              (label (completing-read (concat prompt " ") labels nil t)))
         (funcall callback (cdr (assoc label choices))))
-    (let (start-mark end-mark btn-start (responded nil))
+    (let (start-mark end-mark first-button (responded nil))
       (let ((do-respond
              (lambda (v)
                (unless responded
@@ -181,7 +194,6 @@ nil or dead, calling CALLBACK with the chosen value."
             ;; overlay keymap contains our shortcuts (higher priority than
             ;; any external overlay we add afterward).
             (let ((btn-keymap (make-sparse-keymap)))
-              (setq btn-start (copy-marker (point) nil))
               (set-keymap-parent btn-keymap button-map)
               ;; First pass: define all shortcuts in btn-keymap
               (dolist (choice choices)
@@ -200,6 +212,8 @@ nil or dead, calling CALLBACK with the chosen value."
               ;; Second pass: insert buttons with btn-keymap as their keymap
               (dolist (choice choices)
                 (let ((v (cdr choice)))
+                  (unless first-button
+                    (setq first-button (copy-marker (point) nil)))
                   (insert-button
                    (concat "[" (car choice) "]")
                    'keymap btn-keymap
@@ -208,12 +222,7 @@ nil or dead, calling CALLBACK with the chosen value."
                   (insert "  ")))
               (insert "\n")
               (setq end-mark (copy-marker (point) nil)))))
-        (when-let ((win (get-buffer-window chat-buffer)))
-          (with-selected-window win
-            (when (with-current-buffer chat-buffer
-                    (pos-visible-in-window-p (point-max) nil t))
-              (goto-char (marker-position btn-start))
-              (recenter -3))))))))
+        (emagent-tools--focus-inline-buttons chat-buffer first-button)))))
 
 (defun emagent-tools--remember-allowed-tool (tool-name)
   "Record TOOL-NAME as allowed for this session and persist it when possible."
