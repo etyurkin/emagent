@@ -1052,6 +1052,11 @@ Keyboard shortcuts (via keymap text property on the buttons line):
                      choices hints))
                   (insert "\n")
                   (setq buttons-end (copy-marker (point) nil))
+                  (when first-button
+                    (emagent-tools--apply-button-line-keymap
+                     (marker-position first-button)
+                     (marker-position buttons-end)
+                     btn-keymap))
                   (setq emagent-chat--permission-pending t))
               (setq question-beg nil content-beg nil buttons-beg nil))))
         (emagent-chat--notify-inactive-update)

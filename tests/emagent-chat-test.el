@@ -1050,6 +1050,44 @@ no custom fontification), even on org heading lines (prompt and Thinking)."
     (should-not emagent-chat--send-pending)
     (should-not (emagent-chat--spinner-active-p))))
 
+(ert-deftest emagent-chat-test-turn-begin-clears-send-pending ()
+  "Dispatch clears the pre-dispatch marker so the mode line shows Thinking."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (setq emagent-chat--status '(:busy nil :waiting-permission nil))
+    (emagent-chat--send-pending-begin)
+    (setq emagent-chat--turn-model nil)
+    (let ((state (emagent-test--make-acp-state nil (current-buffer))))
+      (emagent-acp--turn-begin state)
+      (should-not emagent-chat--send-pending)
+      (setq emagent-chat--status '(:busy t :waiting-permission nil))
+      (let ((head (car (emagent-chat--mode-line-strings))))
+        (should (string-match-p "Thinking" head))
+        (should-not (string-match-p "Preparing" head))))))
+
+(ert-deftest emagent-chat-test-interrupt-clears-send-pending-when-busy ()
+  "ESC ESC during thinking clears a stale pre-dispatch marker and spinner."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (setq emagent-acp--session (emagent-test--make-acp-state nil buffer))
+       (setf (emagent-acp-state-busy emagent-acp--session) t)
+       (setf (emagent-acp-state-ready emagent-acp--session) t)
+       (setf (emagent-acp-state-prompt-generation emagent-acp--session) 0)
+       (setf (emagent-acp-state-cb-finish emagent-acp--session) #'emagent-chat-finish-assistant
+             (emagent-acp-state-cb-status emagent-acp--session) #'emagent-chat-set-status)
+       (emagent-test--sync-status)
+       (emagent-chat--send-pending-begin)
+       (goto-char (point-max))
+       (emagent-chat--begin-response (point))
+       (emagent-chat-begin-thought)
+       (let ((inhibit-message t))
+         (emagent-chat-interrupt))
+       (should-not emagent-chat--send-pending)
+       (should-not (emagent-chat--spinner-active-p))
+       (let ((head (car (emagent-chat--mode-line-strings))))
+         (should-not (string-match-p "Preparing" head)))))))
+
 (ert-deftest emagent-chat-test-interrupt-cancels-send-pending ()
   "ESC ESC stops pre-dispatch work and clears the Preparing spinner."
   (with-temp-buffer
@@ -1507,6 +1545,22 @@ bracket must flush once the following non-`(' text confirms it is not a link."
            '(("Allow once" . :allow-once))
            (lambda (_) nil))
           (should (button-at (point)))))))))
+
+(ert-deftest emagent-chat-test-permission-line-keymap-at-bol ()
+  "Button shortcuts are bound on the whole button line, including line start."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-min))
+          (emagent-chat--begin-response (point-max))
+          (emagent-chat-permission-prompt
+           "make test"
+           '(("Allow once" . :allow-once))
+           (lambda (_) nil))
+          (goto-char (line-beginning-position))
+          (should (keymap-parent (get-text-property (point) 'keymap)))))))))
 
 (ert-deftest emagent-chat-test-permission-buttons-below-end-quote ()
   (emagent-test--with-emagent-buffer

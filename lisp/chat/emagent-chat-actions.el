@@ -63,11 +63,11 @@ Return non-nil when something was stopped."
       (setq emagent-chat--send-token nil)
       (when (fboundp 'emagent-acp--clear-when-connected-queue)
         (emagent-acp--clear-when-connected-queue))
-      (emagent-chat--abort-open-response)
-      (emagent-chat--send-pending-end))
+      (emagent-chat--abort-open-response))
     (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
       (emagent-acp--finalize-in-flight-prompt
        "/Stopped — awaiting new instructions./"))
+    (emagent-chat--send-pending-end)
     (when (fboundp 'emagent-chat--refresh-mode-line)
       (emagent-chat--refresh-mode-line))
     (when (fboundp 'emagent-chat--spinner-ensure-running)
