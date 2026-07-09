@@ -437,12 +437,14 @@ against the file's path relative to the search root.  The glob regexp is
       "No matches")))
 
 (cl-defun emagent-tools--run-git-async (callback &rest args)
-  "Run git ARGS asynchronously; call CALLBACK with (output is-error)."
+  "Run git ARGS asynchronously; call CALLBACK with (output is-error).
+Passes `--no-pager' so pager-using subcommands (log, diff, show) never launch a
+pager that blocks on input when stdout is a pipe (which then hangs the tool)."
   (unless (executable-find "git")
     (funcall callback "git not found on PATH" t)
     (cl-return-from emagent-tools--run-git-async))
   (let ((default-directory (emagent-tools--root-directory nil)))
-    (apply #'emagent-tools--run-process-async callback "git" args)))
+    (apply #'emagent-tools--run-process-async callback "git" "--no-pager" args)))
 
 (defun emagent-tools--run-git (&rest args)
   "Run git ARGS in the session project directory and return stdout."
