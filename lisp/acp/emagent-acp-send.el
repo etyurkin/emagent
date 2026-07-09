@@ -17,6 +17,9 @@
 (declare-function emagent-acp--agent-error-only-response-p "emagent-acp-prompt")
 (declare-function emagent-acp--turn-hit-transient-error-p "emagent-acp-prompt")
 (declare-function emagent-acp--turn-did-no-work-p "emagent-acp-prompt")
+(declare-function emagent-chat-begin-thought "emagent-chat-render")
+(declare-function emagent-chat--open-response-p "emagent-chat")
+(declare-function emagent-chat--send-pending-end "emagent-chat")
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 
@@ -92,21 +95,28 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
 REASON is a short human-readable phrase describing why the retry fires; it is
 shown to the user together with the attempt count.  The GEN guard prevents a
 stale retry from firing after the prompt was superseded or interrupted."
-  (let ((delay (emagent-acp--prompt-retry-delay attempt)))
+  (let* ((delay (emagent-acp--prompt-retry-delay attempt))
+         (next (1+ attempt)))
+    (setf (emagent-acp-state-prompt-retry-gen state) gen)
     (emagent-acp--notify-user
      state
-     (format "emagent: %s; retrying (%d/%d) in %.1fs"
-             reason attempt emagent-acp-prompt-retry-attempts delay))
+     (format "emagent: %s; retrying prompt (%d/%d) in %.1fs"
+             reason next emagent-acp-prompt-retry-attempts delay))
     (emagent-acp--schedule-prompt-watchdog state)
     (run-with-timer
      delay nil
      (lambda ()
-       (when (and (eq (emagent-acp-state-prompt-generation state) gen)
-                  (emagent-acp-state-busy state))
-         (emagent-acp--dispatch-prompt-request
-          :state state :session-id session-id
-          :blocks blocks :images images
-          :gen gen :attempt (1+ attempt)))))))
+       (setf (emagent-acp-state-prompt-retry-gen state) nil)
+       (if (and (eq (emagent-acp-state-prompt-generation state) gen)
+                (emagent-acp-state-busy state))
+           (emagent-acp--dispatch-prompt-request
+            :state state :session-id session-id
+            :blocks blocks :images images
+            :gen gen :attempt next)
+         (emagent-log "emagent: prompt retry skipped (busy=%s gen=%s/%s)"
+                      (if (emagent-acp-state-busy state) "yes" "no")
+                      (emagent-acp-state-prompt-generation state)
+                      gen))))))
 
 (defun emagent-acp--log-transient-error (state &optional message)
   "Log MESSAGE and STATE's partial assistant output to `emagent-log-buffer-name'.
@@ -306,11 +316,12 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
           (emagent-log "compressing conversation"))
          (slash-command-p
           (emagent-log "send slash command: %s" user-text)))
-      (emagent-acp--turn-begin state)
-      (emagent-acp--dispatch-prompt-request
-       :state state :session-id session-id
-       :blocks blocks :images images
-       :gen (emagent-acp-state-prompt-generation state) :attempt 1)))))
+        (emagent-log "dispatch prompt (%d chars)" (length clean-text))
+        (emagent-acp--turn-begin state)
+        (emagent-acp--dispatch-prompt-request
+         :state state :session-id session-id
+         :blocks blocks :images images
+         :gen (emagent-acp-state-prompt-generation state) :attempt 1)))))
 
 (cl-defun emagent-acp--finalize-in-flight-prompt (&optional stop-notice)
   "Finalize the in-flight prompt and cancel it on the agent side.

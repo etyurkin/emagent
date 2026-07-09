@@ -74,9 +74,17 @@ target BUFFER (hence the two-argument signature)."
 (declare-function emagent-chat-append-thought "emagent-chat")
 (declare-function emagent-chat-append-assistant "emagent-chat")
 (declare-function emagent-chat-finish-assistant "emagent-chat")
-(declare-function emagent-chat-fail-assistant "emagent-chat")
+(declare-function emagent-chat-fail-assistant "emagent-chat-render")
 (declare-function emagent-chat-set-slash-commands "emagent-chat")
 (declare-function emagent-chat--buffer-displayed-p "emagent-chat")
+(declare-function emagent-chat--disable-incompatible-org-minor-modes "emagent-chat-mode")
+(declare-function emagent-chat--send-pending-end "emagent-chat")
+(declare-function emagent-chat--send-active-p "emagent-chat")
+(declare-function emagent-acp-current-model-id "emagent-acp")
+(declare-function emagent-acp--match-model-id "emagent-acp-model")
+(declare-function emagent-acp-send-prompt "emagent-acp-send")
+(declare-function emagent-acp--progress "emagent-acp-prompt")
+(declare-function emagent-acp--retriable-prompt-error-p "emagent-acp-prompt")
 (declare-function emagent-acp--model-entries-from-response "emagent-acp-model")
 
 ;; Optional integrations — loaded only when the dependency is present.
@@ -141,15 +149,22 @@ startup picker when there is more than one choice."
 
 When the agent process died but buffer-local state remains, tear it down and
 reconnect (resuming the saved session id when present).  Optional ON-READY runs
-once the session is ready; ON-REVEAL runs when the chat buffer should be shown."
-  (if (emagent-acp--connected-p)
-      (when on-ready (funcall on-ready))
+once the session is ready; ON-REVEAL runs when the chat buffer should be shown.
+While a connection is already in flight, ON-READY is queued instead of tearing
+the session down and starting over."
+  (when on-ready (push on-ready emagent-acp--when-connected-queue))
+  (cond
+   ((emagent-acp--connected-p)
+    (emagent-acp--run-when-connected-queue))
+   ((emagent-acp--connecting-p)
+    nil)
+   (t
     (emagent-acp--teardown-stale-session)
     (let* ((provider (or emagent-chat-provider emagent-default-provider))
            (client (emagent--make-client provider (current-buffer))))
       (emagent-acp-start :client client
                         :chat-buffer (current-buffer)
-                        :on-ready on-ready
+                        :on-ready #'emagent-acp--run-when-connected-queue
                         :on-reveal on-reveal
                         :callbacks
                         `((:cb-chunk          . ,#'emagent-chat-append-assistant)
@@ -159,11 +174,25 @@ once the session is ready; ON-REVEAL runs when the chat buffer should be shown."
                                                     (emagent--restore-turn-model)))
                           (:cb-fail           . ,(lambda (&rest args)
                                                     (apply #'emagent-chat-fail-assistant args)
-                                                    (emagent--turn-model-on-failure)))
+                                                    (emagent--turn-model-on-failure
+                                                     (car args))))
                           (:cb-slash-commands . ,#'emagent-chat-set-slash-commands)
                           (:cb-tool-call      . ,#'emagent-chat-show-tool-call)
                           (:cb-permission     . ,#'emagent-chat-permission-prompt)
-                          (:cb-status         . ,#'emagent-chat-set-status))))))
+                          (:cb-status         . ,#'emagent-chat-set-status)))))))
+
+(defun emagent--send-prompt-safe (buffer user-text)
+  "Send USER-TEXT from BUFFER, logging and surfacing failures in the chat."
+  (with-current-buffer buffer
+    (condition-case err
+        (emagent-acp-send-prompt user-text)
+      (error
+       (let ((msg (error-message-string err)))
+         (when (fboundp 'emagent-chat--send-pending-end)
+           (emagent-chat--send-pending-end))
+         (emagent-log "emagent: send failed: %s" msg)
+         (when (fboundp 'emagent-chat-fail-assistant)
+           (emagent-chat-fail-assistant msg)))))))
 
 (defun emagent--send-prompt (user-text)
   "Ensure connection and send USER-TEXT from the current buffer.
@@ -172,24 +201,37 @@ active and differs from the session model, switch to it transiently first, then
 send; the buffer model is restored when the turn ends (see
 `emagent-chat-finish-assistant' / `emagent-chat-fail-assistant')."
   (let ((buf (current-buffer))
-        (turn-model emagent-chat--turn-model))
+        (turn-model emagent-chat--turn-model)
+        (token emagent-chat--send-token))
     (emagent-acp-ensure-connected
      :on-ready
      (lambda ()
        (with-current-buffer buf
-         (let ((current (emagent-acp-current-model-id)))
-           (if (and turn-model (not (equal turn-model current)))
-               (progn
-                 ;; Remember the real session model to restore to (only the
-                 ;; first time, so a sticky post-failure override still points
-                 ;; back at the original global model).
-                 (unless emagent-chat--turn-model-base
-                   (setq emagent-chat--turn-model-base current))
-                 (emagent-acp-set-model-transient
-                  turn-model
-                  (lambda ()
-                    (with-current-buffer buf (emagent-acp-send-prompt user-text)))))
-             (emagent-acp-send-prompt user-text))))))))
+         (when (emagent-chat--send-active-p token)
+           (let* ((state emagent-acp--session)
+                  (current (and state (emagent-acp-current-model-id)))
+                  (target (and turn-model state
+                                (emagent-acp--match-model-id turn-model state nil))))
+             (if (and target current (not (string= target current)))
+                 (progn
+                   ;; Remember the real session model to restore to (only the
+                   ;; first time, so a sticky post-failure override still points
+                   ;; back at the original global model).
+                   (unless emagent-chat--turn-model-base
+                     (setq emagent-chat--turn-model-base current))
+                   (when (fboundp 'emagent-acp--progress)
+                     (emagent-acp--progress
+                      state
+                      (format "switching model to %s for this turn…"
+                              (if (fboundp 'emagent-acp--model-display-name)
+                                  (emagent-acp--model-display-name state nil target)
+                                target))))
+                   (emagent-acp-set-model-transient
+                    target
+                    (lambda ()
+                      (when (emagent-chat--send-active-p token)
+                        (emagent--send-prompt-safe buf user-text)))))
+               (emagent--send-prompt-safe buf user-text)))))))))
 
 (declare-function emagent-tools--buttons-prompt "emagent-tools")
 
@@ -203,19 +245,23 @@ Called on a successful turn: switches back to the captured base model and clears
     (setq emagent-chat--turn-model nil
           emagent-chat--turn-model-base nil)))
 
-(defun emagent--turn-model-on-failure ()
-  "After a failed turn with a `/model' override, ask whether to keep it.
-The session is left on the override; a Yes keeps it (so `retry'/`continue' reuse
-the model), a No restores the buffer model.  Rendered as an in-buffer button
-dialog like the permission prompt."
+(defun emagent--turn-model-on-failure (&optional message)
+  "After a failed `/model' turn, keep or restore the per-turn override.
+
+Only transient network failures (after retries are exhausted) ask whether to
+keep the override for a manual `retry'.  Permanent errors such as context
+overflow restore the buffer model immediately."
   (when emagent-chat--turn-model
-    (emagent-tools--buttons-prompt
-     (format "Continue with %s for the next prompt?" emagent-chat--turn-model)
-     '(("Yes, keep it" . keep) ("No, use the buffer model" . restore))
-     (current-buffer)
-     (lambda (choice)
-       (when (eq choice 'restore)
-         (emagent--restore-turn-model))))))
+    (if (and message (fboundp 'emagent-acp--retriable-prompt-error-p)
+         (emagent-acp--retriable-prompt-error-p message))
+        (emagent-tools--buttons-prompt
+         (format "Continue with %s for the next prompt?" emagent-chat--turn-model)
+         '(("Yes, keep it" . keep) ("No, use the buffer model" . restore))
+         (current-buffer)
+         (lambda (choice)
+           (when (eq choice 'restore)
+             (emagent--restore-turn-model))))
+      (emagent--restore-turn-model))))
 
 (defun emagent-chat--wire-buffer ()
   "Attach per-buffer emagent callbacks."
@@ -273,6 +319,10 @@ not intercept it.")
   "Leave the current buffer in `org-mode' and queue activation on first display."
   (unless (derived-mode-p 'org-mode)
     (org-mode))
+  ;; Deferred sessions stay in plain `org-mode' until first display.  Apply the
+  ;; same org-appear / org-element safeguards as `emagent-mode' so desktop
+  ;; restore and find-file do not trip \"Invalid search bound\" on large logs.
+  (emagent-chat--disable-incompatible-org-minor-modes)
   (setq-local emagent--session-pending t)
   (cl-pushnew (current-buffer) emagent--pending-buffers)
   (emagent-log "session deferred until displayed: %s" (buffer-name)))
@@ -337,12 +387,13 @@ Used for session files without the `mode: emagent' cookie (only the
 (dolist (buf (buffer-list))
   (with-current-buffer buf
     (when (and (not (derived-mode-p 'emagent-mode))
-               (not emagent--session-pending)
                (emagent--session-buffer-p))
-      (if (and emagent-activate-on-display
-               (not (emagent-chat--buffer-displayed-p)))
-          (emagent--mark-session-pending)
-        (emagent--activate-session-now)))))
+      (if emagent--session-pending
+          (cl-pushnew buf emagent--pending-buffers)
+        (if (and emagent-activate-on-display
+                 (not (emagent-chat--buffer-displayed-p)))
+            (emagent--mark-session-pending)
+          (emagent--activate-session-now))))))
 
 (add-hook 'emagent-mode-hook #'emagent--on-mode-enable)
 
@@ -530,6 +581,8 @@ otherwise the project.el root, otherwise ~/."
 (declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
 (declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
 (declare-function emagent-acp--connected-p "emagent-acp")
+(declare-function emagent-acp--connecting-p "emagent-acp-state")
+(declare-function emagent-acp--run-when-connected-queue "emagent-acp-state")
 (declare-function emagent-claude-relocate-session "emagent-claude" (session-id old-dir new-dir))
 (declare-function emagent-cursor-relocate-session "emagent-cursor" (session-id old-dir new-dir))
 

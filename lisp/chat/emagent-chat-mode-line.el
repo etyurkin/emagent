@@ -164,7 +164,7 @@ When nil, the spinner inherits the mode-line height."
 
 (defun emagent-chat--spinner-active-p ()
   "Return non-nil when the mode-line thinking spinner should animate."
-  (and (emagent-chat--stat :busy)
+  (and (or (emagent-chat--stat :busy) emagent-chat--send-pending)
        (not (emagent-chat--stat :waiting-permission))))
 
 (defun emagent-chat--spinner-animate-p (&optional buffer)
@@ -328,6 +328,11 @@ the mode line pulling session state back out of the ACP layer."
                  (propertize "emagent:stalled" 'face 'warning))
                 ((and busy tool (member kind '("write" "execute")))
                  (concat (propertize "Executing" 'face busy-face)
+                         spinner))
+                (emagent-chat--send-pending
+                 (concat (propertize
+                          (if emagent-chat--turn-model "Switching" "Preparing")
+                          'face busy-face)
                          spinner))
                 (busy
                  (concat (propertize "Thinking" 'face busy-face)

@@ -87,7 +87,8 @@
                (should (derived-mode-p 'org-mode))
                (should-not (derived-mode-p 'emagent-mode))
                (should emagent--session-pending)
-               (should (memq buf emagent--pending-buffers)))
+               (should (memq buf emagent--pending-buffers))
+               (should-not org-element-use-cache))
              ;; Pretend the buffer is now shown in a window.
              (emagent-test--with-mocks
                  (((symbol-function 'emagent-chat--buffer-displayed-p)

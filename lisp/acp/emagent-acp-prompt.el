@@ -185,6 +185,7 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
    ((emagent-acp--permission-pending-p state)
     (setf (emagent-acp-state-deferred-complete-response state) response))
    (t
+    (setf (emagent-acp-state-prompt-retry-gen state) nil)
     (setf (emagent-acp-state-prompt-finishing state) t)
     (setf (emagent-acp-state-busy state) nil)
     (setf (emagent-acp-state-current-tool state) nil)
@@ -278,12 +279,22 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
 (defun emagent-acp--fatal-agent-error-p (message)
   "Return non-nil when MESSAGE should abort the in-flight prompt.
 
-RetriableError messages are excluded: the agent handles its own retry
-logic for transient network errors (HTTP/2 CANCEL, connection resets)
-and will recover without aborting the session."
-  (and (not (string-match-p "RetriableError" message))
-       (string-match-p "timed out\\|timeout\\|failed with status\\|ApiError\\|\\[31merror"
+RetriableError and other transient network failures are excluded: those are
+retried by `emagent-acp--schedule-prompt-retry' and must not be double-handled
+via stderr subscription (which would clear `:busy' before the retry fires)."
+  (and (stringp message)
+       (not (string-match-p "RetriableError" message))
+       (not (emagent-acp--retriable-prompt-error-p message))
+       (string-match-p "timed out\\|timeout\\|failed with status\\|ApiError\\|API Error\\|\\[31merror"
                        message)))
+
+(defun emagent-acp--prompt-retry-pending-p (state)
+  "Return non-nil when STATE is waiting to replay a failed prompt."
+  (and state
+       (emagent-acp-state-prompt-retry-gen state)
+       (eq (emagent-acp-state-prompt-retry-gen state)
+           (emagent-acp-state-prompt-generation state))
+       (emagent-acp-state-busy state)))
 
 (defun emagent-acp--retriable-prompt-error-p (message)
   "Return non-nil when a failed prompt MESSAGE is a transient network error.
@@ -295,8 +306,10 @@ retries them before surfacing the error (`emagent-acp-prompt-retry-attempts')."
   (and (stringp message)
        (string-match-p
         (concat "RetriableError\\|getaddrinfo\\|ENOTFOUND\\|EAI_AGAIN"
-                "\\|ECONNRESET\\|ECONNREFUSED\\|ETIMEDOUT\\|EPIPE"
-                "\\|\\[unavailable\\]\\|socket hang up\\|network error")
+                "\\|ECONNRESET\\|ECONNREFUSED\\|ConnectionRefused"
+                "\\|ETIMEDOUT\\|EPIPE"
+                "\\|\\[unavailable\\]\\|socket hang up\\|network error"
+                "\\|Unable to connect to API")
         message)))
 
 (defun emagent-acp--prompt-retry-delay (attempt)
@@ -305,7 +318,8 @@ retries them before surfacing the error (`emagent-acp-prompt-retry-attempts')."
 
 (defconst emagent-acp--agent-error-signature-re
   (concat "RetriableError\\|getaddrinfo\\|ENOTFOUND\\|EAI_AGAIN"
-          "\\|ECONNRESET\\|ECONNREFUSED\\|ETIMEDOUT\\|EPIPE"
+          "\\|ECONNRESET\\|ECONNREFUSED\\|ConnectionRefused"
+          "\\|ETIMEDOUT\\|EPIPE"
           "\\|\\[unavailable\\]\\|socket hang up\\|WritableIterable is closed")
   "Machine-generated markers of a transient error emitted as agent output.
 Deliberately stricter than `emagent-acp--retriable-prompt-error-p': it must
@@ -350,6 +364,7 @@ mirroring what a user does by hand."
 
 (defun emagent-acp--abort-prompt (state message)
   "Abort the in-flight prompt for STATE and show MESSAGE."
+  (setf (emagent-acp-state-prompt-retry-gen state) nil)
   (when (or (emagent-acp-state-busy state) (emagent-acp-state-prompt-finishing state))
     (emagent-acp--clear-prompt-watchdog state)
     (emagent-acp--cancel-prompt-render state)

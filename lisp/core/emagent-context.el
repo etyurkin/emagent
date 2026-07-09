@@ -34,8 +34,11 @@
           (cons :text (buffer-substring-no-properties (region-beginning) (region-end))))))
 
 (defun emagent-context--org-info ()
-  "Return org headline info at point when in org-mode."
-  (when (derived-mode-p 'org-mode)
+  "Return org headline info at point when in org-mode.
+Skipped in `emagent-mode' buffers: `org-element-at-point' on large session
+files is slow and the chat structure is not a normal org document."
+  (when (and (derived-mode-p 'org-mode)
+             (not (derived-mode-p 'emagent-mode)))
     (ignore-errors
       (let ((element (org-element-at-point)))
         (when (eq (org-element-type element) 'headline)

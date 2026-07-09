@@ -41,6 +41,7 @@ Thinking block."
           ;; inserted body text even if a reset was skipped.
           emagent-chat--response-content-marker nil
           emagent-chat--thinking-headline-marker nil
+          emagent-chat--switching-model-p nil
           emagent-chat--thought-marker nil
           emagent-chat--thought-open-p nil
           emagent-chat--reasoning-streamed-p nil)))
@@ -170,6 +171,7 @@ the hide when the response is fully complete and the session is idle."
         emagent-chat--response-content-marker nil
         emagent-chat--response-end-marker nil
         emagent-chat--thought-open-p nil
+        emagent-chat--switching-model-p nil
         emagent-chat--thinking-headline-marker nil
         emagent-chat--thought-marker nil
         emagent-chat--reasoning-streamed-p nil
@@ -319,8 +321,16 @@ boundary split from rendering as raw `*', backtick, or bracket characters."
                           (setq emagent-chat--thought-flush-timer nil)
                           (emagent-chat--flush-thought-pending)))))
 
+(declare-function emagent-chat--send-pending-end "emagent-chat")
+
+(defun emagent-chat--end-send-pending-if-active ()
+  "End the pre-dispatch phase once agent output starts arriving."
+  (when (fboundp 'emagent-chat--send-pending-end)
+    (emagent-chat--send-pending-end)))
+
 (defun emagent-chat--insert-thought-now (text)
   "Insert reasoning TEXT at the open Thinking marker."
+  (emagent-chat--end-send-pending-if-active)
   (when (and (not (string-empty-p text))
              (emagent-chat--open-response-p))
     (let ((inhibit-read-only t))
@@ -767,6 +777,7 @@ line, with LABEL's trailing decision/(Emacs) annotation beneath."
   (when (and label (not (string-empty-p label))
                (emagent-chat--open-response-p)
                (not emagent-chat--permission-pending))
+    (emagent-chat--end-send-pending-if-active)
     (emagent-chat--with-stable-view
      (lambda ()
        (with-current-buffer (current-buffer)
@@ -1105,6 +1116,7 @@ buffer shows formatted org while the response is still arriving."
   ;; buffer or defeat the LF-based fence/src-block segmentation below.
   (setq text (replace-regexp-in-string "\r\n?" "\n" text))
   (when (not (string-empty-p text))
+    (emagent-chat--end-send-pending-if-active)
     (emagent-chat--with-stable-view
       (lambda ()
         (with-current-buffer (current-buffer)
@@ -1158,12 +1170,15 @@ buffer shows formatted org while the response is still arriving."
 
 (defun emagent-chat-fail-assistant (message)
   "Close the in-flight emagent response with error MESSAGE under `** Response'."
+  (when (fboundp 'emagent-chat--send-pending-end)
+    (emagent-chat--send-pending-end))
   (emagent-chat--with-stable-view
     (lambda ()
       (with-current-buffer (current-buffer)
         (let ((inhibit-read-only t))
           (emagent-chat--writable)
           (when (emagent-chat--fail-response-p)
+            (emagent-chat--clear-switching-scaffold)
             (emagent-chat-close-thought)
             (emagent-chat--ensure-response-headline)
             (goto-char (point-max))

@@ -244,6 +244,7 @@ pass nil for a transient per-turn switch that must not change the buffer model."
                                                              (map-elt model-option :id)
                                                              model-id))
                      (when persist (emagent-acp--persist-model-id state model-id))
+                     (unless persist (emagent-acp--refresh-mode-line state))
                      (emagent-acp--progress
                       state
                       (format "model %s"
@@ -263,6 +264,7 @@ pass nil for a transient per-turn switch that must not change the buffer model."
                :model-id model-id)
      :on-success (lambda (_response)
                    (when persist (emagent-acp--persist-model-id state model-id))
+                   (unless persist (emagent-acp--refresh-mode-line state))
                    (emagent-acp--notify-user
                     state
                     (format "emagent: model %s" model-id))

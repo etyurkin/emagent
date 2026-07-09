@@ -26,6 +26,15 @@
     (should (string-match-p "\\[Emacs context\\]" prompt))
     (should (string-match-p "extra block" prompt))))
 
+(ert-deftest emagent-context-test-org-info-skipped-in-emagent-mode ()
+  "org-element-at-point is not consulted in emagent session buffers."
+  (require 'emagent-chat-mode)
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (insert "* heading\n")
+    (goto-char (point-min))
+    (should-not (emagent-context--org-info))))
+
 (ert-deftest emagent-context-test-buffer-summary ()
   (with-temp-buffer
     (insert "line1\nline2\n")

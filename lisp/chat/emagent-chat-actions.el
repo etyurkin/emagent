@@ -16,9 +16,62 @@
 (require 'emagent-chat-render)
 (require 'emagent-chat-mode-line)
 
+(declare-function emagent-acp-interrupt "emagent-acp")
 (declare-function emagent-acp--finalize-in-flight-prompt "emagent-acp-send")
 (declare-function emagent-acp-busy-p "emagent-acp-usage")
+(declare-function emagent-acp--clear-when-connected-queue "emagent-acp-state")
 (declare-function emagent-chat--user-heading-at-point-p "emagent-chat-input")
+(declare-function emagent-chat--send-pending-begin "emagent-chat")
+(declare-function emagent-chat--send-pending-end "emagent-chat")
+(declare-function emagent-chat--send-active-p "emagent-chat")
+(declare-function emagent-chat--reset-response-state "emagent-chat-render")
+(declare-function emagent-chat--sync-user-zone-marker "emagent-chat-input")
+(declare-function emagent-chat--insert-switching-scaffold "emagent-chat-reasoning")
+
+(defun emagent-chat--operation-active-p ()
+  "Return non-nil when the buffer has work Esc-Esc should stop."
+  (or emagent-chat--send-pending
+      (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))))
+
+(defun emagent-chat--abort-open-response ()
+  "Delete the in-flight response scaffold opened before dispatch."
+  (let ((inhibit-read-only t))
+    (emagent-chat--writable)
+    (when (emagent-chat--open-response-p)
+      (when-let* ((beg (emagent-chat--open-response-begin))
+                  (end (emagent-chat--response-region-end beg)))
+        (save-excursion
+          (goto-char beg)
+          (while (and (> (point) (point-min))
+                      (progn (forward-line -1)
+                             (string-empty-p
+                              (buffer-substring-no-properties
+                               (line-beginning-position)
+                               (line-end-position)))))
+            (setq beg (line-beginning-position)))
+          (delete-region beg end)))))
+  (emagent-chat--reset-response-state)
+  (emagent-chat--sync-user-zone-marker))
+
+(defun emagent-chat--stop-operation ()
+  "Stop any in-flight emagent work in the current buffer.
+Return non-nil when something was stopped."
+  (when (emagent-chat--operation-active-p)
+    (when (and emagent-chat--send-pending
+               (not (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))))
+      (setq emagent-chat--send-token nil)
+      (when (fboundp 'emagent-acp--clear-when-connected-queue)
+        (emagent-acp--clear-when-connected-queue))
+      (emagent-chat--abort-open-response)
+      (emagent-chat--send-pending-end))
+    (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
+      (emagent-acp--finalize-in-flight-prompt
+       "/Stopped — awaiting new instructions./"))
+    (when (fboundp 'emagent-chat--refresh-mode-line)
+      (emagent-chat--refresh-mode-line))
+    (when (fboundp 'emagent-chat--spinner-ensure-running)
+      (emagent-chat--spinner-ensure-running))
+    t))
 
 (defun emagent-chat--insert-user-heading-with-text (text)
   "Insert TEXT as a complete `* username> TEXT' heading and return point after it."
@@ -83,20 +136,23 @@ Sending a previous prompt replaces its old response."
                (point))))
         (emagent-chat--delete-following-response response-pos)
         (emagent-log "send: %s" (emagent-log-truncate-line input 80))
+        (emagent-chat--send-pending-begin)
         (emagent-chat--begin-response response-pos)
+        (when emagent-chat--turn-model
+          (let ((inhibit-read-only t))
+            (emagent-chat--writable)
+            (emagent-chat--insert-switching-scaffold)))
         (when emagent-chat--on-send
           (funcall emagent-chat--on-send input))))))
 
-(declare-function emagent-acp-interrupt "emagent-acp")
-
 (defun emagent-chat-interrupt ()
-  "Interrupt the running agent response (ESC ESC).
+  "Stop any in-flight emagent work (ESC ESC).
 
-When the agent is busy, closes the response block with a stop notice and
-returns the session to idle.  When idle, falls through to `keyboard-quit'."
+Closes a streaming response, cancels a pre-dispatch send, or clears a
+connect/model-switch wait.  When idle, falls through to `keyboard-quit'."
   (interactive)
-  (if (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
-      (emagent-acp-interrupt)
+  (if (emagent-chat--stop-operation)
+      (message "emagent: stopped")
     (keyboard-quit)))
 
 (defun emagent-chat-new-prompt ()
