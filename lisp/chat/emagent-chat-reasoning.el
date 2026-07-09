@@ -58,8 +58,11 @@ reasoning streamed with no Response below."
     (goto-char emagent-chat--response-body-start)
     (setq emagent-chat--thinking-headline-marker (copy-marker (point) nil))
     (insert (if emagent-chat--turn-model
-                (format "%s (%s)" emagent-chat-thinking-headline
-                        emagent-chat--turn-model)
+                (concat emagent-chat-thinking-headline " ("
+                        (propertize emagent-chat--turn-model
+                                    emagent-chat--turn-model-property
+                                    emagent-chat--turn-model)
+                        ")")
               emagent-chat-thinking-headline)
             "\n")
     (setq emagent-chat--thought-marker (point-marker)

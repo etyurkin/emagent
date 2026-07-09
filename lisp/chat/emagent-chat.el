@@ -151,6 +151,25 @@ switch, so restoring returns to whatever the session was really on.")
                     end)))
     model))
 
+(defun emagent-chat--fontify-turn-model (limit)
+  "Font-lock matcher for `/model'-stamped text up to LIMIT.
+Faces the override marker via font-lock so it survives on org heading lines
+\(prompt and `** Thinking'), where a plain `face' text property is overridden."
+  (let ((pos (point)))
+    (while (and (< pos limit)
+                (not (get-text-property pos emagent-chat--turn-model-property)))
+      (setq pos (or (next-single-property-change
+                     pos emagent-chat--turn-model-property nil limit)
+                    limit)))
+    (when (and (< pos limit)
+               (get-text-property pos emagent-chat--turn-model-property))
+      (let ((end (or (next-single-property-change
+                      pos emagent-chat--turn-model-property nil limit)
+                     limit)))
+        (set-match-data (list pos end))
+        (goto-char end)
+        t))))
+
 (defvar-local emagent-chat--on-attach nil
   "Function called with attachment text.")
 
@@ -180,6 +199,13 @@ Used for the trailing (Allow: Session) / (Denied) annotation."
 (defface emagent-permission-prompt
   '((t (:inherit font-lock-warning-face :weight bold)))
   "Face for the permission question line in the Thinking block."
+  :group 'emagent-chat)
+
+(defface emagent-chat-turn-model
+  '((t (:inherit warning :slant italic)))
+  "Face for a per-turn model override (from `/model') in the prompt and the
+`** Thinking (MODEL)' headline.  Inherits `warning' (theme yellow) so it is not
+a hard-coded color."
   :group 'emagent-chat)
 
 (defface emagent-model-choice-agent
