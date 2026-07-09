@@ -24,6 +24,54 @@
 (defvar-local emagent-acp--session nil
   "ACP session state for the current emagent buffer.")
 
+(defun emagent-acp--make-usage ()
+  "Return a fresh usage hash table."
+  (let ((u (make-hash-table :test 'eq)))
+    (puthash :context-used nil u)
+    (puthash :context-size nil u)
+    (puthash :total-tokens 0 u)
+    u))
+
+;; Defined before any code that reads or `setf's its slots: the accessors' gv
+;; setter expanders must be registered at compile time, else a `setf' on a slot
+;; earlier in the file falls back to a nonexistent `(setf ...)' function.
+(cl-defstruct (emagent-acp-state
+               (:constructor emagent-acp--state-create)
+               (:copier nil))
+  "Mutable per-buffer ACP session state.
+
+Replaces the former untyped hash table so field access is checked at
+byte-compile time.  Slots that are themselves maps (usage and the tool-call /
+tool-resolve tables, keyed by id) remain hash tables."
+  ;; Connection
+  client chat-buffer on-reveal provider mcp-http initialized
+  ;; Session
+  session-id config-options (usage (emagent-acp--make-usage))
+  session-auto-approve permission-auto-allow
+  external-tool-gate-reasons external-tool-gate-proactive-logged
+  external-tool-refusal-logged
+  agent-rss agent-rss-timer
+  ;; Turn
+  ready busy
+  (assistant-text "") (thought-text "") (thought-buffer "")
+  prompt-finalized prompt-finishing (prompt-generation 0)
+  finish-token finish-timer prompt-watchdog prompt-watchdog-timer
+  extra-context compress-pending replaying-history
+  continue-attempts deferred-complete-response
+  current-tool current-tool-kind tool-call-since-last-chunk
+  (tool-call-titles (make-hash-table :test 'equal))
+  (tool-call-inputs (make-hash-table :test 'equal))
+  (tool-call-labels (make-hash-table :test 'equal))
+  (tool-call-decisions (make-hash-table :test 'equal))
+  (tool-call-pending (make-hash-table :test 'equal))
+  tool-resolve-queue tool-resolve-worker
+  (tool-resolve-attempts (make-hash-table :test 'equal))
+  ;; Permission gate
+  permission-queue permission-busy permission-drain-timer
+  ;; Callbacks (wired by the app; see emagent.el)
+  cb-chunk cb-thought cb-finish cb-fail cb-slash-commands
+  cb-tool-call cb-permission cb-status)
+
 (defun emagent-acp--strip-pino-colors (string)
   "Remove literal pino color tokens like [32m from STRING."
   (replace-regexp-in-string "\\[[0-9]+m" "" string))
@@ -132,51 +180,6 @@ Prevents a reconnect or shutdown from leaving repeating/pending timers
     (when-let ((client (emagent-acp-state-client state)))
       (ignore-errors (emagent-acp-shutdown :client client))))
   (setq emagent-acp--session nil))
-
-(defun emagent-acp--make-usage ()
-  "Return a fresh usage hash table."
-  (let ((u (make-hash-table :test 'eq)))
-    (puthash :context-used nil u)
-    (puthash :context-size nil u)
-    (puthash :total-tokens 0 u)
-    u))
-
-(cl-defstruct (emagent-acp-state
-               (:constructor emagent-acp--state-create)
-               (:copier nil))
-  "Mutable per-buffer ACP session state.
-
-Replaces the former untyped hash table so field access is checked at
-byte-compile time.  Slots that are themselves maps (usage and the tool-call /
-tool-resolve tables, keyed by id) remain hash tables."
-  ;; Connection
-  client chat-buffer on-reveal provider mcp-http initialized
-  ;; Session
-  session-id config-options (usage (emagent-acp--make-usage))
-  session-auto-approve permission-auto-allow
-  external-tool-gate-reasons external-tool-gate-proactive-logged
-  external-tool-refusal-logged
-  agent-rss agent-rss-timer
-  ;; Turn
-  ready busy
-  (assistant-text "") (thought-text "") (thought-buffer "")
-  prompt-finalized prompt-finishing (prompt-generation 0)
-  finish-token finish-timer prompt-watchdog prompt-watchdog-timer
-  extra-context compress-pending replaying-history
-  continue-attempts deferred-complete-response
-  current-tool current-tool-kind tool-call-since-last-chunk
-  (tool-call-titles (make-hash-table :test 'equal))
-  (tool-call-inputs (make-hash-table :test 'equal))
-  (tool-call-labels (make-hash-table :test 'equal))
-  (tool-call-decisions (make-hash-table :test 'equal))
-  (tool-call-pending (make-hash-table :test 'equal))
-  tool-resolve-queue tool-resolve-worker
-  (tool-resolve-attempts (make-hash-table :test 'equal))
-  ;; Permission gate
-  permission-queue permission-busy permission-drain-timer
-  ;; Callbacks (wired by the app; see emagent.el)
-  cb-chunk cb-thought cb-finish cb-fail cb-slash-commands
-  cb-tool-call cb-permission cb-status)
 
 (cl-defun emagent-acp--make-state (&key client chat-buffer on-reveal)
   "Return a fresh `emagent-acp-state' for a session."
