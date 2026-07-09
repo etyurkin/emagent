@@ -40,15 +40,15 @@
                (:copier nil))
   "Mutable per-buffer ACP session state.
 
-Replaces the former untyped hash table so field access is checked at
-byte-compile time.  Slots that are themselves maps (usage and the tool-call /
-tool-resolve tables, keyed by id) remain hash tables."
+Replaces the former untyped hash table so field access is checked
+at byte-compile time.  Slots that are themselves maps (the usage
+and tool-call/tool-resolve tables, keyed by id) stay hash tables."
   ;; Connection
   client chat-buffer on-reveal provider mcp-http initialized
   ;; Session
   session-id config-options (usage (emagent-acp--make-usage))
   session-auto-approve permission-auto-allow
-  external-tool-gate-reasons external-tool-gate-proactive-logged
+  external-tool-gate-reasons external-tool-gate-logged
   external-tool-refusal-logged
   agent-rss agent-rss-timer
   ;; Turn
@@ -144,8 +144,9 @@ One of:
   `finalizing'  streaming ended, the response is being rendered;
   `done'        the response has been fully rendered.
 
-This derives the phase from the turn flags so callers share one vocabulary for
-the turn state machine.  The flags remain the underlying representation for now."
+This derives the phase from the turn flags so callers share one
+vocabulary for the turn state machine.  The flags remain the
+underlying representation for now."
   (cond
    ((emagent-acp-state-busy state) 'streaming)
    ((emagent-acp-state-prompt-finishing state)

@@ -79,10 +79,10 @@
 (defun emagent-acp--maybe-log-external-tool-gate-proactive (state)
   "Log a one-time proactive hint after `initialize' when we inferred SDK gates."
   (when emagent-acp-external-tool-gate-hints
-    (unless (emagent-acp-state-external-tool-gate-proactive-logged state)
+    (unless (emagent-acp-state-external-tool-gate-logged state)
       (when-let ((reasons (emagent-acp-state-external-tool-gate-reasons state))
                  (msg (emagent-acp--format-external-tool-gate-proactive-hint reasons)))
-        (setf (emagent-acp-state-external-tool-gate-proactive-logged state) t)
+        (setf (emagent-acp-state-external-tool-gate-logged state) t)
         (emagent-log "emagent: external tool permission hint — %s" msg)))))
 
 (defun emagent-acp--infer-external-tool-gate-from-initialize-response (state response)
