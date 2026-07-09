@@ -139,6 +139,16 @@ locate the headline by search and cache it."
           emagent-chat--thought-marker (copy-marker (point) nil)
           emagent-chat--assistant-marker (copy-marker (point) nil))))
 
+(defun emagent-chat--promote-transient-to-thinking ()
+  "Promote preparing/switching headline to `** Thinking' when a turn starts."
+  (when (emagent-chat--open-response-p)
+    (let ((inhibit-read-only t))
+      (emagent-chat--writable)
+      (when (emagent-chat--open-switching-begin)
+        (emagent-chat--promote-switching-to-thinking))
+      (when (emagent-chat--open-preparing-begin)
+        (emagent-chat--promote-preparing-to-thinking)))))
+
 (defun emagent-chat--clear-switching-scaffold ()
   "Remove a `** Switching model' headline from the open response, if present."
   (when-let ((beg (emagent-chat--open-switching-begin)))
