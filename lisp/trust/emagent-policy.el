@@ -1,6 +1,6 @@
 ;;; emagent-policy.el --- Unified security policy for emagent  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024-2026  Evgeniy Tyurkin
+;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; SPDX-License-Identifier: MIT
 

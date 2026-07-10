@@ -1,6 +1,6 @@
 ;;; emagent-tools-shell.el --- Shell and grep tools  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024-2025  Evgeniy Tyurkin
+;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 

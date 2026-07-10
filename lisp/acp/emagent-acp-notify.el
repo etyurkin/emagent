@@ -1,6 +1,6 @@
 ;;; emagent-acp-notify.el --- ACP notify module  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024-2025  Evgeniy Tyurkin
+;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 (require 'cl-lib)
 (require 'map)
 (require 'emagent-log)

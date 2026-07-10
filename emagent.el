@@ -1,6 +1,6 @@
 ;;; emagent.el --- Emacs-native ACP chat assistant -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026  Evgeniy Tyurkin
+;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; SPDX-License-Identifier: MIT
 

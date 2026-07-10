@@ -1,6 +1,6 @@
 ;;; emagent-acp-request.el --- ACP permission request dispatch  -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024-2025  Evgeniy Tyurkin
+;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 
