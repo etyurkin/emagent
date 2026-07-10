@@ -1,6 +1,8 @@
-#+TITLE: emagent
+#+TITLE: Emagent - ACP coding agents living in Org buffers
 #+AUTHOR: Evgeniy Tyurkin
 #+OPTIONS: toc:t num:nil
+
+[[file:assets/emagent.png]]
 
 Emagent splits responsibilities the way a serious integration should:
 intelligence stays in an external ACP agent (Cursor or Claude), execution stays
@@ -433,6 +435,12 @@ Emagent reads the =mcpServers= block from =emagent-acp-extra-mcp-config-file=
 the built-in emagent tools.  This lets Claude-compatible agents use any MCP
 gateway you have configured — no separate setup required.  Set to =nil= to
 disable forwarding.
+
+* Related projects
+
+- [[https://github.com/etyurkin/lisp-sitter][lisp-sitter]] — MCP server for structural editing of Emacs Lisp, Scheme, and
+  Common Lisp; powers the =structural_*= tools listed above.
+- [[https://github.com/etyurkin/dot-emacs][dot-emacs]] — the author's Emacs configuration, with emagent wired in.
 
 * License
 
