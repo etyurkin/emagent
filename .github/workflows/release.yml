@@ -1,8 +1,8 @@
 name: Release
 
-# Auto-tag a release whenever the Version header in emagent.el changes on main.
+# Publish a release whenever the Version header in emagent.el changes on main.
 # MELPA Stable builds from git tags, so pushing v<version> is what publishes a
-# new stable release.
+# new stable release; the GitHub Release is created alongside it.
 
 on:
   push:
@@ -34,15 +34,28 @@ jobs:
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag if it does not exist
+        id: tag
         env:
           TAG: ${{ steps.ver.outputs.tag }}
         run: |
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
             echo "Tag $TAG already exists; nothing to release."
+            echo "created=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
+          echo "created=true" >> "$GITHUB_OUTPUT"
           echo "Pushed $TAG."
+
+      - name: Create GitHub Release
+        if: steps.tag.outputs.created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          TITLE: ${{ steps.ver.outputs.version }}
+        run: |
+          gh release create "$TAG" --title "$TITLE" --generate-notes
+          echo "Created GitHub Release $TITLE."
