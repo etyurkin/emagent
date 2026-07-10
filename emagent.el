@@ -6,7 +6,7 @@
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; URL: https://github.com/etyurkin/emagent
-;; Version: 1.2.1
+;; Version: 1.2.2
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: comm tools
 
