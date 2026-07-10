@@ -77,7 +77,8 @@ New choices persist under `emagent-permissions-directory'.")
   (let ((dir (expand-file-name directory)))
     (setq emagent-chat-project-directory dir)
     (setq-local default-directory dir)
-    (emagent-chat--write-top-property "EMAGENT_PROJECT" dir)))
+    (emagent-chat--write-top-property "EMAGENT_PROJECT"
+                                      (emagent-chat--display-project-directory dir))))
 
 (defun emagent-session-project-directory ()
   "Return the project directory for the current emagent buffer."

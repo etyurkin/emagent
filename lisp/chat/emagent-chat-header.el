@@ -103,6 +103,39 @@
               ((not (string-empty-p value))))
     (split-string value "[ ,]+" t)))
 
+(defun emagent-chat--display-path (path &optional project-dir)
+  "Return PATH formatted for display in the chat UI.
+Under the session project root: ./projectname/relative/path.
+Under user home but outside the project: ~/….
+Otherwise: the absolute PATH."
+  (let* ((expanded (file-truename (expand-file-name path)))
+         (project (when-let ((raw (or project-dir
+                                      (and (boundp 'emagent-chat-project-directory)
+                                           emagent-chat-project-directory)
+                                      (emagent-chat--read-project-property))))
+                    (file-truename
+                     (file-name-as-directory (expand-file-name raw)))))
+         (home (file-truename (expand-file-name "~")))
+         (home-prefix (concat home "/")))
+    (cond
+     ((and project
+           (string-prefix-p project expanded)
+           (not (string= expanded (directory-file-name project))))
+      (concat "./"
+              (file-name-nondirectory (directory-file-name project))
+              "/"
+              (file-relative-name expanded project)))
+     ((string-prefix-p home-prefix expanded)
+      (abbreviate-file-name expanded))
+     ((string= expanded home)
+      "~")
+     (t expanded))))
+
+(defun emagent-chat--display-project-directory (directory)
+  "Return DIRECTORY as written in #+EMAGENT_PROJECT."
+  (file-name-as-directory
+   (abbreviate-file-name (expand-file-name directory))))
+
 (defun emagent-chat--session-directory ()
   "Return the ACP working directory for the current emagent buffer.
 Reads #+EMAGENT_PROJECT from the buffer header if set, falling back to
