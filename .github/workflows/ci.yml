@@ -6,6 +6,29 @@ on:
   pull_request:
 
 jobs:
+  version-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check emagent.el and emagent-pkg.el versions match
+        run: |
+          hdr="$(grep -E '^;; Version:' emagent.el | head -1 \
+            | sed -E 's/^;; Version:[[:space:]]*//' | tr -d '[:space:]')"
+          pkg="$(grep -E '\(define-package' emagent-pkg.el | head -1 \
+            | sed -E 's/.*"emagent"[[:space:]]+"([^"]+)".*/\1/')"
+          echo "emagent.el:     $hdr"
+          echo "emagent-pkg.el: $pkg"
+          if [ -z "$hdr" ] || [ -z "$pkg" ]; then
+            echo "Could not parse a version from one of the files" >&2
+            exit 1
+          fi
+          if [ "$hdr" != "$pkg" ]; then
+            echo "Version mismatch: emagent.el ($hdr) != emagent-pkg.el ($pkg)" >&2
+            exit 1
+          fi
+          echo "Versions in sync."
+
   build-and-test:
     runs-on: ubuntu-latest
     strategy:

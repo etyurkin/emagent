@@ -1,0 +1,48 @@
+name: Release
+
+# Auto-tag a release whenever the Version header in emagent.el changes on main.
+# MELPA Stable builds from git tags, so pushing v<version> is what publishes a
+# new stable release.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - emagent.el
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from emagent.el
+        id: ver
+        run: |
+          version="$(grep -E '^;; Version:' emagent.el | head -1 \
+            | sed -E 's/^;; Version:[[:space:]]*//' | tr -d '[:space:]')"
+          if [ -z "$version" ]; then
+            echo "Could not find a Version header in emagent.el" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag if it does not exist
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists; nothing to release."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          echo "Pushed $TAG."
