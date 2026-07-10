@@ -2,7 +2,7 @@
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; SPDX-License-Identifier: MIT
-;; Version: 1.2.1
+;; Version: 1.2.2
 
 ;;; Commentary:
 ;; Intercepts `emagent-tool-run-shell-command' to block unsafe git usage,
