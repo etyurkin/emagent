@@ -23,8 +23,15 @@ compile-strict:
 	rm -f emagent.elc
 	find lisp -name '*.elc' -delete
 
+# Byte-compile first (so tests run against compiled code), then always remove
+# the .elc afterward — pass or fail — so the source tree stays clean. The test
+# exit status is preserved so `make test` still fails when a test fails.
 test: compile
-	$(EMACS) --batch -L . $(addprefix -L ,$(LISP_SUBDIRS)) -l tests/emagent-test-runner.el
+	$(EMACS) --batch -L . $(addprefix -L ,$(LISP_SUBDIRS)) -l tests/emagent-test-runner.el; \
+	status=$$?; \
+	rm -f emagent.elc; \
+	find lisp -name '*.elc' -delete; \
+	exit $$status
 
 elpaca-vendor:
 	@mkdir -p "$(dir $(ELPACA_DIR))"
