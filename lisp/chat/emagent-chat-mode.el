@@ -96,9 +96,13 @@ Run \\[emagent-mode] to reconnect a saved session."
   (setq-local buffer-read-only nil)
   (setq-local emagent-chat--tool-call-lines (make-hash-table :test 'equal))
   (emagent-chat--writable)
-  (setq emagent-chat-project-directory
-        (or emagent-chat-project-directory (emagent-chat--read-project-property))
-        emagent-chat-session-id (or emagent-chat-session-id
+  (when-let* ((raw (or emagent-chat-project-directory
+                       (emagent-chat--read-project-property)))
+              (dir (expand-file-name raw)))
+    (setq emagent-chat-project-directory dir)
+    (emagent-chat--write-top-property "EMAGENT_PROJECT"
+                                      (emagent-chat--display-project-directory dir)))
+  (setq emagent-chat-session-id (or emagent-chat-session-id
                                     (emagent-chat--read-session-property))
         emagent-chat-model (or emagent-chat-model (emagent-chat--read-model-property))
         emagent-chat-provider (emagent-chat-agent)

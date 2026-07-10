@@ -581,11 +581,20 @@ re-inserted after TEXT, leaving the marker at the true content end."
 (defun emagent-chat--org-verbatim-paths (text)
   "Wrap file paths in org =verbatim= to prevent /italic/ and =verbatim= glitches.
 Matches any token containing a / that follows whitespace, a colon, or the
-start of the string, so both absolute (/Users/...) and relative
-(project/src/...) paths are wrapped as a unit."
-  (replace-regexp-in-string
-   "\\(\\(?:^\\|[ \t:]\\)\\)\\([^ \t\n]+/[^ \t\n]*\\)"
-   "\\1=\\2=" text))
+start of the string.  Paths are shortened via `emagent-chat--display-path'
+before wrapping."
+  (with-temp-buffer
+    (insert text)
+    (goto-char (point-min))
+    (while (re-search-forward
+             "\\(\\(?:^\\|[ \t:]\\)\\)\\([^ \t\n]+/[^ \t\n]*\\)" nil t)
+      (replace-match
+       (concat (match-string 1)
+               "="
+               (emagent-chat--display-path (match-string 2))
+               "=")
+       t t))
+    (buffer-string)))
 
 (defun emagent-chat--format-tool-line (label)
   "Return a Thinking-block tool line for LABEL, safe in org-mode.
@@ -847,7 +856,7 @@ line, with LABEL's trailing decision/(Emacs) annotation beneath."
                    (insert (if blockp
                                (if (and (equal lang "text")
                                         (not (string-match-p "\n" (or code ""))))
-                                   ;; Text block = file path: arrow with full path, no block.
+                                   ;; Text block = file path: arrow with display path, no block.
                                    (let* ((annotation (emagent-chat--tool-label-annotation label))
                                           (base (if annotation
                                                     (string-trim
@@ -857,7 +866,8 @@ line, with LABEL's trailing decision/(Emacs) annotation beneath."
                                                   label))
                                           (verb (car (split-string base "[ :/]" t)))
                                           (full-label (concat (or verb base)
-                                                              ": " code
+                                                              ": "
+                                                              (emagent-chat--display-path code)
                                                               (if annotation (concat " " annotation) ""))))
                                      (emagent-chat--format-tool-line full-label))
                                  ;; Non-text blocks: arrow + block.
@@ -901,7 +911,7 @@ Return non-nil when a span was updated."
                        ((and blockp (or was-arrow-only was-arrow-with-block)
                              (equal lang "text")
                              (not (string-match-p "\n" (or code ""))))
-                        ;; Text block = file path: show the FULL path on the
+                        ;; Text block = file path: show the display path on the
                         ;; arrow (no block) by reconstructing the label from
                         ;; the untruncated code.
                         (let* ((base (if annotation
@@ -912,7 +922,8 @@ Return non-nil when a span was updated."
                                        label))
                                (verb (car (split-string base "[ :/]" t)))
                                (full-label (concat (or verb base)
-                                                   ": " code
+                                                   ": "
+                                                   (emagent-chat--display-path code)
                                                    (if annotation (concat " " annotation) ""))))
                           (emagent-chat--format-tool-line full-label)))
                        ((and blockp (or was-arrow-only was-arrow-with-block))
