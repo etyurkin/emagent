@@ -73,6 +73,7 @@ target BUFFER (hence the two-argument signature)."
 
 (declare-function project-current "project")
 (declare-function project-root "project")
+(declare-function emagent-chat--display-project-directory "emagent-chat-header")
 (declare-function emagent-chat-append-thought "emagent-chat")
 (declare-function emagent-chat-append-assistant "emagent-chat")
 (declare-function emagent-chat-finish-assistant "emagent-chat")
@@ -701,7 +702,8 @@ leaves the session files in the old location and causes session/load to fail."
       (when (bound-and-true-p emagent-acp--session)
         (emagent-acp-shutdown-buffer))
       (emagent-acp-ensure-connected)
-      (message "emagent: project → %s, reconnecting…" new-dir))))
+      (message "emagent: project → %s, reconnecting…"
+               (emagent-chat--display-project-directory new-dir)))))
 
 (dolist (sym '(emagent-trust-workspace
                emagent-trust-claude-reconnect

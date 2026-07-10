@@ -1472,11 +1472,32 @@ bracket must flush once the following non-`(' text confirms it is not a link."
        (goto-char (point-max))
        (should (string= "current" (emagent-chat--current-user-input)))))))
 
+(ert-deftest emagent-chat-test-display-path ()
+  (let* ((project (expand-file-name "demo-app" (emagent-test--temp-directory)))
+         (in-project (expand-file-name "src/main/Foo.java" project))
+         (home-outside (expand-file-name "Desktop/image.png" (expand-file-name "~")))
+         (outside-home "/tmp/outside-home/x"))
+    (make-directory project t)
+    (make-directory (file-name-directory in-project) t)
+    (let ((default-directory project)
+          (emagent-chat-project-directory project))
+      (should (string= "./demo-app/src/main/Foo.java"
+                       (emagent-chat--display-path in-project)))
+      (should (string= (abbreviate-file-name home-outside)
+                       (emagent-chat--display-path home-outside)))
+      (should (string= (file-truename outside-home)
+                       (emagent-chat--display-path outside-home))))
+    (should (string= (file-name-as-directory (abbreviate-file-name project))
+                     (emagent-chat--display-project-directory project)))))
+
 (ert-deftest emagent-chat-test-org-verbatim-paths ()
-  (should (string= "Read: =/Users/etyurkin/foo.el="
-                   (emagent-chat--org-verbatim-paths "Read: /Users/etyurkin/foo.el")))
-  (should (string= "→ Read: =/tmp/x="
-                   (emagent-chat--format-tool-line "Read: /tmp/x"))))
+  (let ((home-file (expand-file-name "foo.el" (expand-file-name "~"))))
+    (should (string= (format "Read: =%s="
+                             (abbreviate-file-name home-file))
+                     (emagent-chat--org-verbatim-paths
+                      (format "Read: %s" home-file))))
+    (should (string= (format "→ Read: =%s=" (file-truename "/tmp/x"))
+                     (emagent-chat--format-tool-line "Read: /tmp/x")))))
 
 (ert-deftest emagent-chat-test-finish-moves-point-to-user-prompt ()
   (emagent-test--with-emagent-buffer
