@@ -262,13 +262,18 @@ When NOW is non-nil, show the buffer immediately for interactive prompts."
     (emagent-acp--run-reveal reveal now)))
 
 (defun emagent-acp--prepare-interactive-context (state)
-  "Show the chat buffer and select its window before a user prompt."
+  "Focus the chat buffer's window before a user prompt, without rearranging.
+
+Selects the chat window only when it is already visible in the selected
+frame, so permission shortcuts (y/n/…) work when the user is looking at
+the session.  Never pops the buffer into a window or touches other
+frames: with several sessions across frames, stealing a window would
+flip an unrelated frame to this session's project.  Background prompts
+are surfaced by `emagent-chat--notify-inactive-update' instead."
   (emagent-acp--reveal-buffer state t)
-  (when-let ((buffer (emagent-acp--chat-buffer state)))
-    (unless (get-buffer-window buffer)
-      (pop-to-buffer buffer))
-    (when-let ((window (get-buffer-window buffer)))
-      (select-window window))))
+  (when-let* ((buffer (emagent-acp--chat-buffer state))
+              (window (get-buffer-window buffer)))
+    (select-window window)))
 
 (defun emagent-acp--fail-connect (state message)
   "Show MESSAGE, reveal the chat buffer, and stop connecting."

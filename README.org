@@ -334,7 +334,8 @@ Toggle with =emagent-trust-enabled=.
 | =emagent-policy-extra-shell-rules=           | =nil=          | Extra declarative shell policy rules (see below)                    |
 | =emagent-policy-extra-elisp-rules=           | =nil=          | Extra declarative elisp policy rules                                |
 | =emagent-policy-extra-python-rules=          | =nil=          | Extra declarative python policy rules                               |
-| =emagent-tools-show-written-buffer=          | ='magit-diff=  | Show file after write: =nil=, =t=, or ='magit-diff=                 |
+| =emagent-tools-show-written-buffer=          | =nil=          | Show file after write: =nil=, =t=, or ='magit-diff=                 |
+| =emagent-tools-display-compile-buffer=       | =nil=          | Display =*emagent-compile*= when a build starts                     |
 | =emagent-shell-block-no-verify=              | =t=            | Refuse =git --no-verify=                                            |
 | =emagent-shell-guard-push=                   | =t=            | Block push when branch PR is already merged                         |
 | =emagent-shell-redirect=                     | =t=            | Auto-redirect =cat=/=grep=/=git= to emagent tools                   |
@@ -401,7 +402,7 @@ after save.  Install lisp-sitter from [[https://github.com/etyurkin/lisp-sitter]
 | =describe_symbol=            | Full docstring + signature                                                |
 | =find_function=              | Return the source location of an Emacs function                           |
 | =where_is=                   | Return the key bindings for an Emacs command                              |
-| =check_structural_file=      | Validate whole Lisp file via lisp-sitter (=.el= byte-compiles)            |
+| =check_structural_file=      | Validate whole Lisp file via lisp-sitter (syntax/structure; no byte-compile by default — macro expansion executes content, see =emagent-elisp-byte-compile-on-check=) |
 | =check_structural_node=      | Validate one top-level node without saving                                |
 | =structural_find_errors=     | List MISSING tokens and ERROR nodes in a Lisp file                        |
 | =structural_tree=            | Shallow outline of top-level nodes in a file                              |
