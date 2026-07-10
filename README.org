@@ -443,6 +443,10 @@ disable forwarding.
   Common Lisp; powers the =structural_*= tools listed above.
 - [[https://github.com/etyurkin/dot-emacs][dot-emacs]] — the author's Emacs configuration, with emagent wired in.
 
+* Acknowledgments
+
+Emagent grew out of an idea by Mike Ivanov, whose feedback shaped it throughout.
+
 * License
 
-MIT.  See [[file:LICENSE][LICENSE]].  Copyright © 2026 Evgeniy Tyurkin.
+MIT.  See [[file:LICENSE][LICENSE]].  Copyright © 2026 [[mailto:etyurkin@kwarks.org][Evgeniy Tyurkin]], [[mailto:mike@daatsys.com][Mike Ivanov]].
