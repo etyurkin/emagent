@@ -172,19 +172,45 @@ to take the next word as its value; a `--long' flag is assumed self-contained."
               (t (setq result w) (cl-return))))
     result))
 
+(defun emagent-acp--leaf-fingerprint (leaf)
+  "Return the execute-fingerprint token for one leaf shell command LEAF, or nil.
+
+The token is the program name, plus the sub-verb for
+`emagent-acp--subcommand-programs' (so `git status' and `git push' differ).
+Comments and empty leaves yield nil.  The program is the first
+whitespace-delimited word after dropping leading VAR=VALUE assignments; a plain
+whitespace split (rather than a shell tokenizer) is used because patterns like
+`grep \"a\\|b\"' confuse `split-string-shell-command'."
+  (let* ((words (emagent-policy-match--strip-leading-assignments
+                 (split-string (string-trim leaf) "[[:space:]]+" t)))
+         (program (car words)))
+    (cond
+     ((null program) nil)
+     ((string-prefix-p "#" program) nil)
+     ((member program emagent-acp--subcommand-programs)
+      (if-let ((verb (emagent-acp--execute-subverb (cdr words))))
+          (format "%s:%s" program verb)
+        program))
+     (t program))))
+
 (defun emagent-acp--execute-fingerprint (command)
   "Return the execute fingerprint for shell COMMAND.
 
-Keyed on the program name, plus the sub-verb for
-`emagent-acp--subcommand-programs', so a grant is scoped to the actual operation
-rather than every invocation of the program.  The sub-verb skips leading global
-flags and their values (see `emagent-acp--execute-subverb')."
-  (let* ((words (split-string (string-trim command) "[[:space:]]+" t))
-         (program (car words)))
-    (if-let (((member program emagent-acp--subcommand-programs))
-             (verb (emagent-acp--execute-subverb (cdr words))))
-        (format "execute:%s:%s" program verb)
-      (format "execute:%s" program))))
+Keyed on the sorted set of leaf program names within COMMAND (and the sub-verb
+for `emagent-acp--subcommand-programs'), so a grant is scoped to the operations
+involved rather than the exact argv.  Two commands that differ only in their
+path/glob arguments — or in how a pipeline or `VAR=$(...)' assignment is
+composed — share one fingerprint, so a single \"Allow for session\" covers
+both.  A plain single command keeps its former `execute:PROGRAM[:VERB]' key.
+Policy rules still block dangerous commands regardless of any grant."
+  (let* ((leaves (or (emagent-policy-shell-commands command)
+                     (list (string-trim command))))
+         (parts (delete-dups
+                 (delq nil (mapcar #'emagent-acp--leaf-fingerprint leaves)))))
+    (if parts
+        (concat "execute:" (mapconcat #'identity (sort parts #'string<) ","))
+      (format "execute:%s"
+              (car (split-string (string-trim command) "[[:space:]]+" t))))))
 
 (defun emagent-acp--permission-fingerprint (tool-call)
   "Return a stable fingerprint string for auto-allowing similar TOOL-CALLs.

@@ -105,6 +105,30 @@ request is cancelled rather than escalated to a permanent agent-side grant."
   (should-not (string= (emagent-test--exec-fingerprint "git status")
                        (emagent-test--exec-fingerprint "git push"))))
 
+(ert-deftest emagent-acp-session-test-permission-fingerprint-compound ()
+  "Compound commands that differ only in path/glob arguments — or in how a
+pipeline or `VAR=$(...)' assignment is composed — share one fingerprint, so a
+single session grant covers both."
+  ;; The motivating case: identical structure, different jar path + a leading
+  ;; comment and a `-i' grep flag.  These must collapse to one grant.
+  (let ((a (concat "JAR=$(find ~/.m2 -path \"*common*3.0.29*\" -name \"*.jar\" "
+                   "! -name \"*sources*\" 2>/dev/null | head -1)\n"
+                   "echo \"JAR: $JAR\"\n"
+                   "jar tf \"$JAR\" 2>/dev/null | grep \"Foo\\|Provider\" | head -20"))
+        (b (concat "# probe another artifact\n"
+                   "JAR=$(find ~/.m2 -path \"*impl*\" -name \"*.jar\" "
+                   "! -name \"*sources*\" 2>/dev/null | head -1)\n"
+                   "echo \"JAR: $JAR\"\n"
+                   "jar tf \"$JAR\" 2>/dev/null | grep -i \"foo\\|provider\" | head -20")))
+    (should (string= (emagent-test--exec-fingerprint a)
+                     (emagent-test--exec-fingerprint b))))
+  ;; A simple pipeline collapses across path-only differences too.
+  (should (string= (emagent-test--exec-fingerprint "find . -name '*.a' | head -1")
+                   (emagent-test--exec-fingerprint "find /x -name '*.b' | head -1")))
+  ;; Different tool sets still get distinct grants.
+  (should-not (string= (emagent-test--exec-fingerprint "cat a | head")
+                       (emagent-test--exec-fingerprint "rm a | head"))))
+
 (ert-deftest emagent-acp-session-test-permission-validate-blocks-eval ()
   (let ((args (make-hash-table :test 'equal)))
     (puthash "form" "(kill-emacs)" args)
