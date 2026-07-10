@@ -385,10 +385,10 @@ When `emagent-tools--acp-session-p' is set, return t — ACP handles permission.
           (if (null result) "nil" (prin1-to-string result)))
       (error (format "Eval error: %s" (error-message-string err))))))
 
-(defcustom emagent-tools-show-written-buffer 'magit-diff
+(defcustom emagent-tools-show-written-buffer nil
   "How to reveal a file after emagent writes it.
 
-nil        — do nothing
+nil        — do nothing (default; agent writes never touch the window layout)
 t          — display the buffer
 magit-diff — run `magit-diff-buffer-file' (falls back to `display-buffer'
              when magit is unavailable or the file is outside a git repo)"

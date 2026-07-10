@@ -29,6 +29,14 @@ Agent tools may override this per call up to
   :type 'integer
   :group 'emagent-tools)
 
+(defcustom emagent-tools-display-compile-buffer nil
+  "When non-nil, display the `*emagent-compile*' buffer when a build starts.
+When nil (the default) the buffer fills in the background without
+touching the window layout; switch to it any time for navigable errors
+\(\\[next-error])."
+  :type 'boolean
+  :group 'emagent-tools)
+
 (defvar emagent-tools--timeout-override nil
   "When non-nil, the per-call subprocess timeout requested by the agent.
 Bound dynamically around a tool call and read synchronously when a runner
@@ -552,8 +560,12 @@ pager that blocks on input when stdout is a pipe (which then hangs the tool)."
               (funcall callback text is-error)))))
     (condition-case err
         (progn
-          (setq buf (compilation-start command 'compilation-mode
-                                       (lambda (_) "*emagent-compile*")))
+          (setq buf (let ((display-buffer-overriding-action
+                           (unless emagent-tools-display-compile-buffer
+                             (list #'display-buffer-no-window
+                                   '(allow-no-window . t)))))
+                      (compilation-start command 'compilation-mode
+                                         (lambda (_) "*emagent-compile*"))))
           (setq proc (get-buffer-process buf))
           (with-current-buffer buf
             (add-hook 'compilation-filter-hook #'ansi-color-compilation-filter nil t))
@@ -587,7 +599,8 @@ pager that blocks on input when stdout is a pipe (which then hangs the tool)."
 
 Unlike `run_shell_command', errors appear in a persistent
 `*emagent-compile*' buffer navigable with `next-error' / \\[next-error].
-The buffer is shown to the user while the build runs."
+The buffer fills in the background; set
+`emagent-tools-display-compile-buffer' to show it when a build starts."
   (emagent-tools--run-async-sync #'emagent-tool-compile-async command directory))
 
 (defun emagent-tool-buffer-list ()
