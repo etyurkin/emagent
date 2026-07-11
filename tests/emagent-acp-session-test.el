@@ -595,6 +595,68 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
 
 ;;;; Tool-call display
 
+(ert-deftest emagent-acp-session-test-edit-patch-string-keeps-blank-lines ()
+  "The fallback edit preview must not swallow empty lines.
+Blank lines separating functions are content; OMIT-NULLS in the line
+split silently dropped them."
+  (let ((patch (emagent-acp--tool-call-edit-patch-string
+                "/tmp/x.clef" nil "(defun f (a) a)\n\n(defun g (b) b)\n")))
+    (should (string-match-p "\\+(defun f (a) a)\n\\+\n\\+(defun g (b) b)" patch))
+    ;; A single trailing newline must not become a spurious empty + line.
+    (should (string-suffix-p "+(defun g (b) b)" patch)))
+  (let ((patch (emagent-acp--tool-call-edit-patch-string
+                "/tmp/x.clef" "(old)\n\n(lines)\n" "(new)\n\n(lines)\n")))
+    (should (string-match-p "-(old)\n-\n-(lines)" patch))
+    (should (string-match-p "\\+(new)\n\\+\n\\+(lines)" patch))))
+
+(ert-deftest emagent-acp-session-test-edit-diff-real-diff-cached-post-write ()
+  "A post-write re-render must reuse the real diff computed pre-write.
+The agent writes the file right after permission is granted; later status
+updates re-render the same tool call against the already-edited file, where
+diffing yields nothing and the display degraded to an all-`+' preview."
+  (skip-unless (executable-find "diff"))
+  (let* ((dir (make-temp-file "emagent-diff-test" t))
+         (file (expand-file-name "audit.clef" dir))
+         (content "(defun f (a) a)\n\n(defun g (b) b)\n")
+         (data `((content . ,content)))
+         (id "toolu_cache_test")
+         (emagent-acp--edit-diff-cache (make-hash-table :test 'equal))
+         (emagent-acp--edit-diff-cache-order nil)
+         (emagent-tools--project-directory dir))
+    (unwind-protect
+        (progn
+          ;; Pre-write render: real diff, blank line preserved as lone "+".
+          (let ((diff (emagent-acp--tool-call-edit-diff-string file data id)))
+            (should (string-match-p "@@" diff))
+            (should (string-match-p "\\+(defun f (a) a)\n\\+\n\\+(defun g (b) b)" diff))
+            ;; The write happens; the file now equals the proposed content.
+            (write-region content nil file nil 'quiet)
+            ;; Post-write re-render: same diff, from the cache.
+            (should (equal diff (emagent-acp--tool-call-edit-diff-string file data id)))))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-acp-session-test-edit-diff-reverse-reconstruction ()
+  "Without a cached diff, old/new-string edits reconstruct a real diff
+by reverse-applying the edit to the already-written file."
+  (skip-unless (executable-find "diff"))
+  (let* ((dir (make-temp-file "emagent-diff-test" t))
+         (file (expand-file-name "code.el" dir))
+         (data '((edits . (((old_string . "(old impl)")
+                            (new_string . "(new impl)"))))))
+         (emagent-acp--edit-diff-cache (make-hash-table :test 'equal))
+         (emagent-acp--edit-diff-cache-order nil)
+         (emagent-tools--project-directory dir))
+    (unwind-protect
+        (progn
+          ;; File already contains the applied edit; no cache entry exists.
+          (write-region "(keep)\n(new impl)\n(keep)\n" nil file nil 'quiet)
+          (let ((diff (emagent-acp--tool-call-edit-diff-string file data "toolu_rev")))
+            (should diff)
+            (should (string-match-p "@@" diff))
+            (should (string-match-p "^-(old impl)" diff))
+            (should (string-match-p "^\\+(new impl)" diff))))
+      (delete-directory dir t))))
+
 (ert-deftest emagent-acp-session-test-tool-call-content-block-no-kind ()
   (let* ((cmd "make test")
          (args (make-hash-table :test 'equal)))

@@ -276,7 +276,11 @@ nil or dead, calling CALLBACK with the chosen value."
      (lambda (output is-error)
        (ignore-errors (delete-file old-file))
        (ignore-errors (delete-file new-file))
-       (if (or is-error (string-empty-p output))
+       ;; diff exits 1 when the files differ — that is the success case
+       ;; here, not an error.  Distinguish it from real trouble (exit 2)
+       ;; by the unified-diff header.
+       (if (or (string-empty-p output)
+               (and is-error (not (string-prefix-p "---" output))))
            (funcall callback nil nil)
          (funcall callback output nil)))
      "diff" "-u"
@@ -284,28 +288,37 @@ nil or dead, calling CALLBACK with the chosen value."
      "--label" (concat (file-name-nondirectory resolved) " (proposed)")
      old-file new-file)))
 
-(defun emagent-tools--write-diff-string (resolved new-content)
-  "Return a unified diff string comparing RESOLVED with NEW-CONTENT, or nil."
+(defun emagent-tools--diff-strings (name old-content new-content)
+  "Return a unified diff between OLD-CONTENT and NEW-CONTENT strings, or nil.
+NAME labels the sides as `NAME (current)' / `NAME (proposed)'.  Returns nil
+when the contents are identical or the diff binary is unavailable."
   (when (executable-find "diff")
     (let ((old-file (make-temp-file "emagent-old-"))
           (new-file (make-temp-file "emagent-new-")))
       (unwind-protect
           (progn
-            (if (file-exists-p resolved)
-                (copy-file resolved old-file t)
-              (write-region "" nil old-file nil 'quiet))
+            (write-region old-content nil old-file nil 'quiet)
             (write-region new-content nil new-file nil 'quiet)
             (with-temp-buffer
               (call-process "diff" nil t nil "-u"
-                            "--label" (concat (file-name-nondirectory resolved)
-                                              " (current)")
-                            "--label" (concat (file-name-nondirectory resolved)
-                                              " (proposed)")
+                            "--label" (concat name " (current)")
+                            "--label" (concat name " (proposed)")
                             old-file new-file)
               (unless (= (point-min) (point-max))
                 (buffer-string))))
         (ignore-errors (delete-file old-file))
         (ignore-errors (delete-file new-file))))))
+
+(defun emagent-tools--write-diff-string (resolved new-content)
+  "Return a unified diff string comparing RESOLVED with NEW-CONTENT, or nil."
+  (emagent-tools--diff-strings
+   (file-name-nondirectory resolved)
+   (if (file-exists-p resolved)
+       (with-temp-buffer
+         (insert-file-contents resolved)
+         (buffer-string))
+     "")
+   new-content))
 
 (defun emagent-tools--confirm-write (tool-name resolved new-content &optional chat-buffer)
   "Show diff of NEW-CONTENT vs RESOLVED in CHAT-BUFFER with inline buttons.
