@@ -583,18 +583,24 @@ re-inserted after TEXT, leaving the marker at the true content end."
 Matches any token containing a / that follows whitespace, a colon, or the
 start of the string.  Paths are shortened via `emagent-chat--display-path'
 before wrapping."
-  (with-temp-buffer
-    (insert text)
-    (goto-char (point-min))
-    (while (re-search-forward
-             "\\(\\(?:^\\|[ \t:]\\)\\)\\([^ \t\n]+/[^ \t\n]*\\)" nil t)
-      (replace-match
-       (concat (match-string 1)
-               "="
-               (emagent-chat--display-path (match-string 2))
-               "=")
-       t t))
-    (buffer-string)))
+  ;; Capture the project before entering the temp buffer: both the
+  ;; buffer-local `emagent-chat-project-directory' and the #+EMAGENT_PROJECT
+  ;; property live in the chat buffer and are invisible from inside it.
+  (let ((project (or (and (boundp 'emagent-chat-project-directory)
+                          emagent-chat-project-directory)
+                     (emagent-chat--read-project-property))))
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      (while (re-search-forward
+              "\\(\\(?:^\\|[ \t:]\\)\\)\\([^ \t\n]+/[^ \t\n]*\\)" nil t)
+        (replace-match
+         (concat (match-string 1)
+                 "="
+                 (emagent-chat--display-path (match-string 2) project)
+                 "=")
+         t t))
+      (buffer-string))))
 
 (defun emagent-chat--format-tool-line (label)
   "Return a Thinking-block tool line for LABEL, safe in org-mode.
