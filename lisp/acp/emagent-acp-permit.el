@@ -15,6 +15,7 @@
 
 (require 'cl-lib)
 (require 'map)
+(require 'subr-x)
 (require 'emagent-log)
 (require 'emagent-acp-custom)
 (require 'emagent-acp-state)
@@ -515,11 +516,16 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
        (t nil)))))
 
 (defun emagent-acp--tool-call-edit-patch-string (path old new)
+  "Build a diff-shaped preview of an edit from its raw OLD/NEW strings.
+Empty lines must survive: with OMIT-NULLS the preview would silently
+drop the blank lines separating functions in NEW.  Only a single
+trailing newline is trimmed so content ending in \\n doesn't grow a
+spurious empty +/- line."
   (when (and (stringp new) (not (string-empty-p new)))
     (let* ((name (file-name-nondirectory path))
            (old-lines (when (and old (not (string-empty-p old)))
-                        (split-string old "\n" t)))
-           (new-lines (split-string new "\n" t)))
+                        (split-string (string-remove-suffix "\n" old) "\n")))
+           (new-lines (split-string (string-remove-suffix "\n" new) "\n")))
       (concat "--- " name " (current)\n+++ " name " (proposed)\n"
               (if old-lines
                   (concat "@@ edit @@\n"
@@ -530,10 +536,73 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
                                      new-lines "\n"))
                 (mapconcat (lambda (line) (concat "+" line)) new-lines "\n"))))))
 
-(defun emagent-acp--tool-call-edit-diff-string (path data)
+(defvar emagent-acp--edit-diff-cache (make-hash-table :test 'equal)
+  "toolCallId → real diff computed while the file still had pre-edit content.
+The agent writes the file right after permission is granted, but the same
+tool call re-renders on later status updates (in_progress, completed) — by
+then the on-disk file equals the proposed content and diffing yields
+nothing.  The first render's diff is kept here so re-renders show it.")
+
+(defvar emagent-acp--edit-diff-cache-order nil
+  "toolCallIds in `emagent-acp--edit-diff-cache', most recent first.")
+
+(defconst emagent-acp--edit-diff-cache-max 200
+  "Entries kept in `emagent-acp--edit-diff-cache' before evicting the oldest.
+Sized for display re-renders within a turn; completed tool calls stop
+re-rendering once the turn ends, so evicted entries are rarely missed.")
+
+(defun emagent-acp--edit-diff-cache-put (id diff)
+  "Remember DIFF for toolCallId ID, evicting the oldest entry over the cap."
+  (when (and id diff)
+    (unless (gethash id emagent-acp--edit-diff-cache)
+      (push id emagent-acp--edit-diff-cache-order)
+      (when (> (length emagent-acp--edit-diff-cache-order)
+               emagent-acp--edit-diff-cache-max)
+        (remhash (car (last emagent-acp--edit-diff-cache-order))
+                 emagent-acp--edit-diff-cache)
+        (setq emagent-acp--edit-diff-cache-order
+              (butlast emagent-acp--edit-diff-cache-order))))
+    (puthash id diff emagent-acp--edit-diff-cache))
+  diff)
+
+(defun emagent-acp--tool-call-reversed-diff-string (resolved data proposed)
+  "Real diff recovered by reverse-applying DATA's edits to PROPOSED.
+When the file already contains PROPOSED (the render happened after the
+write) the pre-edit content can still be reconstructed for old/new-string
+edits: substitute each new string back to its old string, newest edit
+first.  Returns nil when DATA has no reversible edits or reversal changes
+nothing (e.g. a pure whole-content write)."
+  (when-let ((items (emagent-acp--tool-call-edit-items data)))
+    (let ((old-content proposed))
+      (dolist (item (reverse items))
+        (let ((old (emagent-acp--tool-call-edit-field
+                    item 'old_string 'oldText 'old_text 'oldString
+                    'before 'search))
+              (new (emagent-acp--tool-call-edit-field
+                    item 'new_string 'newText 'new_text 'newString
+                    'after 'replace 'content 'text)))
+          (when (and (stringp old) (not (string-empty-p old))
+                     (stringp new) (not (string-empty-p new)))
+            (setq old-content
+                  (emagent-acp--tool-call-apply-edit old-content new old)))))
+      (unless (string= old-content proposed)
+        (emagent-tools--diff-strings (file-name-nondirectory resolved)
+                                     old-content proposed)))))
+
+(defun emagent-acp--tool-call-edit-diff-string (path data &optional id)
+  "Return a diff rendering the edit in DATA against PATH, or nil.
+Prefers a real diff; the hand-built patch preview is the last resort:
+1. `diff' against the on-disk file (renders before the write).
+2. The diff cached under toolCallId ID by an earlier pre-write render.
+3. `diff' against pre-edit content reconstructed by reversing the edits.
+4. A patch-shaped preview built from the raw old/new strings."
   (when-let* ((proposed (emagent-acp--tool-call-proposed-content path data))
               (resolved (emagent-tools--root-directory path)))
-    (or (emagent-tools--write-diff-string resolved proposed)
+    (or (emagent-acp--edit-diff-cache-put
+         id (emagent-tools--write-diff-string resolved proposed))
+        (and id (gethash id emagent-acp--edit-diff-cache))
+        (emagent-acp--edit-diff-cache-put
+         id (emagent-acp--tool-call-reversed-diff-string resolved data proposed))
         (when-let* ((items (emagent-acp--tool-call-edit-items data))
                     (item (car items))
                     (new (emagent-acp--tool-call-edit-field
@@ -551,12 +620,14 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
                       'before 'search)))
             (emagent-acp--tool-call-edit-patch-string resolved old new))))))
 
-(defun emagent-acp--tool-call-write-content-block (_tool-call raw _detail path)
+(defun emagent-acp--tool-call-write-content-block (tool-call raw _detail path)
   (when (and path (not (string-empty-p path)))
     (let* ((data (emagent-acp--tool-call-normalize-data raw))
            (resolved (emagent-tools--root-directory path))
            (heading (format "Allow edit: %s" (file-name-nondirectory resolved))))
-      (if-let ((diff (when data (emagent-acp--tool-call-edit-diff-string path data))))
+      (if-let ((diff (when data
+                       (emagent-acp--tool-call-edit-diff-string
+                        path data (map-elt tool-call 'toolCallId)))))
           (format "** %s\n#+BEGIN_SRC diff\n%s\n#+END_SRC" heading diff)
         (if-let ((proposed (emagent-acp--tool-call-proposed-content path data)))
             (let ((lang (or (file-name-extension resolved) "text")))
@@ -575,7 +646,8 @@ same diff a permission prompt would, instead of a bare arrow line."
               (path (emagent-acp--tool-call-write-path
                      update raw (emagent-acp--tool-call-detail update)))
               (data (emagent-acp--tool-call-normalize-data raw))
-              (diff (emagent-acp--tool-call-edit-diff-string path data)))
+              (diff (emagent-acp--tool-call-edit-diff-string
+                     path data (map-elt update 'toolCallId))))
     (cons "diff" diff)))
 
 (defun emagent-acp--tool-call-content-block (tool-call)
