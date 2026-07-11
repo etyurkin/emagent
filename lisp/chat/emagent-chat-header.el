@@ -107,14 +107,18 @@
   "Return PATH formatted for display in the chat UI.
 Under the session project root: ./projectname/relative/path.
 Under user home but outside the project: ~/….
-Otherwise: the absolute PATH."
-  (let* ((expanded (file-truename (expand-file-name path)))
-         (project (when-let ((raw (or project-dir
+Otherwise: the absolute PATH.
+
+Relative paths resolve against the project directory, not
+`default-directory' — saving the session file moves `default-directory'
+to the session file's directory, which is unrelated to the project."
+  (let* ((project (when-let ((raw (or project-dir
                                       (and (boundp 'emagent-chat-project-directory)
                                            emagent-chat-project-directory)
                                       (emagent-chat--read-project-property))))
                     (file-truename
                      (file-name-as-directory (expand-file-name raw)))))
+         (expanded (file-truename (expand-file-name path project)))
          (home (file-truename (expand-file-name "~")))
          (home-prefix (concat home "/")))
     (cond

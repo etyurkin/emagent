@@ -1490,6 +1490,19 @@ bracket must flush once the following non-`(' text confirms it is not a link."
     (should (string= (file-name-as-directory (abbreviate-file-name project))
                      (emagent-chat--display-project-directory project)))))
 
+(ert-deftest emagent-chat-test-display-path-relative-ignores-default-directory ()
+  "Relative paths resolve against the project, not `default-directory'.
+Saving the session file moves `default-directory' to the session file's
+directory; agent tool paths must still display under the project root."
+  (let* ((project (expand-file-name "clef-v2" (emagent-test--temp-directory)))
+         (sessions (expand-file-name "emagent-sessions" (emagent-test--temp-directory))))
+    (make-directory (expand-file-name "src/vm" project) t)
+    (make-directory sessions t)
+    (let ((default-directory sessions)
+          (emagent-chat-project-directory project))
+      (should (string= "./clef-v2/src/vm/Main.swift"
+                       (emagent-chat--display-path "src/vm/Main.swift"))))))
+
 (ert-deftest emagent-chat-test-org-verbatim-paths ()
   (let ((home-file (expand-file-name "foo.el" (expand-file-name "~"))))
     (should (string= (format "Read: =%s="
