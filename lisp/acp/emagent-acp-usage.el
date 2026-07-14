@@ -173,19 +173,30 @@ layer (see `emagent-chat-set-status')."
         (setf (emagent-acp-state-usage state) usage)
         usage)))
 
+(defun emagent-acp--usage-context-used (data)
+  "Return cumulative context-window fill from DATA, or nil.
+Per-turn input/prompt token counts are not context fill."
+  (or (map-elt data 'contextUsed)
+      (map-elt data 'used)
+      (map-elt data 'contextWindowUsed)
+      (map-elt data 'tokensUsed)))
+
+(defun emagent-acp--usage-context-size (data)
+  "Return context window size/limit from DATA, or nil."
+  (or (map-elt data 'contextSize)
+      (map-elt data 'contextLimit)
+      (map-elt data 'contextWindow)
+      (map-elt data 'size)
+      (map-elt data 'maxTokens)))
+
 (defun emagent-acp--save-usage-from-response (state emagent-acp-usage)
   "Update STATE usage from a prompt response usage field."
   (let ((usage (emagent-acp--usage-state state)))
     (when-let ((total (map-elt emagent-acp-usage 'totalTokens)))
       (map-put! usage :total-tokens total))
-    ;; Extract context usage -- cursor may use different field names.
-    (when-let ((used (or (map-elt emagent-acp-usage 'contextUsed)
-                         (map-elt emagent-acp-usage 'inputTokens)
-                         (map-elt emagent-acp-usage 'promptTokens))))
+    (when-let ((used (emagent-acp--usage-context-used emagent-acp-usage)))
       (map-put! usage :context-used used))
-    (when-let ((size (or (map-elt emagent-acp-usage 'contextSize)
-                         (map-elt emagent-acp-usage 'contextLimit)
-                         (map-elt emagent-acp-usage 'contextWindow))))
+    (when-let ((size (emagent-acp--usage-context-size emagent-acp-usage)))
       (map-put! usage :context-size size))
     (setf (emagent-acp-state-usage state) usage)
     (emagent-acp--refresh-mode-line state)))
@@ -193,17 +204,9 @@ layer (see `emagent-chat-set-status')."
 (defun emagent-acp--update-usage-from-notification (state emagent-acp-update)
   "Update STATE usage from a session/update usage_update payload."
   (let ((usage (emagent-acp--usage-state state)))
-    (when-let ((used (or (map-elt emagent-acp-update 'used)
-                         (map-elt emagent-acp-update 'contextUsed)
-                         (map-elt emagent-acp-update 'contextWindowUsed)
-                         (map-elt emagent-acp-update 'tokensUsed)
-                         (map-elt emagent-acp-update 'inputTokens))))
+    (when-let ((used (emagent-acp--usage-context-used emagent-acp-update)))
       (map-put! usage :context-used used))
-    (when-let ((size (or (map-elt emagent-acp-update 'size)
-                         (map-elt emagent-acp-update 'contextLimit)
-                         (map-elt emagent-acp-update 'contextSize)
-                         (map-elt emagent-acp-update 'contextWindow)
-                         (map-elt emagent-acp-update 'maxTokens))))
+    (when-let ((size (emagent-acp--usage-context-size emagent-acp-update)))
       (map-put! usage :context-size size))
     (setf (emagent-acp-state-usage state) usage)
     (emagent-acp--refresh-mode-line state)))
