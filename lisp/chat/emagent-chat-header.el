@@ -39,20 +39,24 @@
     (point)))
 
 (defun emagent-chat--write-top-property (name value)
-  "Insert or update #+NAME in the emagent metadata header."
+  "Insert or update #+NAME in the emagent metadata header.
+No-op when #+NAME already holds VALUE, so re-running `emagent-mode' (e.g. on
+desktop restore) does not mark the session buffer modified."
   (let* ((inhibit-read-only t)
          (inhibit-modification-hooks t)
+         (value (format "%s" value))
          (line (format "#+%s: %s" name value))
          (pattern (format "^#\\+%s:[ \t]*.*\n?" name)))
-    (save-excursion
-      (save-restriction
-        (widen)
-        (goto-char (point-min))
-        (while (re-search-forward pattern nil t)
-          (delete-region (match-beginning 0) (match-end 0)))
-        (goto-char (emagent-chat--metadata-end))
-        (unless (bolp) (insert "\n"))
-        (insert line "\n")))))
+    (unless (equal (emagent-chat--read-top-property name) value)
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (while (re-search-forward pattern nil t)
+            (delete-region (match-beginning 0) (match-end 0)))
+          (goto-char (emagent-chat--metadata-end))
+          (unless (bolp) (insert "\n"))
+          (insert line "\n"))))))
 
 (defun emagent-chat--delete-top-property (name)
   "Delete #+NAME from the top of the buffer."
