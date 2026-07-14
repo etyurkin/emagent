@@ -58,6 +58,28 @@ provider without the hook (claude) reports it as available."
     (setf (emagent-acp-state-provider claude) 'claude)
     (should-not (emagent-acp--provider-context-usage-unavailable-p claude))))
 
+(ert-deftest emagent-providers-test-turn-usage-does-not-zero-context ()
+  "Prompt response usage with per-turn inputTokens must not wipe ctx fill."
+  (let ((state (emagent-test--make-acp-state)))
+    (emagent-acp--update-usage-from-notification
+     state '((used . 50000) (size . 200000)))
+    (emagent-acp--save-usage-from-response
+     state '((inputTokens . 0) (outputTokens . 42) (totalTokens . 42)))
+    (let ((usage (emagent-acp-state-usage state)))
+      (should (equal 50000 (map-elt usage :context-used)))
+      (should (equal 200000 (map-elt usage :context-size))))))
+
+(ert-deftest emagent-providers-test-usage-notification-ignores-input-tokens ()
+  "usage_update must not treat inputTokens as cumulative context fill."
+  (let ((state (emagent-test--make-acp-state)))
+    (emagent-acp--update-usage-from-notification
+     state '((used . 12000) (size . 200000)))
+    (emagent-acp--update-usage-from-notification
+     state '((inputTokens . 0) (size . 200000)))
+    (let ((usage (emagent-acp-state-usage state)))
+      (should (equal 12000 (map-elt usage :context-used)))
+      (should (equal 200000 (map-elt usage :context-size))))))
+
 (provide 'emagent-providers-test)
 
 ;;; emagent-providers-test.el ends here
