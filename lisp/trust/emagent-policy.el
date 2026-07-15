@@ -7,6 +7,26 @@
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; Assisted-by: Cursor:claude-sonnet-4.6
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Single entry point for permission and execution-time checks.
@@ -158,12 +178,14 @@ Return nil when ok, (:deny . REASON), or (:confirm . REASON)."
            (_ nil)))))
 
 (defun emagent-policy--skip-runtime-confirm-p ()
-  "Return non-nil when execution-time confirm prompts should be skipped."
+  "Return non-nil when execution-time confirm dialogue should be skipped."
   (and (boundp 'emagent-tools--acp-session-p)
        emagent-tools--acp-session-p))
 
 (defun emagent-policy--runtime-confirm-p (reason context)
-  "Prompt for runtime confirmation; return non-nil when allowed."
+  "Prompt for runtime confirmation; return non-nil when allowed.
+
+Arguments: REASON, CONTEXT."
   (or (emagent-policy--skip-runtime-confirm-p)
       (let* ((preview (truncate-string-to-width (or context "") 400 nil nil "…"))
              (preamble (when (not (string-empty-p preview))
@@ -185,7 +207,9 @@ Return nil when ok, (:deny . REASON), or (:confirm . REASON)."
           (y-or-n-p (format "%s — allow? " prompt))))))
 
 (defun emagent-policy-enforce (verdict &optional context)
-  "Apply VERDICT at execution time; signal `user-error' when blocked."
+  "Apply VERDICT at execution time; signal `user-error' when blocked.
+
+Arguments: CONTEXT."
   (pcase verdict
     (`(:deny . ,msg) (user-error "%s" msg))
     (`(:confirm . ,msg)
@@ -194,7 +218,9 @@ Return nil when ok, (:deny . REASON), or (:confirm . REASON)."
     (_ nil)))
 
 (defun emagent-policy-enforce-string (verdict &optional context)
-  "Like `emagent-policy-enforce' but return an error string instead of signaling."
+  "Like `emagent-policy-enforce' but return an error string instead of signaling.
+
+Arguments: VERDICT, CONTEXT."
   (pcase verdict
     (`(:deny . ,msg) msg)
     (`(:confirm . ,msg)

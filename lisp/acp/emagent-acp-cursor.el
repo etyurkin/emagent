@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Cursor-specific ACP behavior: store.db arg enrichment, deferred tool-call
@@ -43,18 +63,24 @@
     (string-match-p "cursor-agent" launch)))
 
 (defun emagent-acp-cursor--enrich-tool-call (state update)
-  "Enrich UPDATE from Cursor store.db when rawInput is empty."
+  "Enrich UPDATE from Cursor store.db when rawInput is empty.
+
+Arguments: STATE."
   (if (fboundp 'emagent-cursor-enrich-tool-call-update)
       (emagent-cursor-enrich-tool-call-update (emagent-acp-state-session-id state) update)
     update))
 
 (defun emagent-acp-cursor--defer-tool-call-p (_state update)
-  "Return non-nil when Cursor sent a generic tool call without args yet."
+  "Return non-nil when Cursor sent a generic tool call without args yet.
+
+Arguments: UPDATE."
   (and (map-elt update 'toolCallId)
        (not (emagent-acp--tool-call-meaningful-detail-p update))))
 
 (defun emagent-acp-cursor--tool-resolve-active-p (state)
-  "Return non-nil while Cursor store.db tool-call lookups are pending."
+  "Return non-nil while Cursor store.db tool-call lookups are pending.
+
+Arguments: STATE."
   (or (emagent-acp-state-tool-resolve-worker state)
       (emagent-acp-state-tool-resolve-queue state)))
 
@@ -65,7 +91,9 @@
   (clrhash (emagent-acp-state-tool-resolve-attempts state)))
 
 (defun emagent-acp-cursor--enqueue-tool-resolve (state id &optional delay)
-  "Queue ID for a serialized Cursor store.db lookup."
+  "Queue ID for a serialized Cursor store.db lookup.
+
+Arguments: STATE, DELAY."
   (let ((queue (emagent-acp-state-tool-resolve-queue state)))
     (unless (member id queue)
       (setf (emagent-acp-state-tool-resolve-queue state) (append queue (list id)))))
@@ -73,7 +101,9 @@
     (emagent-acp-cursor--drain-tool-resolve-queue state delay)))
 
 (defun emagent-acp-cursor--drain-tool-resolve-queue (state &optional delay)
-  "Resolve one queued Cursor tool call via `run-at-time'."
+  "Resolve one queued Cursor tool call via `run-at-time'.
+
+Arguments: STATE, DELAY."
   (unless (emagent-acp-state-tool-resolve-worker state)
     (if-let ((id (car (emagent-acp-state-tool-resolve-queue state))))
         (progn
@@ -95,7 +125,9 @@
         (emagent-acp--maybe-complete-deferred-prompt state)))))
 
 (defun emagent-acp-cursor--resolve-tool-from-store (state id)
-  "Look up tool-call ID in Cursor store.db; return retry delay or nil when done."
+  "Look up tool-call ID in Cursor store.db; return retry delay or nil when done.
+
+Arguments: STATE."
   (when-let* ((pending-table (emagent-acp-state-tool-call-pending state))
               (merged (gethash id pending-table))
               (session-id (emagent-acp-state-session-id state))
@@ -133,13 +165,16 @@
        (funcall #'emagent-cursor--generic-acp-title-p title)))
 
 (defun emagent-acp-cursor--normalize-slash-prompt (text)
-  "Normalize slash commands for Cursor before sending a prompt."
+  "Normalize slash commands for Cursor before sending a prompt.
+
+Arguments: TEXT."
   (if (fboundp 'emagent-cursor-normalize-slash-prompt)
       (emagent-cursor-normalize-slash-prompt text)
     text))
 
 (defun emagent-acp-cursor--external-gate-reason (_state)
-  'cursor-agent-cli)
+  
+  "Internal helper."'cursor-agent-cli)
 
 (emagent-acp--register-provider
  'cursor

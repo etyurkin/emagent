@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; File read/write/edit tool handlers.
@@ -37,9 +57,10 @@
   (expand-file-name "~/Library/Group Containers/"))
 
 (defun emagent-tools--protected-truename-p (truename)
-  "Return non-nil when TRUENAME (an absolute, symlink-resolved path) is in a
-protected macOS tree (iCloud or another app's container).  Pure predicate with
-no session resolution, so `emagent-tools--root-directory' can call it safely."
+  "Return non-nil when TRUENAME is in a protected macOS tree.
+TRUENAME is an absolute, symlink-resolved path (iCloud or another app
+container).  Pure predicate with no session resolution, so
+`emagent-tools--root-directory' can call it safely."
   (or (string-prefix-p emagent-tools--icloud-dir truename)
       (string-prefix-p emagent-tools--containers-dir truename)
       (string-prefix-p emagent-tools--group-containers-dir truename)))
@@ -71,7 +92,9 @@ no session resolution, so `emagent-tools--root-directory' can call it safely."
           (buffer-substring-no-properties start (point)))))))
 
 (defun emagent-tools--read-file-content (path &optional line limit)
-  "Read PATH through Emacs, including unsaved buffer contents."
+  "Read PATH through Emacs, including unsaved buffer contents.
+
+Arguments: LINE, LIMIT."
   (let* ((resolved (emagent-tools--root-directory path))
          (buffer (find-buffer-visiting resolved)))
     (if buffer
@@ -87,7 +110,9 @@ no session resolution, so `emagent-tools--root-directory' can call it safely."
     (file-missing "")))
 
 (defun emagent-tool-read-file (path &optional line limit)
-  "Return contents of PATH as a string."
+  "Return contents of PATH as a string.
+
+Arguments: LINE, LIMIT."
   (when (emagent-tools--protected-fs-path-p path)
     (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
                 (emagent-tools--root-directory path)))

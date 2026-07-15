@@ -5,6 +5,26 @@
 ;; SPDX-License-Identifier: MIT
 ;; Version: 1.2.3
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 ;; Intercepts `emagent-tool-run-shell-command' to block unsafe git usage,
 ;; suggest Emacs-native alternatives, and auto-redirect simple commands.
@@ -129,7 +149,9 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
       (string= state "MERGED"))))
 
 (defun emagent-shell--guard-git-push (directory)
-  "Signal an error when pushing a branch whose PR is already merged."
+  "Signal an error when pushing a branch whose PR is already merged.
+
+Arguments: DIRECTORY."
   (when emagent-shell-guard-push
     (emagent-shell--run-in-directory
      directory
@@ -139,7 +161,7 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
            (if (executable-find "gh")
                (when (emagent-shell--branch-pr-merged-p branch)
                  (user-error
-                  "Branch '%s' has an already-merged PR. Checkout main, pull, and create a new branch instead."
+                  "Branch '%s' has an already-merged PR; checkout main, pull, and create a new branch instead"
                   branch))
              (require 'emagent-log)
              (emagent-log "emagent: gh CLI not found; skipping merged-PR check for push"))))))))
@@ -164,7 +186,7 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
     (error (split-string command "[[:space:]]+" t))))
 
 (defun emagent-shell--command-to-string (command)
-  "Like `shell-command-to-string' but yields to the Emacs event loop."
+  "Like `shell-command-to-string' for COMMAND, yielding to the event loop."
   (let ((buf (generate-new-buffer " *emagent-shell*"))
         done)
     (unwind-protect
@@ -179,6 +201,8 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
         (kill-buffer buf)))))
 
 (defun emagent-shell--redirect-git (words directory)
+  
+  "Internal helper for WORDS and DIRECTORY."
   (emagent-shell--run-in-directory
    directory
    (lambda ()
@@ -192,6 +216,8 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
        (_ nil)))))
 
 (defun emagent-shell--redirect-cat (words directory)
+  
+  "Internal helper for WORDS and DIRECTORY."
   (emagent-shell--run-in-directory
    directory
    (lambda ()
@@ -201,6 +227,8 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
        (_ nil)))))
 
 (defun emagent-shell--redirect-head (words directory)
+  
+  "Internal helper for WORDS and DIRECTORY."
   (emagent-shell--run-in-directory
    directory
    (lambda ()
@@ -213,6 +241,8 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
        (_ nil)))))
 
 (defun emagent-shell--redirect-grep (words directory)
+  
+  "Internal helper for WORDS and DIRECTORY."
   (emagent-shell--run-in-directory
    directory
    (lambda ()
@@ -235,6 +265,8 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
          (emagent-tool-grep pattern path))))))
 
 (defun emagent-shell--redirect-rg (words directory)
+  
+  "Internal helper for WORDS and DIRECTORY."
   (emagent-shell--run-in-directory
    directory
    (lambda ()
@@ -252,6 +284,8 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
          (emagent-tool-grep pattern path))))))
 
 (defun emagent-shell--redirect-find (command directory)
+  
+  "Internal helper for COMMAND and DIRECTORY."
   (when (string-match
          "\\`find\\(?:[[:space:]]+\\([^[:space:]]+\\)\\)?[[:space:]]+-name[[:space:]]+\\([^[:space:]]+\\)"
          command)
@@ -260,7 +294,9 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
       (emagent-tool-find-files glob (or root directory)))))
 
 (defun emagent-shell--try-redirect (command directory)
-  "Run COMMAND via an emagent tool when it matches a simple pattern."
+  "Run COMMAND via an emagent tool when it matches a simple pattern.
+
+Arguments: DIRECTORY."
   (when (emagent-shell--prefer-emacs-p)
     (let* ((trimmed (string-trim command))
            (words (emagent-shell--words trimmed))
@@ -311,7 +347,9 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
      (t nil))))
 
 (defun emagent-shell--guard-git-push-async (directory callback &optional timeout)
-  "Call CALLBACK with nil on success or an error string when push is blocked."
+  "Call CALLBACK with nil on success or an error string when push is blocked.
+
+Arguments: DIRECTORY, TIMEOUT."
   (if (not emagent-shell-guard-push)
       (funcall callback nil)
     (emagent-shell--call-with-timeout timeout
@@ -346,6 +384,8 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
         "branch" "--show-current")))))
 
 (defun emagent-shell--redirect-git-async (words callback &optional timeout)
+  
+  "Internal helper for WORDS and CALLBACK and TIMEOUT."
   (emagent-shell--call-with-timeout timeout
    (lambda ()
      (pcase words
@@ -358,12 +398,16 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
        (_ (funcall callback nil nil))))))
 
 (defun emagent-shell--redirect-cat-async (words callback)
+  
+  "Internal helper for WORDS and CALLBACK."
   (pcase words
     (`("cat" ,path)
      (funcall callback (emagent-tool-read-file (emagent-shell--unquote path)) nil))
     (_ (funcall callback nil nil))))
 
 (defun emagent-shell--redirect-head-async (words callback)
+  
+  "Internal helper for WORDS and CALLBACK."
   (pcase words
     (`("head" "-n" ,n ,path)
      (funcall callback
@@ -377,6 +421,8 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
     (_ (funcall callback nil nil))))
 
 (defun emagent-shell--redirect-grep-async (words _directory callback &optional timeout)
+  
+  "Internal helper for WORDS and CALLBACK and TIMEOUT."
   (let ((pattern nil)
         (path nil)
         (skip-next nil))
@@ -398,6 +444,8 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
       (funcall callback nil nil))))
 
 (defun emagent-shell--redirect-rg-async (words _directory callback &optional timeout)
+  
+  "Internal helper for WORDS and CALLBACK and TIMEOUT."
   (let ((pattern nil)
         (path nil))
     (dolist (word (cdr words))
@@ -415,7 +463,9 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
       (funcall callback nil nil))))
 
 (defun emagent-shell--try-redirect-async (command directory callback &optional timeout)
-  "Run COMMAND via an emagent tool when it matches; call CALLBACK with result."
+  "Run COMMAND via an emagent tool when it matches; call CALLBACK with result.
+
+Arguments: DIRECTORY, TIMEOUT."
   (if (not (emagent-shell--prefer-emacs-p))
       (funcall callback nil nil)
     (let* ((trimmed (string-trim command))
@@ -440,7 +490,9 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
 
 (defun emagent-shell--run-command-body-async (cmd words directory callback
                                                   &optional timeout)
-  "Run guarded shell CMD asynchronously; deliver via CALLBACK."
+  "Run guarded shell CMD asynchronously; deliver via CALLBACK.
+
+Arguments: WORDS, DIRECTORY, TIMEOUT."
   (if (emagent-shell--build-command-p words)
       (emagent-shell--call-with-timeout timeout
        (lambda ()
@@ -458,10 +510,12 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
      timeout)))
 
 (defun emagent-shell-run-command-async (command directory callback)
-  "Like `emagent-shell-run-command' but deliver the result via CALLBACK.
-CALLBACK is called as (CALLBACK OUTPUT IS-ERROR).  Synchronous guards
+  "Like `emagent-shell-run-command' for COMMAND via CALLBACK.
+CALLBACK is called as \(CALLBACK OUTPUT IS-ERROR).  Synchronous guards
 \(policy, --no-verify) run immediately; push guard, redirects, compile,
-and shell fallback are non-blocking."
+and shell fallback are non-blocking.
+
+Arguments: DIRECTORY."
   (let* ((cmd (string-trim command))
          (words (emagent-shell--words cmd))
          (timeout (emagent-shell--captured-timeout))
@@ -472,7 +526,7 @@ and shell fallback are non-blocking."
                 (when (and emagent-shell-block-no-verify
                            (emagent-shell--git-no-verify-p cmd))
                   (user-error
-                   "--no-verify bypasses pre-commit hooks. Fix the pre-commit issue instead."))
+                   "--no-verify bypasses pre-commit hooks; fix the pre-commit issue instead"))
                 nil)
             (error (error-message-string err)))))
     (if guard-error
@@ -490,14 +544,16 @@ and shell fallback are non-blocking."
          cmd words directory callback timeout)))))
 
 (defun emagent-shell-run-command (command &optional directory)
-  "Run COMMAND with Emacs-native routing, guards, and redirects."
+  "Run COMMAND with Emacs-native routing, guards, and redirects.
+
+Arguments: DIRECTORY."
   (let* ((cmd (string-trim command))
          (words (emagent-shell--words cmd)))
     (emagent-policy-enforce (emagent-policy-check-shell cmd) cmd)
     (when (and emagent-shell-block-no-verify
                (emagent-shell--git-no-verify-p cmd))
       (user-error
-       "--no-verify bypasses pre-commit hooks. Fix the pre-commit issue instead."))
+       "--no-verify bypasses pre-commit hooks; fix the pre-commit issue instead"))
     (when (emagent-shell--git-push-p cmd)
       (emagent-shell--guard-git-push directory))
     ;; Build/test commands always go through compilation-mode for navigable errors,

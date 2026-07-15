@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Provider-specific ACP integration (Cursor store.db, Claude quirks) lives in
@@ -31,7 +51,12 @@
                                                  external-gate-reason
                                                  normalize-slash-prompt
                                                  context-usage-unavailable-p)
-  "Register provider SYMBOL with adapter hooks."
+  "Register provider SYMBOL with adapter hooks.
+
+Arguments: DETECT, ENRICH-TOOL-CALL, DEFER-TOOL-CALL-P,
+ENQUEUE-TOOL-RESOLVE, RESET-TOOL-RESOLVE, TOOL-RESOLVE-ACTIVE-P,
+GENERIC-TITLE-P, EXTERNAL-GATE-REASON, NORMALIZE-SLASH-PROMPT,
+CONTEXT-USAGE-UNAVAILABLE-P."
   (puthash symbol
            (list :detect detect
                  :enrich-tool-call enrich-tool-call
@@ -69,36 +94,50 @@
     (apply fn args)))
 
 (defun emagent-acp--provider-enrich-tool-call (state update)
-  "Return UPDATE enriched by the active provider adapter."
+  "Return UPDATE enriched by the active provider adapter.
+
+Arguments: STATE."
   (or (emagent-acp--provider-hook state :enrich-tool-call state update)
       update))
 
 (defun emagent-acp--provider-defer-tool-call-p (state update)
-  "Return non-nil when UPDATE tool-call display should wait for enrichment."
+  "Return non-nil when UPDATE tool-call display should wait for enrichment.
+
+Arguments: STATE."
   (and (emagent-acp--provider-hook state :defer-tool-call-p state update)))
 
 (defun emagent-acp--provider-enqueue-tool-resolve (state id &optional delay)
-  "Queue tool-call ID for provider-specific arg resolution."
+  "Queue tool-call ID for provider-specific arg resolution.
+
+Arguments: STATE, DELAY."
   (emagent-acp--provider-hook state :enqueue-tool-resolve state id delay))
 
 (defun emagent-acp--provider-reset-tool-resolve (state)
-  "Clear provider-specific pending tool-call resolution state."
+  "Clear provider-specific pending tool-call resolution state for STATE."
   (emagent-acp--provider-hook state :reset-tool-resolve state))
 
 (defun emagent-acp--provider-tool-resolve-active-p (state)
-  "Return non-nil while provider tool-call resolution is in flight."
+  "Return non-nil while provider tool-call resolution is in flight.
+
+Arguments: STATE."
   (and (emagent-acp--provider-hook state :tool-resolve-active-p state)))
 
 (defun emagent-acp--provider-generic-title-p (state title)
-  "Return non-nil when TITLE is too generic to show without provider detail."
+  "Return non-nil when TITLE is too generic to show without provider detail.
+
+Arguments: STATE."
   (and (emagent-acp--provider-hook state :generic-title-p title)))
 
 (defun emagent-acp--provider-external-gate-reason (state)
-  "Return a symbol naming this provider's external tool gate, or nil."
+  "Return a symbol naming this provider's external tool gate, or nil.
+
+Arguments: STATE."
   (emagent-acp--provider-hook state :external-gate-reason state))
 
 (defun emagent-acp--provider-normalize-slash-prompt (state text)
-  "Return TEXT normalized for the active provider, or TEXT when unset."
+  "Return TEXT normalized for the active provider, or TEXT when unset.
+
+Arguments: STATE."
   (or (emagent-acp--provider-hook state :normalize-slash-prompt text) text))
 
 (provide 'emagent-acp-provider)

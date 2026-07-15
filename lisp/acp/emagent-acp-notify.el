@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Handle ACP session/update and related notifications.
@@ -21,7 +41,9 @@
 (require 'emagent-acp-protocol)
 
 (defun emagent-acp--trace-update (update-type emagent-acp-notification)
-  "Log UPDATE-TYPE and a short payload summary when tracing."
+  "Log UPDATE-TYPE and a short payload summary when tracing.
+
+Arguments: EMAGENT-ACP-NOTIFICATION."
   (let ((text (or (map-nested-elt emagent-acp-notification '(params update content text)) ""))
         (title (map-nested-elt emagent-acp-notification '(params update title))))
     (pcase update-type
@@ -58,6 +80,8 @@
        (emagent-acp--trace "recv %s" (or update-type "session/update"))))))
 
 (cl-defun emagent-acp--on-notification (&key state emagent-acp-notification)
+  
+  "Internal helper for STATE and EMAGENT-ACP-NOTIFICATION."
   (when (equal (map-elt emagent-acp-notification 'method) "session/update")
     (let ((update-type (map-nested-elt emagent-acp-notification '(params update sessionUpdate))))
       (emagent-acp--trace-update update-type emagent-acp-notification)
@@ -107,6 +131,8 @@
         (_ nil)))))
 
 (cl-defun emagent-acp--subscribe (&key state)
+  
+  "Internal helper for STATE."
   (let ((buffer (emagent-acp--chat-buffer state)))
     (emagent-acp-subscribe-to-errors
      :client (emagent-acp-state-client state)

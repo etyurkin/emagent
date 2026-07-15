@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Busy spinner animation, mode-line status string assembly, context-usage
@@ -101,7 +121,7 @@ When nil, the spinner inherits the mode-line height."
   "Epoch time when the busy spinner animation started, or nil when idle.")
 
 (defconst emagent-chat--spinner-dot-frames '((t nil nil) (nil t nil) (nil nil t) (nil t nil))
-  "Four-frame chase: @00, 0@0, 00@, 0@0, …")
+  "Four-frame chase: @00, 0@0, 00@, 0@0, and so on.")
 
 (defun emagent-chat--spinner-frame-count ()
   "Return the number of spinner frames for the active style."
@@ -121,7 +141,9 @@ When nil, the spinner inherits the mode-line height."
         'shadow))))
 
 (defun emagent-chat--spinner-dot-char (lit)
-  "Return a propertized on/off dot character."
+  "Return a propertized on/off dot character.
+
+Arguments: LIT."
   (propertize (if lit emagent-chat-spinner-dot-on emagent-chat-spinner-dot-off)
               'face (emagent-chat--spinner-dot-face lit)))
 

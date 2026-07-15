@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Shell and grep tool handlers.
@@ -59,7 +79,7 @@ Honors `emagent-tools--timeout-override' when set, clamped to the max."
    (or emagent-tools--timeout-override emagent-tools-subprocess-timeout)))
 
 (defun emagent-tools--timeout-message (secs &optional shell)
-  "Return a timeout error string for a SECS-second limit.
+  "Return a timeout error string for limit SECS.
 When SHELL is non-nil, also suggest background execution."
   (concat
    (format
@@ -245,7 +265,7 @@ For tests and internal callers only — MCP agent tools use the async path."
       "No matches")))
 
 (defun emagent-tools--run-process-to-string (program &rest args)
-  "Run PROGRAM with ARGS and return stdout (sync wrapper for tests)."
+  "Run PROGRAM with ARGS and return stdout (sync wrapper for the test suite)."
   (emagent-tools--run-async-sync
    (lambda (callback)
      (apply #'emagent-tools--run-process-async callback program args))))
@@ -259,8 +279,8 @@ For tests and internal callers only — MCP agent tools use the async path."
   "Seconds to wait for `url-retrieve-synchronously' in `emagent-tool-fetch-url'.")
 
 (defun emagent-tool-undo-file (path &optional steps)
-  "Undo STEPS edits in PATH and save.
-Use to revert `emagent-tool-write-file' changes."
+  "Save PATH after undoing edits.
+STEPS is the undo depth.  Use to revert `emagent-tool-write-file' changes."
   (let* ((resolved (emagent-tools--root-directory path))
          (steps (max 1 (or steps 1)))
          (buffer (emagent-tools--file-buffer path))
@@ -298,7 +318,9 @@ When RECURSIVE is non-nil, delete contents as well."
     (format "Deleted %s" resolved)))
 
 (defun emagent-tool-fetch-url-async (callback url &optional max-bytes)
-  "Fetch URL asynchronously; call CALLBACK with (body is-error)."
+  "Fetch URL asynchronously; call CALLBACK with (body is-error).
+
+Arguments: MAX-BYTES."
   (if (not (and (stringp url) (string-match-p "\\`https?://" url)))
       (funcall callback "fetch_url requires an http:// or https:// URL" t)
     (require 'url)
@@ -347,7 +369,9 @@ When RECURSIVE is non-nil, delete contents as well."
 (defun emagent-tool-fetch-url (url &optional max-bytes)
   "Fetch URL over HTTP/HTTPS and return the response body as a string.
 Runs in Emacs (not the agent sandbox), so network access works when the
-agent's built-in WebSearch and shell tools are blocked."
+agent's built-in WebSearch and shell tools are blocked.
+
+Arguments: MAX-BYTES."
   (emagent-tools--run-async-sync #'emagent-tool-fetch-url-async url max-bytes))
 
 (declare-function emagent-shell-run-command "emagent-shell")
@@ -359,9 +383,11 @@ agent's built-in WebSearch and shell tools are blocked."
   (emagent-shell-run-command command directory))
 
 (defun emagent-tool-run-shell-command-async (command directory callback)
-  "Like `emagent-tool-run-shell-command' but call CALLBACK asynchronously.
-CALLBACK receives (OUTPUT IS-ERROR); for long-running commands Emacs
-stays responsive because no polling loop is used."
+  "Like `emagent-tool-run-shell-command' for COMMAND via CALLBACK.
+CALLBACK receives \(OUTPUT IS-ERROR); for long-running commands Emacs
+stays responsive because no polling loop is used.
+
+Arguments: DIRECTORY."
   (require 'emagent-shell)
   (emagent-shell-run-command-async command directory callback))
 
@@ -490,7 +516,9 @@ pager that blocks on input when stdout is a pipe (which then hangs the tool)."
      (apply #'emagent-tools--run-git-async callback args))))
 
 (defun emagent-tool-git-status-async (callback)
-  "Return git status asynchronously."
+  "Return git status asynchronously.
+
+Arguments: CALLBACK."
   (emagent-tools--run-git-async
    (lambda (output is-error)
      (funcall callback (string-trim output) is-error))
@@ -501,7 +529,9 @@ pager that blocks on input when stdout is a pipe (which then hangs the tool)."
   (emagent-tools--run-async-sync #'emagent-tool-git-status-async))
 
 (defun emagent-tool-git-diff-async (callback &optional args)
-  "Return git diff output asynchronously."
+  "Return git diff output asynchronously.
+
+Arguments: CALLBACK, ARGS."
   (if (and args (not (string-empty-p args)))
       (apply #'emagent-tools--run-git-async
              (lambda (output is-error)
@@ -517,7 +547,9 @@ pager that blocks on input when stdout is a pipe (which then hangs the tool)."
   (emagent-tools--run-async-sync #'emagent-tool-git-diff-async args))
 
 (defun emagent-tool-git-log-async (callback &optional args)
-  "Return git log output asynchronously."
+  "Return git log output asynchronously.
+
+Arguments: CALLBACK, ARGS."
   (if (and args (not (string-empty-p args)))
       (apply #'emagent-tools--run-git-async
              (lambda (output is-error)
@@ -543,7 +575,8 @@ pager that blocks on input when stdout is a pipe (which then hangs the tool)."
   "Moved subtree to parent section")
 
 (defun emagent-tool-compile-async (callback command &optional directory)
-  "Run COMMAND via compilation-mode; call CALLBACK with (output is-error)."
+  "Run COMMAND via `compilation-mode'; call CALLBACK with output.
+Arguments: DIRECTORY."
   (require 'compile)
   (require 'ansi-color)
   (let* ((default-directory (expand-file-name
@@ -606,7 +639,9 @@ pager that blocks on input when stdout is a pipe (which then hangs the tool)."
 Unlike `run_shell_command', errors appear in a persistent
 `*emagent-compile*' buffer navigable with `next-error' / \\[next-error].
 The buffer fills in the background; set
-`emagent-tools-display-compile-buffer' to show it when a build starts."
+`emagent-tools-display-compile-buffer' to show it when a build starts.
+
+Arguments: DIRECTORY."
   (emagent-tools--run-async-sync #'emagent-tool-compile-async command directory))
 
 (defun emagent-tool-buffer-list ()

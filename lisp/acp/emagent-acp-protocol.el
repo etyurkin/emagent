@@ -5,6 +5,26 @@
 ;; SPDX-License-Identifier: MIT
 ;; Version: 1.2.3
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 ;;
 ;; Self-contained implementation of the Agent Communication Protocol (ACP)
@@ -252,7 +272,9 @@ redisplay are not starved during heavy agent output."
 ;;;; Subscriptions
 
 (cl-defun emagent-acp-subscribe-to-notifications (&key client on-notification buffer)
-  "Subscribe to incoming CLIENT notifications via ON-NOTIFICATION callback."
+  "Subscribe to incoming CLIENT notifications via ON-NOTIFICATION callback.
+
+Arguments: BUFFER."
   (unless client (error ":client is required"))
   (unless on-notification (error ":on-notification is required"))
   (let ((handlers (map-elt client :notification-handlers)))
@@ -267,7 +289,9 @@ redisplay are not starved during heavy agent output."
     (map-put! client :notification-handlers handlers)))
 
 (cl-defun emagent-acp-subscribe-to-requests (&key client on-request buffer)
-  "Subscribe to incoming CLIENT requests via ON-REQUEST callback."
+  "Subscribe to incoming CLIENT requests via ON-REQUEST callback.
+
+Arguments: BUFFER."
   (unless client (error ":client is required"))
   (unless on-request (error ":on-request is required"))
   (let ((handlers (map-elt client :request-handlers)))
@@ -282,7 +306,9 @@ redisplay are not starved during heavy agent output."
     (map-put! client :request-handlers handlers)))
 
 (cl-defun emagent-acp-subscribe-to-errors (&key client on-error buffer)
-  "Subscribe to agent process errors via ON-ERROR callback."
+  "Subscribe to agent process errors via ON-ERROR callback.
+
+Arguments: CLIENT, BUFFER."
   (unless client (error ":client is required"))
   (unless on-error (error ":on-error is required"))
   (let ((handlers (map-elt client :error-handlers)))
@@ -319,7 +345,9 @@ When SYNC is non-nil, block until the response arrives."
   (funcall (map-elt client :response-sender) :client client :response response))
 
 (cl-defun emagent-acp-send-notification (&key client notification sync)
-  "Send NOTIFICATION from CLIENT."
+  "Send NOTIFICATION from CLIENT.
+
+Arguments: SYNC."
   (unless client (error ":client is required"))
   (unless notification (error ":notification is required"))
   (unless (emagent-acp--client-started-p client)
@@ -328,7 +356,9 @@ When SYNC is non-nil, block until the response arrives."
            :client client :notification notification :sync sync))
 
 (cl-defun emagent-acp--request-sender (&key client request buffer on-success on-failure sync)
-  "Default implementation of the ACP request sender."
+  "Default implementation of the ACP request sender.
+
+Arguments: CLIENT, REQUEST, BUFFER, ON-SUCCESS, ON-FAILURE, SYNC."
   (unless (emagent-acp--client-started-p client)
     (emagent-acp--start-client :client client))
   (when-let ((decorator (map-elt client :outgoing-request-decorator)))
@@ -371,7 +401,9 @@ When SYNC is non-nil, block until the response arrives."
         result))))
 
 (cl-defun emagent-acp--response-sender (&key client response)
-  "Default implementation of the ACP response sender."
+  "Default implementation of the ACP response sender.
+
+Arguments: CLIENT, RESPONSE."
   (let* ((request-id  (map-elt response :request-id))
          (result-data (map-elt response :result))
          (error-data  (map-elt response :error))
@@ -388,7 +420,9 @@ When SYNC is non-nil, block until the response arrives."
       (process-send-string proc json))))
 
 (cl-defun emagent-acp--notification-sender (&key client notification &allow-other-keys)
-  "Default implementation of the ACP notification sender."
+  "Default implementation of the ACP notification sender.
+
+Arguments: CLIENT, NOTIFICATION."
   (unless (emagent-acp--client-started-p client)
     (emagent-acp--start-client :client client))
   (let* ((method (map-elt notification :method))
@@ -487,7 +521,9 @@ request objects (when the agent initiates a request to emagent)."
      (emagent-acp--log client nil "↳ Unrecognized message: %s" (map-elt message :object))))))
 
 (cl-defun emagent-acp--call-request-failure (&key client incoming-response error-data message)
-  "Invoke the failure callback of INCOMING-RESPONSE with ERROR-DATA."
+  "Invoke the failure callback of INCOMING-RESPONSE with ERROR-DATA.
+
+Arguments: CLIENT, MESSAGE."
   (with-temp-buffer
     (with-current-buffer (or (map-elt incoming-response :buffer)
                              (map-elt client :context-buffer)
@@ -498,7 +534,9 @@ request objects (when the agent initiates a request to emagent)."
           (funcall callback error-data))))))
 
 (cl-defun emagent-acp--fail-pending-requests (&key client event)
-  "Fail all pending requests in CLIENT with a process-ended error."
+  "Fail all pending requests in CLIENT with a process-ended error.
+
+Arguments: EVENT."
   (let* ((pending (map-elt client :pending-requests))
          (trimmed (string-trim event))
          (msg "Agent process ended before completing request")
@@ -533,7 +571,9 @@ request objects (when the agent initiates a request to emagent)."
 ;;;; Error helpers
 
 (cl-defun emagent-acp-make-error (&key code message data)
-  "Create a JSON-RPC error object with CODE and MESSAGE."
+  "Create a JSON-RPC error object with CODE and MESSAGE.
+
+Arguments: DATA."
   (unless code (error ":code is required"))
   (unless message (error ":message is required"))
   (let ((err `((code . ,code) (message . ,message))))
@@ -570,7 +610,9 @@ request objects (when the agent initiates a request to emagent)."
           (current-buffer)))))
 
 (defun emagent-acp--log (client label format-string &rest args)
-  "Log to CLIENT's log buffer when `emagent-acp-logging-enabled' is set."
+  "Log to CLIENT's log buffer when `emagent-acp-logging-enabled' is set.
+
+Arguments: LABEL, FORMAT-STRING, ARGS."
   (when emagent-acp-logging-enabled
     (with-current-buffer (emagent-acp-logs-buffer :client client)
       (goto-char (point-max))
@@ -597,7 +639,9 @@ READ-TEXT-FILE-CAPABILITY and WRITE-TEXT-FILE-CAPABILITY are booleans."
                            (writeTextFile . ,(if write-text-file-capability t :false))))))))))
 
 (cl-defun emagent-acp-make-authenticate-request (&key method-id method)
-  "Build an \"authenticate\" request."
+  "Build an \"authenticate\" request.
+
+Arguments: METHOD-ID, METHOD."
   (unless method-id (error ":method-id is required"))
   `((:method . "authenticate")
     (:params . ,(append `((methodId . ,method-id))
@@ -658,7 +702,9 @@ system-prompt injection on load)."
                 ,@(when meta `((_meta . ,meta)))))))
 
 (cl-defun emagent-acp-make-session-resume-request (&key session-id cwd mcp-servers)
-  "Build a \"session/resume\" request."
+  "Build a \"session/resume\" request.
+
+Arguments: SESSION-ID, CWD, MCP-SERVERS."
   (unless session-id (error ":session-id is required"))
   (unless cwd        (error ":cwd is required"))
   `((:method . "session/resume")
@@ -667,7 +713,9 @@ system-prompt injection on load)."
                 (mcpServers . ,(or mcp-servers []))))))
 
 (cl-defun emagent-acp-make-session-fork-request (&key session-id cwd mcp-servers)
-  "Build a \"session/fork\" request."
+  "Build a \"session/fork\" request.
+
+Arguments: SESSION-ID, CWD, MCP-SERVERS."
   (unless session-id (error ":session-id is required"))
   (unless cwd        (error ":cwd is required"))
   `((:method . "session/fork")
@@ -676,19 +724,25 @@ system-prompt injection on load)."
                 (mcpServers . ,(or mcp-servers []))))))
 
 (cl-defun emagent-acp-make-session-list-request (&key cwd)
-  "Build a \"session/list\" request."
+  "Build a \"session/list\" request.
+
+Arguments: CWD."
   (unless cwd (error ":cwd is required"))
   `((:method . "session/list")
     (:params . ((cwd . ,(directory-file-name (expand-file-name cwd)))))))
 
 (cl-defun emagent-acp-make-session-delete-request (&key session-id)
-  "Build a \"session/delete\" request."
+  "Build a \"session/delete\" request.
+
+Arguments: SESSION-ID."
   (unless session-id (error ":session-id is required"))
   `((:method . "session/delete")
     (:params . ((sessionId . ,session-id)))))
 
 (cl-defun emagent-acp-make-session-set-model-request (&key session-id model-id)
-  "Build a \"session/set_model\" request (Claude Code ACP extension)."
+  "Build a \"session/set_model\" request (Claude Code ACP extension).
+
+Arguments: SESSION-ID, MODEL-ID."
   (unless session-id (error ":session-id is required"))
   (unless model-id   (error ":model-id is required"))
   `((:method . "session/set_model")
@@ -696,7 +750,9 @@ system-prompt injection on load)."
                 (modelId   . ,model-id)))))
 
 (cl-defun emagent-acp-make-session-set-mode-request (&key session-id mode-id)
-  "Build a \"session/set_mode\" request."
+  "Build a \"session/set_mode\" request.
+
+Arguments: SESSION-ID, MODE-ID."
   (unless session-id (error ":session-id is required"))
   (unless mode-id    (error ":mode-id is required"))
   `((:method . "session/set_mode")
@@ -704,7 +760,9 @@ system-prompt injection on load)."
                 (modeId    . ,mode-id)))))
 
 (cl-defun emagent-acp-make-session-set-config-option-request (&key session-id config-id value)
-  "Build a \"session/set_config_option\" request."
+  "Build a \"session/set_config_option\" request.
+
+Arguments: SESSION-ID, CONFIG-ID, VALUE."
   (unless session-id (error ":session-id is required"))
   (unless config-id  (error ":config-id is required"))
   (unless value      (error ":value is required"))
@@ -714,7 +772,9 @@ system-prompt injection on load)."
                 (value     . ,value)))))
 
 (cl-defun emagent-acp-make-session-cancel-notification (&key session-id reason)
-  "Build a \"session/cancel\" notification."
+  "Build a \"session/cancel\" notification.
+
+Arguments: SESSION-ID, REASON."
   (unless session-id (error ":session-id is required"))
   `((:method . "session/cancel")
     (:params . ((sessionId . ,session-id)
@@ -725,7 +785,9 @@ system-prompt injection on load)."
 (cl-defun emagent-acp-make-session-request-permission-response (&key request-id option-id cancelled)
   "Build a \"session/request_permission\" response.
 
-Provide either OPTION-ID (selected option) or CANCELLED (non-nil)."
+Provide either OPTION-ID (selected option) or CANCELLED (non-nil).
+
+Arguments: REQUEST-ID."
   (unless request-id (error ":request-id is required"))
   (when (and option-id cancelled)
     (error "Provide :option-id or :cancelled, not both"))
@@ -738,7 +800,9 @@ Provide either OPTION-ID (selected option) or CANCELLED (non-nil)."
                                 (optionId . ,option-id))))))))
 
 (cl-defun emagent-acp-make-fs-read-text-file-response (&key request-id content error)
-  "Build a \"fs/read_text_file\" response with CONTENT or ERROR."
+  "Build a \"fs/read_text_file\" response with CONTENT or ERROR.
+
+Arguments: REQUEST-ID."
   (unless request-id (error ":request-id is required"))
   (cond
    ((and content error) (error "Provide :content or :error, not both"))
@@ -747,7 +811,9 @@ Provide either OPTION-ID (selected option) or CANCELLED (non-nil)."
    (t       (error "Must provide :content or :error"))))
 
 (cl-defun emagent-acp-make-fs-write-text-file-response (&key request-id error)
-  "Build a \"fs/write_text_file\" response."
+  "Build a \"fs/write_text_file\" response.
+
+Arguments: REQUEST-ID, ERROR."
   (unless request-id (error ":request-id is required"))
   (if error
       `((:request-id . ,request-id) (:error  . ,error))

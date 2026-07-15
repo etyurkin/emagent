@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; ACP fs/read_text_file and fs/write_text_file request handlers.
@@ -32,13 +52,17 @@
   "Return the project root ACP fs/* operations must stay within, or nil.
 
 Mirrors the boundary the MCP dispatcher binds for its tools; without it the
-fs/* handlers would resolve agent-supplied paths with no project confinement."
+fs/* handlers would resolve agent-supplied paths with no project confinement.
+
+Arguments: STATE."
   (when-let ((buf (emagent-acp--chat-buffer state)))
     (when (buffer-live-p buf)
       (with-current-buffer buf
         (ignore-errors (emagent-session-project-directory))))))
 
 (defun emagent-acp--fs-unavailable-response (method)
+  
+  "Internal helper for METHOD."
   (emagent-acp-make-error
    :code -32601
    :message (format "%s disabled; use the external agent's project file tools"
@@ -53,11 +77,15 @@ keyword arguments (`:content' or `:error')."
    :response (apply make :request-id request-id response-args)))
 
 (defun emagent-acp--fs-send-error (client make request-id code message)
-  "Send an fs error response with CODE and MESSAGE (see `emagent-acp--fs-send')."
+  "Send an fs error response with CODE and MESSAGE (see `emagent-acp--fs-send').
+
+Arguments: CLIENT, MAKE, REQUEST-ID."
   (emagent-acp--fs-send client make request-id
                         :error (emagent-acp-make-error :code code :message message)))
 
 (cl-defun emagent-acp--on-fs-read (&key state emagent-acp-request)
+  
+  "Internal helper for STATE and EMAGENT-ACP-REQUEST."
   (let ((client (emagent-acp-state-client state))
         (request-id (map-elt emagent-acp-request 'id))
         (path (map-nested-elt emagent-acp-request '(params path)))
@@ -92,6 +120,8 @@ keyword arguments (`:content' or `:error')."
                                          (error-message-string err)))))))))
 
 (cl-defun emagent-acp--on-fs-write (&key state emagent-acp-request)
+  
+  "Internal helper for STATE and EMAGENT-ACP-REQUEST."
   (let ((client (emagent-acp-state-client state))
         (request-id (map-elt emagent-acp-request 'id))
         (path (map-nested-elt emagent-acp-request '(params path)))

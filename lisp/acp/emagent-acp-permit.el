@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Permission option helpers, dangerous command detection, cursor store.db
@@ -223,7 +243,9 @@ Policy rules still block dangerous commands regardless of any grant."
 
 Execute commands are keyed on the program name (and sub-verb for tools like
 git/npm/docker, see `emagent-acp--subcommand-programs').  Policy rules still
-block dangerous commands regardless."
+block dangerous commands regardless.
+
+Arguments: TOOL-CALL."
   (when tool-call
     (let* ((kind    (downcase (or (emagent-acp--tool-call-infer-kind tool-call) "")))
            (command (emagent-acp--tool-call-command-text tool-call))
@@ -244,7 +266,7 @@ block dangerous commands regardless."
        (t "unknown")))))
 
 (defun emagent-acp--tool-call-infer-kind (tool-call)
-  "Guess tool-call kind when ACP omits it (common with Cursor permissions)."
+  "Guess TOOL-CALL kind when ACP omits it (common with Cursor permissions)."
   (when tool-call
     (let* ((explicit (map-elt tool-call 'kind))
            (title (downcase (or (map-elt tool-call 'title) "")))
@@ -272,7 +294,7 @@ block dangerous commands regardless."
     (and kind (member kind '("execute")))))
 
 (defun emagent-acp--permission-validate (tool-call)
-  "Return nil when TOOL-CALL passes emagent checks.
+  "Return nil when TOOL-CALL passes emagent validation.
 Otherwise (:deny . REASON) or (:confirm . REASON)."
   (or       (when-let ((form (emagent-acp--tool-call-eval-form tool-call)))
         (emagent-policy-check-elisp form))
@@ -307,7 +329,9 @@ Otherwise (:deny . REASON) or (:confirm . REASON)."
     (_ nil)))
 
 (defun emagent-acp--permission-stored-auto-choice (state fingerprint chat-buffer)
-  "Return the stored user CHOICE that auto-approves FINGERPRINT, or nil."
+  "Return the stored user CHOICE that auto-approves FINGERPRINT, or nil.
+
+Arguments: STATE, CHAT-BUFFER."
   (cond
    ((emagent-acp-state-session-auto-approve state) :allow-all)
    ((and fingerprint (member fingerprint (emagent-permissions-global-fingerprints)))
@@ -364,7 +388,8 @@ renders of the same line keep the decision suffix instead of dropping it."
 (defun emagent-acp--permission-gate-auto-approve-p (state tool-call validation fingerprint chat-buffer)
   "Return non-nil when emagent should approve without prompting.
 
-A policy :deny is never auto-approved.  A policy :confirm is auto-approved only
+FINGERPRINT identifies the request.  A policy :deny is never auto-approved.
+A policy :confirm is auto-approved only
 under \"Allow all (session)\" — the explicit user opt-out of prompting.  A
 stored fingerprint grant (or the t/safe auto-approve modes) removes the prompt
 only for policy-clean requests: it must not silence a :confirm, so e.g. an
@@ -372,7 +397,9 @@ only for policy-clean requests: it must not silence a :confirm, so e.g. an
 
 The `safe' mode auto-approves only `read'/`write' tool kinds; `execute', `eval',
 and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
-\"safe\" merely because it is not a shell command)."
+\"safe\" merely because it is not a shell command).
+
+Arguments: STATE, TOOL-CALL, VALIDATION, CHAT-BUFFER."
   (let ((deny (and validation (eq (car validation) :deny)))
         (confirm (and validation (eq (car validation) :confirm))))
     (and (not deny)
@@ -432,7 +459,7 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
     (emagent-policy-shell-needs-confirm-p command)))
 
 (defun emagent-acp--tool-call-command-text (tool-call)
-  "Extract the command string from a tool-call ACP object."
+  "Extract the command string from TOOL-CALL."
   (or (when-let* ((raw (or (map-elt tool-call 'rawInput)
                            (map-elt tool-call 'arguments)))
                   (data (emagent-acp--tool-call-normalize-data raw)))
@@ -443,7 +470,9 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
       (map-elt tool-call 'title)))
 
 (defun emagent-acp--permission-tool-call (state tool-call)
-  "Return TOOL-CALL merged with session inputs and provider enrichment."
+  "Return TOOL-CALL merged with session inputs and provider enrichment.
+
+Arguments: STATE."
   (when tool-call
     (let* ((update (or (emagent-acp--tool-call-update-from-request tool-call)
                        tool-call))
@@ -451,6 +480,8 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
       (emagent-acp--provider-enrich-tool-call state merged))))
 
 (defun emagent-acp--tool-call-edit-field (item &rest keys)
+  
+  "Internal helper for ITEM and KEYS."
   (when item
     (cl-loop for key in keys
              for val = (emagent-acp--tool-call-data-get item key)
@@ -458,6 +489,8 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
              return val)))
 
 (defun emagent-acp--tool-call-edit-items (data)
+  
+  "Internal helper for DATA."
   (when data
     (when-let ((edits (emagent-acp--tool-call-data-get data 'edits)))
       (cond
@@ -466,10 +499,14 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
        (t nil)))))
 
 (defun emagent-acp--tool-call-edit-path (item)
+  
+  "Internal helper for ITEM."
   (emagent-acp--tool-call-edit-field
    item 'path 'file_path 'target_file 'relativeWorkspacePath 'file 'filename))
 
 (defun emagent-acp--tool-call-write-path (tool-call raw detail)
+  
+  "Internal helper for TOOL-CALL and RAW and DETAIL."
   (or (emagent-acp--tool-call-path tool-call)
       (when-let ((data (and raw (emagent-acp--tool-call-normalize-data raw))))
         (or (emagent-acp--tool-call-data-path data)
@@ -478,6 +515,8 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
       detail))
 
 (defun emagent-acp--tool-call-apply-edit (text old new)
+  
+  "Internal helper for TEXT and OLD and NEW."
   (cond
    ((and (stringp old) (stringp new))
     (if (string-empty-p old)
@@ -487,6 +526,8 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
    (t text)))
 
 (defun emagent-acp--tool-call-proposed-content (path data)
+  
+  "Internal helper for PATH and DATA."
   (when (and path data)
     (let ((content (emagent-acp--tool-call-data-get data 'content))
           (items (emagent-acp--tool-call-edit-items data)))
@@ -525,7 +566,9 @@ and unknown/MCP tools always prompt under `safe' (an eval or MCP call is never
 Empty lines must survive: with OMIT-NULLS the preview would silently
 drop the blank lines separating functions in NEW.  Only a single
 trailing newline is trimmed so content ending in \\n doesn't grow a
-spurious empty +/- line."
+spurious empty +/- line.
+
+Arguments: PATH."
   (when (and (stringp new) (not (string-empty-p new)))
     (let* ((name (file-name-nondirectory path))
            (old-lines (when (and old (not (string-empty-p old)))
@@ -542,14 +585,14 @@ spurious empty +/- line."
                 (mapconcat (lambda (line) (concat "+" line)) new-lines "\n"))))))
 
 (defvar emagent-acp--edit-diff-cache (make-hash-table :test 'equal)
-  "toolCallId → real diff computed while the file still had pre-edit content.
+  "Map toolCallId to a real pre-edit diff for later tool-call re-renders.
 The agent writes the file right after permission is granted, but the same
 tool call re-renders on later status updates (in_progress, completed) — by
 then the on-disk file equals the proposed content and diffing yields
 nothing.  The first render's diff is kept here so re-renders show it.")
 
 (defvar emagent-acp--edit-diff-cache-order nil
-  "toolCallIds in `emagent-acp--edit-diff-cache', most recent first.")
+  "List of toolCallIds in `emagent-acp--edit-diff-cache', most recent first.")
 
 (defconst emagent-acp--edit-diff-cache-max 200
   "Entries kept in `emagent-acp--edit-diff-cache' before evicting the oldest.
@@ -576,7 +619,9 @@ When the file already contains PROPOSED (the render happened after the
 write) the pre-edit content can still be reconstructed for old/new-string
 edits: substitute each new string back to its old string, newest edit
 first.  Returns nil when DATA has no reversible edits or reversal changes
-nothing (e.g. a pure whole-content write)."
+nothing (e.g. a pure whole-content write).
+
+Arguments: RESOLVED."
   (when-let ((items (emagent-acp--tool-call-edit-items data)))
     (let ((old-content proposed))
       (dolist (item (reverse items))
@@ -626,6 +671,8 @@ Prefers a real diff; the hand-built patch preview is the last resort:
             (emagent-acp--tool-call-edit-patch-string resolved old new))))))
 
 (defun emagent-acp--tool-call-write-content-block (tool-call raw _detail path)
+  
+  "Internal helper for TOOL-CALL and RAW and PATH."
   (when (and path (not (string-empty-p path)))
     (let* ((data (emagent-acp--tool-call-normalize-data raw))
            (resolved (emagent-tools--root-directory path))
@@ -642,9 +689,10 @@ Prefers a real diff; the hand-built patch preview is the last resort:
           (format "** Allow edit\n= %s =" resolved))))))
 
 (defun emagent-acp--tool-call-edit-block-spec (update)
-  "Return (\"diff\" . DIFF) when UPDATE is a write/edit whose change can be
-reconstructed as a diff, else nil.  Lets an auto-allowed edit render the
-same diff a permission prompt would, instead of a bare arrow line."
+  "Return a diff block spec when UPDATE is a write/edit change.
+The value is (\"diff\" . DIFF) when the change can be reconstructed;
+otherwise nil.  Lets an auto-allowed edit render the same diff a
+permission prompt would, instead of a bare arrow line."
   (when-let* ((kind (emagent-acp--tool-call-infer-kind update))
               ((emagent-acp--tool-call-write-kind-p kind))
               (raw (or (map-elt update 'rawInput) (map-elt update 'arguments)))
@@ -658,7 +706,9 @@ same diff a permission prompt would, instead of a bare arrow line."
 (defun emagent-acp--tool-call-content-block (tool-call)
   "Return an org subsection string for the permission prompt, or nil.
 For eval, shell, and edit tool calls, return a code block with the payload.
-Edit prompts prefer a unified diff; patch edits fall back to a hunk preview."
+Edit prompts prefer a unified diff; patch edits fall back to a hunk preview.
+
+Arguments: TOOL-CALL."
   (when tool-call
     (or (when-let ((form (emagent-acp--tool-call-eval-form tool-call)))
           (format "** Allow eval\n#+BEGIN_SRC elisp\n%s\n#+END_SRC" form))
@@ -686,13 +736,17 @@ Edit prompts prefer a unified diff; patch edits fall back to a hunk preview."
              (t nil)))))))
 
 (defun emagent-acp--permission-interactive-p (state)
-  "Return non-nil when ACP permission prompts may need user input."
+  "Return non-nil when ACP permission dialogue may need user input.
+
+Arguments: STATE."
   (and (not (emagent-acp-state-session-auto-approve state))
        (not (eq emagent-acp-auto-approve-permissions t))))
 
 
 (defun emagent-acp--schedule-permission-drain (state)
-  "Run `emagent-acp--drain-permission-queue-now' outside the ACP process filter."
+  "Run `emagent-acp--drain-permission-queue-now' outside the ACP process filter.
+
+Arguments: STATE."
   (unless (or (emagent-acp-state-permission-drain-timer state)
               (emagent-acp-state-permission-busy state))
     (setf (emagent-acp-state-permission-drain-timer state)
