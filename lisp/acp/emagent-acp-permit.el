@@ -29,6 +29,10 @@
 
 (declare-function emagent-acp--chat-buffer "emagent-acp-usage")
 
+(declare-function emagent-acp--drain-permission-queue-now "emagent-acp-request")
+(declare-function emagent-acp--tool-call-detail-from-tool-call "emagent-acp-request")
+
+
 (defun emagent-acp--hydrate-session-permissions (state session-id)
   "Load ~/.emagent session permissions for SESSION-ID into STATE."
   (when (and session-id (not (string-empty-p session-id)))
