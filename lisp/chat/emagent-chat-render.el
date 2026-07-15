@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Render agent messages, tool calls, and thoughts in org.
@@ -172,6 +192,8 @@ the hide when the response is fully complete and the session is idle."
     (insert "\n")))
 
 (defun emagent-chat--reset-response-state ()
+  
+  "Internal helper."
   (emagent-chat--cancel-thought-flush)
   (setq emagent-chat--assistant-marker nil
         emagent-chat--response-body-start nil
@@ -283,14 +305,10 @@ are closed, or (lang . body-so-far) for the last unclosed fence."
     n))
 
 (defun emagent-chat--open-markup-start (text)
-  "Return the index in TEXT where a trailing, still-incomplete markdown span
-begins, or nil when TEXT ends on a complete boundary.
-
-Covers inline code `code', bold **text**, and links [text](url) whose closing
-delimiter may still arrive in a later streaming chunk.  Each pattern is
-anchored to the end of TEXT and forbids an interior newline, so a stray
-delimiter can never stall streaming past its own line; the earliest such span
-wins when several are open at once."
+  "Return start index of a trailing incomplete markdown span in TEXT.
+Return nil when TEXT ends on a complete boundary.  Covers inline code,
+bold, and links whose closing delimiter may still arrive later.  Each
+pattern is anchored to the end of TEXT and forbids an interior newline."
   (let (starts)
     ;; Inline code: a trailing unmatched opening backtick.
     (when (and (string-match "`[^`\n]*\\'" text)
@@ -320,7 +338,7 @@ boundary split from rendering as raw `*', backtick, or bracket characters."
     (cons text "")))
 
 (defun emagent-chat--schedule-thought-flush ()
-  "Debounce reasoning inserts using `emagent-chat-thought-stream-delay'."
+  "Debounce reasoning insertion using `emagent-chat-thought-stream-delay'."
   (when emagent-chat--thought-flush-timer
     (cancel-timer emagent-chat--thought-flush-timer))
   (setq emagent-chat--thought-flush-timer
@@ -332,7 +350,7 @@ boundary split from rendering as raw `*', backtick, or bracket characters."
 (declare-function emagent-chat--send-pending-end "emagent-chat")
 
 (defun emagent-chat--end-send-pending-if-active ()
-  "End the pre-dispatch phase once agent output starts arriving."
+  "End the pre-dispatch phase once agent output begins arriving."
   (when (fboundp 'emagent-chat--send-pending-end)
     (emagent-chat--send-pending-end)))
 
@@ -588,7 +606,9 @@ re-inserted after TEXT, leaving the marker at the true content end."
   "Wrap file paths in org =verbatim= to prevent /italic/ and =verbatim= glitches.
 Matches any token containing a / that follows whitespace, a colon, or the
 start of the string.  Paths are shortened via `emagent-chat--display-path'
-before wrapping."
+before wrapping.
+
+Arguments: TEXT."
   ;; Capture the project before entering the temp buffer: both the
   ;; buffer-local `emagent-chat-project-directory' and the #+EMAGENT_PROJECT
   ;; property live in the chat buffer and are invisible from inside it.
@@ -609,7 +629,7 @@ before wrapping."
       (buffer-string))))
 
 (defun emagent-chat--format-tool-line (label)
-  "Return a Thinking-block tool line for LABEL, safe in org-mode.
+  "Return a Thinking-block tool line for LABEL, safe in `org-mode'.
 The decision annotation (Allow/Deny) is placed before the file path so it
 is visible without scrolling on long paths.  When there is no path but the
 label has a `tool: detail' separator, the annotation goes between them so
@@ -650,8 +670,10 @@ the result reads `tool (Allow: X): detail' rather than appending at the end."
     (format "→ %s" (emagent-chat--org-verbatim-paths reordered))))
 
 (defun emagent-chat--combined-arrow-label (label code)
-  "Return the arrow-line label for a combined arrow + block display.
-Abbreviates to the operation verb when the block already carries the detail."
+  "Return the arrow-line LABEL for a combined arrow + block display.
+Abbreviates to the operation verb when the block already carries the detail.
+
+Arguments: CODE."
   (let* ((annotation (emagent-chat--tool-label-annotation label))
          (base (if annotation
                    (string-trim
@@ -689,7 +711,9 @@ Abbreviates to the operation verb when the block already carries the detail."
 
 (defun emagent-chat--tool-label-title-annotation (label)
   "Return comment text for a text block: tool title plus decision annotation.
-Strips the path detail (already visible in the block code) to avoid redundancy."
+Strips the path detail (already visible in the block code) to avoid redundancy.
+
+Arguments: LABEL."
   (when label
     (let* ((annotation (emagent-chat--tool-label-annotation label))
            (base (if annotation
@@ -765,7 +789,7 @@ that just restates what the tool-call line already displays)."
              (string-match-p (regexp-quote (string-trim question)) rendered)))))
 
 (defun emagent-chat--insert-permission-newline-if-needed ()
-  "Insert a separating newline unless point already starts a fresh line."
+  "Insert a separating newline unless point is already on a fresh line."
   (unless (bolp)
     (insert "\n")))
 
@@ -775,7 +799,9 @@ that just restates what the tool-call line already displays)."
 No end-anchor: the annotation may appear before a path on the same line.")
 
 (defun emagent-chat--repair-tool-line-faces (start end)
-  "Re-apply path and decision faces after org font-lock on tool-call lines."
+  "Re-apply path and decision faces after org font-lock on tool-call lines.
+
+Arguments: START, END."
   (when (and start end (< start end))
     (with-silent-modifications
       (save-excursion
@@ -822,7 +848,7 @@ fontifies with the comment face natively.")
     (emagent-chat--ensure-reasoning-scaffold)))
 
 (defun emagent-chat--separate-before-tool ()
-  "Ensure point starts a fresh line before inserting a tool line.
+  "Ensure point is on a fresh line before inserting a tool line.
 Consecutive tool lines and src blocks stay adjacent; a blank line is added
 only before the first tool line after prose."
   (unless (bolp) (insert "\n"))
@@ -973,7 +999,7 @@ single → line."
   (emagent-chat--append-tool-line label id lang code))
 
 (defun emagent-chat-permission-prompt (question choices callback &optional tool-call)
-  "Show permission UI at the end of the open `** Thinking' subsection.
+  "Show permission UI for QUESTION at the end of `** Thinking'.
 
 When TOOL-CALL carries a shell command or edit payload, inserts that content,
 then CHOICES as buttons.  Otherwise inserts a ? question line before the
@@ -987,7 +1013,7 @@ button is clicked.
 Keyboard shortcuts (via keymap text property on the buttons line):
   y / RET  — Allow once    s — Allow for session
   w        — Allow always  a — Allow all (session)
-  n        — Deny"
+  n        — Deny."
   (when (emagent-chat--open-response-p)
     (let* ((buf (current-buffer))
            (raw-content-block (emagent-chat--permission-content-block tool-call))
@@ -1313,7 +1339,7 @@ subsection that belongs to an earlier response."
         t))))
 
 (defun emagent-chat-finish-assistant (text &optional thought-text)
-  "Finalize the latest emagent response.
+  "Finalize the latest emagent response with TEXT.
 
 Render the assistant answer under `** Response'.  When reasoning was streamed
 keep its `** Thinking' subsection; otherwise build one from THOUGHT-TEXT.

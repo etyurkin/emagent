@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Major mode setup and keymaps for emagent chat buffers.
@@ -153,13 +173,15 @@ parent before the derived body runs, so any `setq-local' inside
 `org-startup-with-inline-images' is non-nil; on large chat buffers that
 parse can trip an \"Invalid search bound (wrong side of point)\" error
 inside `org-element-context'.  It also warms `org-element--cache' before
-the derived body disables it.  Bind both to nil for the whole init."
+the derived body disables it.  Bind both to nil for the whole init.
+
+Arguments: ARGS."
   (let ((org-startup-with-inline-images nil)
         (org-element-use-cache nil))
     (apply orig-fn args)))
 
 (defun emagent-chat--session-buffer-p ()
-  "Return non-nil when current buffer looks like an emagent session file."
+  "Return non-nil when current buffer resembles an emagent session file."
   (and (derived-mode-p 'org-mode)
        (save-excursion
          (save-restriction
@@ -175,7 +197,9 @@ the derived body disables it.  Bind both to nil for the whole init."
   "Skip Org startup inline image rendering for emagent session files.
 
 This avoids Org parser errors during desktop restore of large emagent session
-buffers when `org-startup-with-inline-images' is enabled globally."
+buffers when `org-startup-with-inline-images' is enabled globally.
+
+Arguments: ORIG-FN, ARGS."
   (if (emagent-chat--session-buffer-p)
       nil
     (apply orig-fn args)))
@@ -220,7 +244,7 @@ Precedence: a `#+BEGIN_SRC ... #+END_SRC' block executes via
 `org-babel-execute-src-block' (even inside a prompt); on or inside a
 `* user>' prompt (old prompts are re-evaluable) `emagent-chat-send'
 sends it; anywhere else falls through to `org-ctrl-c-ctrl-c', so
-tables realign, checkboxes toggle, and the rest of org's C-c C-c keeps
+tables realign, checkboxes toggle, and the rest of org ctrl-c ctrl-c keeps
 working inside session buffers."
   (interactive)
   (cond

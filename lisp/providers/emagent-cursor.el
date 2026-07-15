@@ -5,6 +5,26 @@
 ;; SPDX-License-Identifier: MIT
 ;; Version: 1.2.3
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Cursor ACP provider configuration.
@@ -90,7 +110,9 @@ Uses `emagent-chat-cursor-acp-extra-args' when buffer-local and non-nil."
 
 Cursor discovers MCP servers from ~/.cursor/mcp.json, whose emagent url
 interpolates ${env:EMAGENT_SESSION_TOKEN}.  Setting it per buffer routes each
-invocation to its own in-Emacs MCP session."
+invocation to its own in-Emacs MCP session.
+
+Arguments: CONTEXT-BUFFER."
   (let ((token (with-current-buffer context-buffer (emagent-mcp-buffer-token))))
     (append emagent-cursor-environment
             (list (format "EMAGENT_SESSION_TOKEN=%s" token)))))
@@ -111,7 +133,9 @@ invocation to its own in-Emacs MCP session."
      (t nil))))
 
 (defun emagent-cursor--tool-call-raw-empty-p (raw)
-  "Return non-nil when Cursor ACP rawInput/arguments carry no parameters."
+  "Return non-nil when Cursor ACP rawInput/arguments carry no parameters.
+
+Arguments: RAW."
   (or (null raw)
       (and (stringp raw)
            (let ((trimmed (string-trim raw)))
@@ -187,7 +211,9 @@ invocation to its own in-Emacs MCP session."
                                     args))))))))))
 
 (defun emagent-cursor-tool-call-from-store (session-id tool-call-id)
-  "Return (TOOL-NAME . ARGS-ALIST) for TOOL-CALL-ID from Cursor store.db."
+  "Return (TOOL-NAME . ARGS-ALIST) for TOOL-CALL-ID from Cursor store.db.
+
+Arguments: SESSION-ID."
   (when-let* ((db (emagent-cursor--store-db-path session-id))
               (sqlite (executable-find "sqlite3")))
     (catch 'found
@@ -227,7 +253,9 @@ invocation to its own in-Emacs MCP session."
    (t name)))
 
 (defun emagent-cursor--enriched-tool-title (acp-title store-name)
-  "Prefer store NAME over generic ACP TITLE."
+  "Prefer store NAME over generic ACP TITLE.
+
+Arguments: ACP-TITLE, STORE-NAME."
   (let ((display (emagent-cursor--tool-display-name store-name)))
     (if (emagent-cursor--generic-acp-title-p acp-title)
         display
@@ -243,7 +271,9 @@ invocation to its own in-Emacs MCP session."
        (string-match-p "\\`mcp_emagent_" store-name)))
 
 (defun emagent-cursor-enrich-tool-call-update (session-id update)
-  "Fill empty rawInput in UPDATE from Cursor store.db when available."
+  "Fill empty rawInput in UPDATE from Cursor store.db when available.
+
+Arguments: SESSION-ID."
   (let ((raw (or (map-elt update 'rawInput) (map-elt update 'arguments))))
     (if (emagent-cursor--tool-call-raw-empty-p raw)
         (or (when-let* ((id (map-elt update 'toolCallId))
@@ -340,7 +370,9 @@ invocation to its own in-Emacs MCP session."
      (lambda (a b) (string< (map-elt a 'name) (map-elt b 'name))))))
 
 (defun emagent-cursor-slash-commands (&optional project-dir)
-  "Return Cursor slash commands for completion: built-ins, custom, then project."
+  "Return Cursor slash commands for completion: built-ins, custom, then project.
+
+Arguments: PROJECT-DIR."
   (let ((global (expand-file-name "commands" emagent-cursor-dir))
         (project (and project-dir
                       (expand-file-name ".cursor/commands" project-dir))))

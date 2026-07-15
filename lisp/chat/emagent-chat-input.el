@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Chat input region helpers and send plumbing.
@@ -35,7 +55,7 @@
     (insert (emagent-chat--user-heading-prefix))))
 
 (defun emagent-chat--user-heading-prefix ()
-  "Return the org heading prefix for user turns, e.g. \"* etyurkin> \"."
+  "Return the org heading prefix for user messages, e.g. \"* etyurkin> \"."
   (format "* %s> " (user-login-name)))
 
 (defun emagent-chat--user-heading-re ()
@@ -50,7 +70,7 @@
       (match-end 0))))
 
 (defvar-local emagent-chat--history-items nil
-  "Most recent user prompts, newest first, for C-p/C-n navigation.")
+  "Most recent user prompts, newest first, for history navigation.")
 
 (defvar-local emagent-chat--history-index nil
   "Current history index while navigating, or nil when inactive.")
@@ -221,6 +241,8 @@ up to (but not including) the next `* user>' heading."
     (point)))
 
 (defun emagent-chat--skip-header ()
+  
+  "Internal helper."
   (goto-char (point-min))
   (while (and (not (eobp))
               (or (looking-at "#\\+")
@@ -292,7 +314,7 @@ point is within the block; `emagent-chat--send-bounds' does."
 
 Point must be on the prompt's heading line or within its direct body,
 above its response subsections.  Anywhere else there is nothing to
-send; `C-c C-c' then falls through to org."
+send; then fall through to org."
   (let ((block (emagent-chat--user-block-bounds)))
     (when (and block
                (>= (point) (car block))

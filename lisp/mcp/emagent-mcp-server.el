@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Embedded MCP server implementation.
@@ -106,7 +126,9 @@ works, and keeps Emacs responsive while the user decides.
 The HTTP response is sent via a RESPOND callback that may be called either
 from within the idle timer (synchronous tools) or from a process sentinel
 after the subprocess exits (async tools such as run_shell_command), so Emacs
-stays fully responsive during long-running shell commands."
+stays fully responsive during long-running shell commands.
+
+Arguments: ID, PARAMS, TOKEN."
   (run-with-idle-timer
    0 nil
    (lambda ()
@@ -166,7 +188,9 @@ stays fully responsive during long-running shell commands."
          (emagent-mcp--respond proc 202 nil ""))))))
 
 (defun emagent-mcp--handle-request (proc request-line _headers body)
-  "Handle one parsed HTTP request on PROC."
+  "Handle one parsed HTTP request on PROC.
+
+Arguments: REQUEST-LINE, BODY."
   (let* ((parts (split-string request-line " "))
          (http-method (nth 0 parts))
          (path (nth 1 parts))
@@ -259,7 +283,9 @@ stays fully responsive during long-running shell commands."
 When ACP is non-nil, the session is driven by an emagent ACP chat; MCP tool
 confirmation is handled via ACP `session/request_permission' instead.
 
-Starts the server if needed and returns the port."
+Starts the server if needed and returns the port.
+
+Arguments: PREFER-EMACS."
   (emagent-mcp-ensure-server)
   (puthash token
            (list :root (and cwd (expand-file-name cwd))
@@ -281,7 +307,7 @@ Starts the server if needed and returns the port."
   (emagent-mcp-maybe-shutdown))
 
 (defun emagent-mcp-session-url (token)
-  "Return the MCP endpoint URL for session TOKEN (starts the server)."
+  "Return the MCP endpoint URL for session TOKEN (and begin the server)."
   (format "http://127.0.0.1:%d/mcp/%s" (emagent-mcp-ensure-server) token))
 
 ;;;; Cursor configuration
@@ -290,7 +316,9 @@ Starts the server if needed and returns the port."
   "Recursively convert JSON arrays (lists) to vectors for `json-serialize'.
 
 `json-parse-buffer' with `:array-type \\='list\\=' yields lists, but
-`json-serialize' treats lists as alists and requires symbol keys."
+`json-serialize' treats lists as alists and requires symbol keys.
+
+Arguments: OBJECT."
   (cond
    ((hash-table-p object)
     (maphash (lambda (key value)

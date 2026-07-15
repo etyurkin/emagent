@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Public session state accessors, session utility helpers, and usage
@@ -94,11 +114,15 @@ buffer signals \"Selecting deleted buffer\"."
       buf)))
 
 (defun emagent-acp--session-cwd (state)
+  
+  "Internal helper for STATE."
   (if-let ((buf (emagent-acp--chat-buffer state)))
       (with-current-buffer buf (emagent-chat--session-directory))
-    (user-error "emagent chat buffer is no longer available")))
+    (user-error "Emagent chat buffer is no longer available")))
 
 (defun emagent-acp--persist-session-id (state session-id)
+  
+  "Internal helper for STATE and SESSION-ID."
   (when-let ((buf (emagent-acp--chat-buffer state)))
     (with-current-buffer buf
       (let ((was-modified (buffer-modified-p)))
@@ -107,16 +131,22 @@ buffer signals \"Selecting deleted buffer\"."
           (set-buffer-modified-p was-modified))))))
 
 (defun emagent-acp--saved-session-id (state)
+  
+  "Internal helper for STATE."
   (when-let ((buf (emagent-acp--chat-buffer state)))
     (with-current-buffer buf
       (emagent-session-id))))
 
 (defun emagent-acp--saved-model-id (state)
+  
+  "Internal helper for STATE."
   (when-let ((buf (emagent-acp--chat-buffer state)))
     (with-current-buffer buf
       (emagent-session-model))))
 
 (defun emagent-acp--persist-model-id (state model-id)
+  
+  "Internal helper for STATE and MODEL-ID."
   (when-let ((buf (emagent-acp--chat-buffer state)))
     (with-current-buffer buf
       (let ((was-modified (buffer-modified-p)))
@@ -127,7 +157,9 @@ buffer signals \"Selecting deleted buffer\"."
   (emagent-acp--refresh-mode-line state))
 
 (defun emagent-acp--maybe-recover-stall (state)
-  "Unstick a session that finished on the wire but left the buffer open."
+  "Unstick a session that finished on the wire but left the buffer open.
+
+Arguments: STATE."
   (when (and state (emagent-acp-state-ready state) (not (emagent-acp-state-busy state)))
     (emagent-acp--maybe-complete-deferred-prompt state)
     (when (emagent-acp-state-permission-queue state)
@@ -154,6 +186,8 @@ layer (see `emagent-chat-set-status')."
                                 (emagent-acp--provider-context-usage-unavailable-p state)))))
 
 (defun emagent-acp--refresh-mode-line (state)
+  
+  "Internal helper for STATE."
   (emagent-acp--maybe-recover-stall state)
   (when-let ((buffer (emagent-acp--chat-buffer state))
              (cb (emagent-acp-state-cb-status state)))
@@ -166,6 +200,8 @@ layer (see `emagent-chat-set-status')."
 ;;; -------------------------------------------------------------------------
 
 (defun emagent-acp--usage-state (state)
+  
+  "Internal helper for STATE."
   (or (emagent-acp-state-usage state)
       (let ((usage (make-hash-table :test 'eq)))
         (puthash :context-used nil usage)
@@ -191,7 +227,9 @@ Per-turn input/prompt token counts are not context fill."
       (map-elt data 'maxTokens)))
 
 (defun emagent-acp--save-usage-from-response (state emagent-acp-usage)
-  "Update STATE usage from a prompt response usage field."
+  "Update STATE usage from a prompt response usage field.
+
+Arguments: EMAGENT-ACP-USAGE."
   (let ((usage (emagent-acp--usage-state state)))
     (when-let ((total (map-elt emagent-acp-usage 'totalTokens)))
       (map-put! usage :total-tokens total))
@@ -203,7 +241,9 @@ Per-turn input/prompt token counts are not context fill."
     (emagent-acp--refresh-mode-line state)))
 
 (defun emagent-acp--update-usage-from-notification (state emagent-acp-update)
-  "Update STATE usage from a session/update usage_update payload."
+  "Update STATE usage from a session/update usage_update payload.
+
+Arguments: EMAGENT-ACP-UPDATE."
   (let ((usage (emagent-acp--usage-state state)))
     (when-let ((used (emagent-acp--usage-context-used emagent-acp-update)))
       (map-put! usage :context-used used))

@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Watchdog timer, streaming toggles, render scheduling, prompt completion,
@@ -44,12 +64,16 @@
 
 
 (defun emagent-acp--trace (format-string &rest args)
-  "Append a trace line when `emagent-acp-trace' is non-nil."
+  "Append a trace line when `emagent-acp-trace' is non-nil.
+
+Arguments: FORMAT-STRING, ARGS."
   (when emagent-acp-trace
     (apply #'emagent-log (cons (concat "acp: " format-string) args))))
 
 (defun emagent-acp--progress (state message)
-  "Show init stage MESSAGE in the minibuffer and refresh the mode line."
+  "Show init stage MESSAGE in the minibuffer and refresh the mode line.
+
+Arguments: STATE."
   (emagent-acp--notify-user state (format "emagent: %s" message))
   (emagent-acp--refresh-mode-line state))
 
@@ -93,7 +117,9 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
   (setf (emagent-acp-state-prompt-watchdog-timer state) timer)))
 
 (defun emagent-acp--stream-to-buffer-p (state)
-  "Return non-nil when agent chunks may update the chat buffer live."
+  "Return non-nil when agent chunks may update the chat buffer live.
+
+Arguments: STATE."
   (and emagent-acp-stream-to-buffer
        (emagent-acp-state-busy state)
        (not (emagent-acp-state-compress-pending state))
@@ -101,7 +127,9 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
        (not (emagent-acp-state-prompt-finishing state))))
 
 (defun emagent-acp--stream-thought-to-buffer-p (state)
-  "Return non-nil when reasoning may stream into the chat buffer live."
+  "Return non-nil when reasoning may stream into the chat buffer live.
+
+Arguments: STATE."
   (and (memq emagent-acp-thought-progress '(buffer both))
        (emagent-acp-state-busy state)
        (not (emagent-acp-state-compress-pending state))
@@ -116,7 +144,9 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
   (setf (emagent-acp-state-finish-token state) nil))
 
 (defun emagent-acp--schedule-prompt-render (state)
-  "Debounced render of the accumulated prompt into the chat buffer."
+  "Debounced render of the accumulated prompt into the chat buffer.
+
+Arguments: STATE."
   (let ((token (cl-gensym "emagent-finish")))
     (emagent-acp--cancel-prompt-render state)
     (setf (emagent-acp-state-finish-token state) token)
@@ -170,14 +200,16 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
       (emagent-acp-state-permission-queue state)))
 
 (defun emagent-acp--maybe-complete-deferred-prompt (state)
-  "Run a deferred `emagent-acp--complete-prompt' when permissions are clear."
+  "Run a deferred `emagent-acp--complete-prompt' when permissions are clear.
+
+Arguments: STATE."
   (when-let ((response (emagent-acp-state-deferred-complete-response state)))
     (unless (emagent-acp--permission-pending-p state)
       (setf (emagent-acp-state-deferred-complete-response state) nil)
       (emagent-acp--complete-prompt state response))))
 
 (defun emagent-acp--complete-prompt (state response)
-  "Finalize the in-flight prompt for STATE and close the chat response."
+  "Finalize the in-flight prompt for STATE using RESPONSE and close chat."
   (cond
    ((emagent-acp-state-prompt-finalized state)
     (when (emagent-acp-state-busy state)
@@ -215,6 +247,8 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
         (_ nil)))))
 
 (defun emagent-acp--clear-thought-buffer (state)
+  
+  "Internal helper for STATE."
   (setf (emagent-acp-state-thought-buffer state) ""))
 
 (defun emagent-acp--flush-thought-buffer (state)
@@ -226,7 +260,9 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
     (emagent-acp--clear-thought-buffer state)))
 
 (defun emagent-acp--thought-chunk (state text)
-  "Accumulate thought TEXT for display and optional logging."
+  "Accumulate thought TEXT for display and optional logging.
+
+Arguments: STATE."
   (unless (string-empty-p text)
     (emagent-acp--detect-external-refusal-in-text state text)
     (setf (emagent-acp-state-thought-text state)
@@ -251,6 +287,8 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
           (setf (emagent-acp-state-thought-buffer state) pending))))))
 
 (defun emagent-acp--run-reveal (reveal &optional now)
+  
+  "Internal helper for REVEAL and NOW."
   (when reveal
     (if now
         (funcall reveal)
@@ -272,14 +310,18 @@ frame, so permission shortcuts (y/n/…) work when the user is looking at
 the session.  Never pops the buffer into a window or touches other
 frames: with several sessions across frames, stealing a window would
 flip an unrelated frame to this session's project.  Background prompts
-are surfaced by `emagent-chat--notify-inactive-update' instead."
+are surfaced by `emagent-chat--notify-inactive-update' instead.
+
+Arguments: STATE."
   (emagent-acp--reveal-buffer state t)
   (when-let* ((buffer (emagent-acp--chat-buffer state))
               (window (get-buffer-window buffer)))
     (select-window window)))
 
 (defun emagent-acp--fail-connect (state message)
-  "Show MESSAGE, reveal the chat buffer, and stop connecting."
+  "Show MESSAGE, reveal the chat buffer, and stop connecting.
+
+Arguments: STATE."
   (setf (emagent-acp-state-ready state) nil)
   (emagent-acp--notify-user state message)
   (emagent-acp--reveal-buffer state))
@@ -335,8 +377,8 @@ not match prose such as \"network error\" or \"timeout\" that can legitimately
 appear inside a real answer.")
 
 (defun emagent-acp--turn-did-no-work-p (state)
-  "Return non-nil when STATE's turn ran no tool calls and produced little text.
-Such a turn has no side effects, so replaying its prompt is safe."
+  "Return non-nil when STATE's turn did no real work.
+No tool invocations and little text means replaying the prompt is safe."
   (let ((text (string-trim (or (emagent-acp-state-assistant-text state) "")))
         (titles (emagent-acp-state-tool-call-titles state)))
     (and (or (null titles) (zerop (hash-table-count titles)))
@@ -390,6 +432,8 @@ mirroring what a user does by hand."
     (emagent-acp--refresh-mode-line state)))
 
 (cl-defun emagent-acp--send-request (&key state request on-success on-failure)
+  
+  "Internal helper for STATE and REQUEST and ON-SUCCESS and ON-FAILURE."
   (let ((method (map-elt request :method)))
     (emagent-acp--trace "send %s" method)
     (emagent-acp-send-request

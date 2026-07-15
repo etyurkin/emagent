@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Markdown-to-Org conversion pipeline for agent responses.
@@ -49,7 +69,7 @@
    (t tag)))
 
 (defun emagent-chat--table-row-p (line)
-  "Return non-nil when LINE looks like an org/markdown table row."
+  "Return non-nil when LINE resembles an org/markdown table row."
   (let ((trimmed (string-trim line)))
     ;; Require at least two chars so a lone "|" is not both prefix and suffix;
     ;; callers do (substring trimmed 1 -1), which signals on a 1-char string.
@@ -74,7 +94,9 @@
   (concat "|" (mapconcat (lambda (_) "---------") (number-sequence 1 ncols) "+") "|"))
 
 (defun emagent-chat--normalize-table-row (line)
-  "Normalize spacing in a single table row."
+  "Normalize spacing in a single table row.
+
+Arguments: LINE."
   (let* ((trimmed (string-trim line))
          (cells (mapcar #'string-trim (split-string (substring trimmed 1 -1) "|" t))))
     (concat "|" (mapconcat (lambda (cell) (format " %s " cell)) cells "|") "|")))
@@ -103,7 +125,9 @@
           (goto-char (or (org-table-end nil) (point-max))))))))
 
 (defun emagent-chat--convert-markdown-tables (text)
-  "Convert markdown-style pipe tables into org tables."
+  "Convert markdown-style pipe tables into org tables.
+
+Arguments: TEXT."
   (let* ((lines (split-string text "\n"))
          (parts nil)
          (i 0)
@@ -161,7 +185,7 @@ Prose-only transforms applied outside src blocks, so a fenced `arr[i](fn)' or
        result))))
 
 (defun emagent-chat--normalize-response-spacing (text)
-  "Normalize spacing around blocks and tables in agent responses.
+  "Normalize spacing around blocks and tables in TEXT.
 
 Heading conversion lives in `emagent-chat--convert-markdown-headings' and
 link/sentence conversion in `emagent-chat--convert-markdown-prose' (both applied
@@ -346,7 +370,9 @@ inside src blocks are left alone."
     (mapconcat #'identity (nreverse result) "\n")))
 
 (defun emagent-chat--fix-org-src-citations (text)
-  "Rewrite file-citation language tags in org src block headers."
+  "Rewrite file-citation language tags in org src block headers.
+
+Arguments: TEXT."
   (let ((start 0)
         (parts nil))
     (while (string-match "^#\\+BEGIN_SRC +\\([0-9]+:[0-9]+:\\([^ \t\n]+\\)\\)\n" text start)
@@ -362,7 +388,9 @@ inside src blocks are left alone."
     (apply #'concat (nreverse parts))))
 
 (defun emagent-chat--normalize-elisp-src-tags (text)
-  "Rewrite emacs-lisp org src headers to elisp for font-lock."
+  "Rewrite emacs-lisp org src headers to elisp for font-lock.
+
+Arguments: TEXT."
   (replace-regexp-in-string
    "#\\+BEGIN_SRC emacs-lisp\\b"
    "#+BEGIN_SRC elisp"
@@ -384,7 +412,9 @@ inside src blocks are left alone."
 Code fences are converted to src blocks first; the remaining prose transforms
 \(inline backticks, tables, heading/spacing normalization) then run only outside
 those blocks, so a fenced backtick span, `## heading', or table row is never
-rewritten inside code."
+rewritten inside code.
+
+Arguments: TEXT."
   (let* ((text (replace-regexp-in-string "\r\n?" "\n" text))
          (fenced (emagent-chat--normalize-elisp-src-tags
                   (emagent-chat--convert-code-fences

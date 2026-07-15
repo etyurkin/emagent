@@ -5,6 +5,26 @@
 ;; SPDX-License-Identifier: MIT
 ;; Version: 1.2.3
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 ;;
 ;; Validation and security helpers for Emacs Lisp.  Structural editing (tree,
@@ -124,7 +144,9 @@ Return a list of (POS . FORM) or signal with read error string."
         (user-error (error-message-string err)))))
 
 (defun emagent-elisp--validate-content-strict (content &optional path)
-  "Like `emagent-elisp--validate-content' but also byte-compile when enabled."
+  "Like `emagent-elisp--validate-content' but also byte-compile CONTENT.
+
+Arguments: PATH."
   (or (emagent-elisp--validate-content content path)
       (when emagent-elisp-byte-compile-on-check
         (emagent-elisp--byte-compile-content content))))
@@ -149,7 +171,9 @@ Return a list of (POS . FORM) or signal with read error string."
      (t "OK"))))
 
 (defun emagent-elisp-check-file-content (content &optional path)
-  "Validate Elisp file CONTENT.  Return \"OK\" or an error description."
+  "Validate Elisp file CONTENT.  Return \"OK\" or an error description.
+
+Arguments: PATH."
   (let ((err (emagent-elisp--validate-content-strict content path))
         (doc-warn (emagent-elisp--check-docstrings content)))
     (cond
@@ -164,7 +188,7 @@ Return a list of (POS . FORM) or signal with read error string."
 ;; ── Path helpers ──────────────────────────────────────────────────
 
 (defun emagent-elisp-elisp-file-p (path)
-  "Return non-nil when PATH looks like an Emacs Lisp file."
+  "Return non-nil when PATH resembles an Emacs Lisp file."
   (and (stringp path) (string-match-p "\\.el\\'" path)))
 
 (defun emagent-elisp--defun-name-p (form)

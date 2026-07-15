@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; ACP session state hash table, stderr filtering helpers, RSS monitoring
@@ -88,7 +108,9 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
         (string-match-p "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] .*\\[ *\\(info\\|warn\\) *\\]:" line))))
 
 (defun emagent-acp--stderr-notify-p (emagent-acp-error)
-  "Return non-nil when ACP-ERROR should be shown to the user."
+  "Return non-nil when ACP-ERROR should be shown to the user.
+
+Arguments: EMAGENT-ACP-ERROR."
   (let ((message (string-trim (or (map-elt emagent-acp-error 'message) (format "%s" emagent-acp-error)))))
     (cond
      ((string-empty-p message) nil)
@@ -101,15 +123,21 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
         (not (and lines (seq-every-p #'emagent-acp--agent-log-line-p lines))))))))
 
 (defun emagent-acp--log-agent-stderr (message)
+  
+  "Internal helper for MESSAGE."
   (when emagent-log-agent-stderr
     (emagent-log "agent: %s" (string-trim message))))
 
 (defun emagent-acp--session ()
+  
+  "Internal helper."
   (or emagent-acp--session
       (error "No active emagent session for this buffer")))
 
 (defun emagent-acp--agent-rss-mb (state)
-  "Return the agent process RSS in MB via `process-attributes', or nil."
+  "Return the agent process RSS in MB via `process-attributes', or nil.
+
+Arguments: STATE."
   (when-let* ((client (emagent-acp-state-client state))
               (proc (and client (map-elt client :process)))
               ((processp proc))
@@ -216,7 +244,9 @@ Prevents a reconnect or shutdown from leaving repeating/pending timers
   (setq emagent-acp--session nil))
 
 (cl-defun emagent-acp--make-state (&key client chat-buffer on-reveal)
-  "Return a fresh `emagent-acp-state' for a session."
+  "Return a fresh `emagent-acp-state' for a session.
+
+Arguments: CLIENT, CHAT-BUFFER, ON-REVEAL."
   (emagent-acp--state-create :client client
                              :chat-buffer chat-buffer
                              :on-reveal on-reveal))
