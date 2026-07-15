@@ -3,7 +3,13 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
+
 ;; SPDX-License-Identifier: MIT
+
+;;; Commentary:
+
+;; Register emagent lisp/ subdirectories on load-path.
 
 ;;; Code:
 

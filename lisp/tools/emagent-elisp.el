@@ -1,6 +1,7 @@
 ;;; emagent-elisp.el --- Elisp validation helpers for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; SPDX-License-Identifier: MIT
 ;; Version: 1.2.2
 

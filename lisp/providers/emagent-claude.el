@@ -1,8 +1,13 @@
 ;;; emagent-claude.el --- Claude (Agent SDK) ACP provider for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; SPDX-License-Identifier: MIT
 ;; Version: 1.2.2
+
+;;; Commentary:
+
+;; Claude Agent SDK ACP provider configuration.
 
 ;;; Code:
 
@@ -61,7 +66,7 @@ That is the `cdr' of `emagent-claude-acp-command'."
 (cl-defun emagent-claude-make-client (&key context-buffer process-directory)
   "Create an ACP client for Claude using CONTEXT-BUFFER.
 PROCESS-DIRECTORY is passed to `make-process' as the working directory
-(see `emagent-chat--session-directory' / #+EMAGENT_PROJECT)."
+\(see `emagent-chat--session-directory' / #+EMAGENT_PROJECT)."
   (emagent-claude-check-command)
   (emagent-acp-make-client :context-buffer context-buffer
                    :process-directory process-directory

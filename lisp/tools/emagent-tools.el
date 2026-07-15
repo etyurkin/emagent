@@ -1,8 +1,13 @@
 ;;; emagent-tools.el --- Emacs tool handlers for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; SPDX-License-Identifier: MIT
 ;; Version: 1.2.2
+
+;;; Commentary:
+
+;; Tool registry and shared tool-handler helpers.
 
 ;;; Code:
 
