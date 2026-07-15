@@ -23,6 +23,9 @@
 (declare-function emagent-acp--permission-decision-label "emagent-acp-permit")
 (declare-function emagent-acp--tool-call-eval-form "emagent-acp-permit")
 (declare-function emagent-acp--tool-call-edit-block-spec "emagent-acp-permit")
+(declare-function emagent-acp--human-tool-detail-p "emagent-acp-request")
+(declare-function emagent-acp--drain-permission-queue "emagent-acp-request")
+
 
 (defun emagent-acp--tool-call-emagent-tool-p (update)
   "Return non-nil when UPDATE names a tool from emagent's own MCP server.

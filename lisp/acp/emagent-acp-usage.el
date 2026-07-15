@@ -25,7 +25,7 @@
 (declare-function emagent-chat--session-directory "emagent-chat-header")
 (declare-function emagent-acp--permission-pending-p "emagent-acp")
 (declare-function emagent-acp--maybe-complete-deferred-prompt "emagent-acp")
-(declare-function emagent-acp--drain-permission-queue "emagent-acp")
+(declare-function emagent-acp--drain-permission-queue "emagent-acp-request")
 
 ;;; -------------------------------------------------------------------------
 ;;; Public session state accessors (for use by emagent-chat.el)

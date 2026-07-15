@@ -36,10 +36,12 @@
 (declare-function emagent-chat-set-slash-commands "emagent-chat-slash")
 (declare-function emagent-chat--refresh-mode-line "emagent-chat-mode-line")
 (declare-function emagent-chat--spinner-start "emagent-chat-mode-line")
+(declare-function emagent-acp--new-session "emagent-acp-lifecycle")
 
 (defun emagent-acp--notify-user (_state message)
   "Append MESSAGE to `emagent-log-buffer-name'."
   (emagent-log "%s" message))
+
 
 (defun emagent-acp--trace (format-string &rest args)
   "Append a trace line when `emagent-acp-trace' is non-nil."
