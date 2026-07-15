@@ -106,6 +106,27 @@ Runs late on `org-mode-hook' so it overrides user hooks (e.g. org-modern
   (when (derived-mode-p 'emagent-mode)
     (emagent-chat--setup-faces)))
 
+(defun emagent-chat--safe-src-fontify (orig lang start end)
+  "Around advice for `org-src-font-lock-fontify-block'.
+
+`sh-mode' font-lock signals `end-of-buffer' on command substitutions that
+wrap heredocs (`$(cat <<'EOF'...)'), which Org reports as \"Org mode
+fontification error\".  In emagent session buffers (including deferred
+plain-`org-mode' restores), fall back to a plain org-block face so opening
+saved sessions stays quiet."
+  (if (not (or (derived-mode-p 'emagent-mode)
+               (bound-and-true-p emagent--session-pending)
+               (emagent-chat--session-buffer-p)))
+      (funcall orig lang start end)
+    (condition-case nil
+        (funcall orig lang start end)
+      (error
+       (add-text-properties
+        start end
+        '(face org-block src-block t
+          font-lock-fontified t fontified t font-lock-multiline t))
+       nil))))
+
 ;;;###autoload
 (define-derived-mode emagent-mode org-mode "Emagent"
   "Major mode for emagent chat scratch buffers.
@@ -298,6 +319,11 @@ working inside session buffers."
                           'org-display-inline-images)
   (advice-add 'org-display-inline-images :around
               #'emagent-chat--suppress-inline-images-in-session-buffers))
+
+(unless (advice-member-p #'emagent-chat--safe-src-fontify
+                          'org-src-font-lock-fontify-block)
+  (advice-add 'org-src-font-lock-fontify-block :around
+              #'emagent-chat--safe-src-fontify))
 
 (add-hook 'org-mode-hook #'emagent-chat--setup-buffer-display 110 t)
 (add-hook 'emagent-mode-hook #'emagent-chat--setup-faces 100 t)

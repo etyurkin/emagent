@@ -738,7 +738,10 @@ Arguments: LABEL."
   "Return an Org src block for CODE in LANG.
 A decision / (Emacs) ANNOTATION is rendered as a leading comment line inside
 the block (using LANG's comment syntax) so it stays attached to the command
-without leaving a dangling line beneath the block."
+without leaving a dangling line beneath the block.
+
+Body lines that look like Org src delimiters are comma-escaped so a command
+that documents `#+END_SRC' cannot close the generated block early."
   (let* ((lang (or lang "text"))
          (note (when (and annotation (not (string-empty-p annotation)))
                  (concat (emagent-chat--src-comment-prefix lang)
@@ -746,7 +749,7 @@ without leaving a dangling line beneath the block."
     (format "#+begin_src %s\n%s%s\n#+end_src"
             lang
             (or note "")
-            (string-trim-right code))))
+            (emagent-chat--escape-src-body (string-trim-right code)))))
 
 (defun emagent-chat--format-permission-line (question)
   "Return a permission question line for QUESTION."
