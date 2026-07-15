@@ -109,6 +109,18 @@ streamed chunks or tool-call labels, then logs to `emagent-log-buffer-name'."
   :type 'boolean
   :group 'emagent)
 
+(defcustom emagent-acp-honor-schedule-wakeup t
+  "When non-nil, honor the agent's `ScheduleWakeup' tool calls.
+
+Agents pace long-running loops by calling ScheduleWakeup with a delay and
+a prompt, ending their turn and expecting the client to re-invoke them
+after the delay.  When enabled, emagent arms a timer when the turn
+completes and sends the wakeup prompt as a new user turn; a manual prompt
+sent in the meantime cancels the pending wakeup.  When nil, ScheduleWakeup
+calls render but nothing fires."
+  :type 'boolean
+  :group 'emagent)
+
 (defcustom emagent-acp-stream-to-buffer nil
   "When non-nil, stream agent chunks into the chat buffer while a prompt is busy.
 

@@ -220,6 +220,19 @@ in-flight turn (keeping any partial response), then sends =btw, <your
 message>= as a new prompt — the same pattern Cursor and Claude use for
 mid-turn steering.
 
+** Self-paced agent loops (=ScheduleWakeup=)
+
+Agents that run long, self-checking loops pace themselves by calling the
+=ScheduleWakeup= tool: they end a turn with a delay and a follow-up prompt,
+expecting the client to re-invoke them once the delay elapses.  Emagent honors
+this — when a turn that called =ScheduleWakeup= completes, it arms a timer and,
+on expiry, sends the wakeup prompt as a new user turn (recorded in the
+transcript like any other prompt).  Sending your own prompt in the meantime
+supersedes the pending wakeup, and a =ScheduleWakeup= =stop= call cancels it.
+The delay is clamped to 10–3600 seconds.  Set
+=emagent-acp-honor-schedule-wakeup= to =nil= to disable (the tool call still
+renders; nothing fires).
+
 ** Cursor notes
 
 Before first use, authenticate: =cursor-agent login= in your terminal.  Without
@@ -343,6 +356,7 @@ Toggle with =emagent-trust-enabled=.
 | =emagent-acp-extra-mcp-config-file=          | ="~/.claude.json"= | Forward MCP servers from this file to the agent                |
 | =emagent-oauth-auto-browse-url=              | =nil=          | Auto-open OAuth authorize URLs in a browser                         |
 | =emagent-acp-watchdog-timeout=               | =300=          | Seconds of silence before aborting a stalled prompt                 |
+| =emagent-acp-honor-schedule-wakeup=          | =t=            | Re-invoke the agent when it calls =ScheduleWakeup= to pace a loop     |
 | =emagent-chat-inactive-bell=                 | =t=            | Ring bell when agent finishes while Emacs is not focused            |
 | =emagent-chat-inactive-bell-cooldown=        | =1.0=          | Minimum seconds between inactive bells                              |
 | =emagent-chat-inactive-osx-notification=     | =nil=          | Send macOS notification when agent finishes inactive                |

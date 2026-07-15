@@ -660,6 +660,98 @@ Continuation uses `run-at-time'; pump those timers iteratively."
     (should (string= (format "Allow compile?\n%s" cmd)
                      (emagent-acp--permission-prompt-text request)))))
 
+;;;; Agent-scheduled wakeup (ScheduleWakeup)
+
+(defun emagent-acp-session-test--wakeup-update (args &optional title)
+  "Return a ScheduleWakeup tool-call update with ARGS as rawInput."
+  (let ((raw (make-hash-table :test 'equal)))
+    (dolist (pair args)
+      (puthash (car pair) (cdr pair) raw))
+    `((toolCallId . "toolu_wakeup")
+      (title . ,(or title "ScheduleWakeup"))
+      (status . "completed")
+      (rawInput . ,raw))))
+
+(ert-deftest emagent-acp-session-test-wakeup-captured-and-armed ()
+  "A ScheduleWakeup call is captured and armed when the turn completes."
+  (let ((state (emagent-acp--state-create))
+        (emagent-acp-honor-schedule-wakeup t))
+    (emagent-acp--capture-schedule-wakeup
+     state (emagent-acp-session-test--wakeup-update
+            '(("delaySeconds" . 120) ("reason" . "waiting on test run")
+              ("prompt" . "check the run again"))))
+    (let ((request (emagent-acp-state-wakeup-request state)))
+      (should request)
+      (should (= 120 (plist-get request :delay)))
+      (should (equal "check the run again" (plist-get request :prompt))))
+    (unwind-protect
+        (progn
+          (emagent-acp--arm-wakeup state)
+          (should (timerp (emagent-acp-state-wakeup-timer state)))
+          (should-not (emagent-acp-state-wakeup-request state)))
+      (emagent-acp--cancel-wakeup state))))
+
+(ert-deftest emagent-acp-session-test-wakeup-stop-cancels ()
+  "A ScheduleWakeup stop call cancels the pending request and timer."
+  (let ((state (emagent-acp--state-create))
+        (emagent-acp-honor-schedule-wakeup t))
+    (emagent-acp--capture-schedule-wakeup
+     state (emagent-acp-session-test--wakeup-update '(("delaySeconds" . 60))))
+    (emagent-acp--arm-wakeup state)
+    (emagent-acp--capture-schedule-wakeup
+     state (emagent-acp-session-test--wakeup-update '(("stop" . t))))
+    (should-not (emagent-acp-state-wakeup-timer state))
+    (should-not (emagent-acp-state-wakeup-request state))))
+
+(ert-deftest emagent-acp-session-test-wakeup-superseded-by-new-turn ()
+  "A manual prompt (turn begin) cancels any pending or armed wakeup."
+  (let ((state (emagent-acp--state-create))
+        (emagent-acp-honor-schedule-wakeup t))
+    (emagent-acp--capture-schedule-wakeup
+     state (emagent-acp-session-test--wakeup-update '(("delaySeconds" . 60))))
+    (emagent-acp--arm-wakeup state)
+    (should (timerp (emagent-acp-state-wakeup-timer state)))
+    (emagent-acp--turn-begin state)
+    (should-not (emagent-acp-state-wakeup-timer state))
+    (should-not (emagent-acp-state-wakeup-request state))))
+
+(ert-deftest emagent-acp-session-test-wakeup-disabled ()
+  "With `emagent-acp-honor-schedule-wakeup' nil, nothing is captured."
+  (let ((state (emagent-acp--state-create))
+        (emagent-acp-honor-schedule-wakeup nil))
+    (emagent-acp--capture-schedule-wakeup
+     state (emagent-acp-session-test--wakeup-update '(("delaySeconds" . 60))))
+    (should-not (emagent-acp-state-wakeup-request state))))
+
+(ert-deftest emagent-acp-session-test-wakeup-fire-sends-prompt ()
+  "Firing a wakeup inserts a user turn and calls the buffer's send callback."
+  (let ((state (emagent-acp--state-create))
+        (sent nil))
+    (with-temp-buffer
+      (setq-local emagent-chat--on-send (lambda (text) (setq sent text)))
+      (emagent-test--with-mocks
+          (((symbol-function 'emagent-acp--chat-buffer)
+            (lambda (_) (current-buffer)))
+           ((symbol-function 'emagent-chat--insert-user-heading-with-text)
+            (lambda (_text) (point)))
+           ((symbol-function 'emagent-chat--begin-response)
+            (lambda (&rest _) nil)))
+        (emagent-acp--fire-wakeup state "check the run again")
+        (should (equal "check the run again" sent))))))
+
+(ert-deftest emagent-acp-session-test-wakeup-fire-skips-when-busy ()
+  "Firing a wakeup does nothing when a prompt is already running."
+  (let ((state (emagent-acp--state-create))
+        (sent nil))
+    (setf (emagent-acp-state-busy state) t)
+    (with-temp-buffer
+      (setq-local emagent-chat--on-send (lambda (text) (setq sent text)))
+      (emagent-test--with-mocks
+          (((symbol-function 'emagent-acp--chat-buffer)
+            (lambda (_) (current-buffer))))
+        (emagent-acp--fire-wakeup state "should not send")
+        (should-not sent)))))
+
 ;;;; Tool-call display
 
 (ert-deftest emagent-acp-session-test-edit-patch-string-keeps-blank-lines ()
