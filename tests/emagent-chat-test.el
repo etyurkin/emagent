@@ -580,6 +580,34 @@ session present (the UI no longer pulls from the ACP layer)."
             (should (string-match-p "→ Shell" text))
             (should-not (string-match-p "=/tmp=" text)))))))))
 
+(ert-deftest emagent-chat-test-tool-call-heredoc-in-command-subst-keeps-sh ()
+  "Shell `$()' wrapping a heredoc still uses lang `sh' (keep highlighting).
+
+`sh-mode' font-lock can signal `end-of-buffer' on that pattern; emagent
+swallows it via `emagent-chat--safe-src-fontify' instead of demoting lang."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-show-tool-call
+           "id-gh" "Shell: gh pr create" "sh"
+           (concat "gh pr create --body \"$(cat <<'EOF'\n"
+                   "## Problem\nuse `null` here\n"
+                   "EOF\n)\""))
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "#\\+begin_src sh" text))
+            (should (string-match-p "gh pr create" text)))))))))
+
+(ert-deftest emagent-chat-test-format-tool-block-escapes-src-delimiters ()
+  (let ((out (emagent-chat--format-tool-block
+              "#+END_SRC\necho hi" "sh" nil)))
+    (should (string-match-p ",#\\+END_SRC" out))
+    (should (string-match-p "#\\+begin_src sh" out))))
+
 (ert-deftest emagent-chat-test-tool-call-multiline-updates-in-place ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
