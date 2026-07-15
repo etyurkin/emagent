@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Send prompts and manage in-flight ACP requests.
@@ -84,7 +104,9 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
           (nreverse images))))
 
 (defun emagent-acp--abort-compress-empty (state)
-  "Close an empty /compress request with an error in the chat buffer."
+  "Close an empty /compress request with an error in the chat buffer.
+
+Arguments: STATE."
   (emagent-acp--clear-prompt-watchdog state)
   (emagent-acp--cancel-prompt-render state)
   (setf (emagent-acp-state-busy state) nil)
@@ -103,7 +125,9 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
 
 REASON is a short human-readable phrase describing why the retry fires; it is
 shown to the user together with the attempt count.  The GEN guard prevents a
-stale retry from firing after the prompt was superseded or interrupted."
+stale retry from firing after the prompt was superseded or interrupted.
+
+Arguments: STATE, SESSION-ID, BLOCKS, IMAGES."
   (let* ((delay (emagent-acp--prompt-retry-delay attempt))
          (next (1+ attempt)))
     (setf (emagent-acp-state-prompt-retry-gen state) gen)
@@ -149,7 +173,9 @@ open response block is kept, so the continued output renders into it; the
 transient error itself is only logged (see `emagent-acp--log-transient-error'),
 never rendered into the chat buffer.  REASON is logged with the attempt count;
 the `:continue-attempts' counter bounds the number of resumes and the GEN guard
-cancels a stale resume after an interrupt or new prompt."
+cancels a stale resume after an interrupt or new prompt.
+
+Arguments: STATE, SESSION-ID, IMAGES."
   (let* ((attempt (1+ (or (emagent-acp-state-continue-attempts state) 0)))
          (delay (emagent-acp--prompt-retry-delay attempt)))
     (setf (emagent-acp-state-continue-attempts state) attempt)
@@ -187,7 +213,9 @@ and whether the turn already did work:
   `emagent-log-buffer-name' rather than rendered into the chat buffer.
 
 GEN guards against a stale retry firing after the prompt was superseded or
-interrupted."
+interrupted.
+
+Arguments: STATE, SESSION-ID, BLOCKS, IMAGES."
   (emagent-acp--send-request
    :state state
    :request (emagent-acp-make-session-prompt-request

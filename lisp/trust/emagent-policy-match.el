@@ -7,6 +7,26 @@
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; Assisted-by: Cursor:claude-sonnet-4.6
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Tokenizes shell commands and evaluates declarative :match specs from
@@ -58,9 +78,10 @@ that is dropped."
 (defconst emagent-policy-match--prefix-wrappers
   '("sudo" "doas" "env" "nice" "nohup" "setsid" "stdbuf" "command" "builtin"
     "eval" "exec")
-  "Wrappers that run the remaining words as a command; the wrapper word (and, for
-`env', leading VAR=VALUE assignments) is stripped and the rest re-inspected.
-`eval'/`exec' work because the argument is unquoted by `--words' and rejoined.")
+  "List wrapper words that run the remaining words as a command.
+The wrapper word (and for `env', leading VAR=VALUE assignments) is stripped
+and the rest re-inspected.  `eval'/`exec' work because the argument is
+unquoted by `--words' and rejoined.")
 
 (defconst emagent-policy-match--xargs-value-flags
   '("-n" "-I" "-i" "-P" "-s" "-L" "-l" "-d" "-E" "-a" "-R" "-S")
@@ -154,7 +175,9 @@ substitutions ($(...) and `...`) are also decomposed.  DEPTH bounds recursion."
               subs))))
 
 (defun emagent-policy-match--argv-index-p (index expected words)
-  "Return non-nil when the INDEXth word (1-based) equals EXPECTED."
+  "Return non-nil when the INDEXth word (1-based) equals EXPECTED.
+
+Arguments: INDEX, WORDS."
   (let ((word (nth (1- index) words)))
     (and (stringp word) (string= word expected))))
 
@@ -167,7 +190,7 @@ substitutions ($(...) and `...`) are also decomposed.  DEPTH bounds recursion."
   (cl-loop for flag in flags thereis (emagent-policy-match--flag-word-p flag words)))
 
 (defun emagent-policy-match--combined-short-flags-p (flags words)
-  "Return non-nil when WORDS contains a token matching FLAGS combined (e.g. \"-rf\")."
+  "Return non-nil when WORDS include a token matching FLAGS combined (e.g. \"-rf\")."
   (and (stringp flags)
        (cl-loop for word in words
                 thereis (and (string-prefix-p "-" word)
@@ -179,7 +202,9 @@ substitutions ($(...) and `...`) are also decomposed.  DEPTH bounds recursion."
   (string-match-p "curl[[:space:]]+.*|.*sh\\b" (emagent-policy-match--strip-quoted command)))
 
 (defun emagent-policy-match--spec-p (key value command words stripped)
-  "Return non-nil when one :match spec KEY VALUE holds for COMMAND."
+  "Return non-nil when one :match spec KEY VALUE is satisfied for COMMAND.
+
+Arguments: WORDS, STRIPPED."
   (pcase key
     ('argv-first
      (and (consp words) (string= (car words) value)))
@@ -245,7 +270,7 @@ substitutions ($(...) and `...`) are also decomposed.  DEPTH bounds recursion."
     (delete-dups found)))
 
 (defun emagent-policy-match--elisp-spec-p (key value parsed)
-  "Return non-nil when elisp :match spec KEY VALUE holds for PARSED form."
+  "Return non-nil when elisp :match spec KEY VALUE is satisfied for PARSED form."
   (pcase key
     ('symbol
      (emagent-policy-match--symbols-in-form parsed (list value)))
@@ -290,7 +315,7 @@ substitutions ($(...) and `...`) are also decomposed.  DEPTH bounds recursion."
       (string-match-p (format "[[:space:]]from[[:space:]]+%s\\>" module) stripped)))
 
 (defun emagent-policy-match--python-spec-p (key value stripped)
-  "Return non-nil when python :match spec KEY VALUE holds for STRIPPED code."
+  "Return non-nil when python :match spec KEY VALUE is satisfied for STRIPPED code."
   (pcase key
     ('regexp
      (and (stringp value) (string-match-p value stripped)))

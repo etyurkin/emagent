@@ -5,6 +5,26 @@
 ;; SPDX-License-Identifier: MIT
 ;; Version: 1.2.3
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Org scratch buffer UI and session buffer helpers.
@@ -232,7 +252,9 @@ pastes are not mistaken for it."
            (string-remove-prefix "//" path)))
 
 (defun emagent-chat--model-link-help-echo (_window object position)
-  "Tooltip for a `/model' link: the `agent/model' target."
+  "Tooltip for a `/model' link: the `agent/model' target.
+
+Arguments: OBJECT, POSITION."
   (with-current-buffer (if (bufferp object) object (current-buffer))
     (save-excursion
       (goto-char position)
@@ -257,18 +279,18 @@ pastes are not mistaken for it."
 ;; thin compatibility wrappers.
 
 (defface emagent-tool-detail
-  '((t (:inherit fixed-pitch :slant normal)))
+  '((t (:inherit fixed-pitch)))
   "Face for paths and commands on tool-call lines."
   :group 'emagent-chat)
 
 (defface emagent-tool-permission-decision
-  '((t (:inherit shadow :slant normal)))
+  '((t (:inherit shadow)))
   "Face for the permission decision suffix on tool-call lines.
 Used for the trailing (Allow: Session) / (Denied) annotation."
   :group 'emagent-chat)
 
 (defface emagent-permission-prompt
-  '((t (:inherit font-lock-warning-face :weight bold)))
+  '((t (:inherit font-lock-warning-face)))
   "Face for the permission question line in the Thinking block."
   :group 'emagent-chat)
 
@@ -537,7 +559,7 @@ saved #+EMAGENT_MODEL."
   (emagent-chat--refresh-mode-line))
 
 (defun emagent-chat--window-at-bottom-p (window)
-  "Return non-nil when WINDOW shows the end of the current buffer."
+  "Return non-nil when WINDOW displays the end of the current buffer."
   (and window (window-live-p window)
        (with-selected-window window
          (pos-visible-in-window-p (point-max) nil t))))
@@ -551,7 +573,7 @@ saved #+EMAGENT_MODEL."
   "Non-nil when Emacs currently has OS-level input focus.")
 
 (defun emagent-chat--sync-focus-state ()
-  "Update `emagent-chat--emacs-focused-p' from selected-frame focus."
+  "Update `emagent-chat--emacs-focused-p' from `selected-frame' focus."
   (setq emagent-chat--emacs-focused-p
         (if (fboundp 'frame-focus-state)
             (frame-focus-state)
@@ -601,7 +623,7 @@ ignored so chat rendering never stalls on OS notifications."
         (error nil)))))
 
 (defun emagent-chat--notify-inactive-update ()
-  "Emit throttled attention notifications for background permission prompts."
+  "Emit throttled attention notifications for background permission dialogue."
   (when (emagent-chat--inactive-attention-needed-p)
     (let ((now (float-time)))
       (when (>= (- now emagent-chat--last-inactive-bell-time)
@@ -653,7 +675,7 @@ after focus moves elsewhere."
     (force-mode-line-update)))
 
 (defun emagent-chat--window-configuration-change (&optional _frames)
-  "Flush deferred UI work and refresh mode lines when focus changes."
+  "Flush deferred UI work and refresh mode lines on focus change."
   (dolist (buf (buffer-list))
     (when (buffer-live-p buf)
       (with-current-buffer buf

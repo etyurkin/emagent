@@ -7,10 +7,30 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Tool call detail extraction, normalization, display helpers, and
-;; display filtering. Pure data processing with no session mutation.
+;; display filtering.  Pure data processing with no session mutation.
 
 ;;; Code:
 
@@ -47,7 +67,7 @@ because generic names like `grep' collide with agent-native tools."
              t))))
 
 (defun emagent-acp--tool-call-elisp-prin1-p (value)
-  "Return non-nil when VALUE looks like a printed Elisp object."
+  "Return non-nil when VALUE resembles a printed Elisp object."
   (and (stringp value)
        (string-match-p "\\`#s(" (string-trim value))))
 
@@ -59,7 +79,9 @@ because generic names like `grep' collide with agent-native tools."
              return (string-trim (match-string 1 raw)))))
 
 (defun emagent-acp--tool-call-raw-input-empty-p (raw)
-  "Return non-nil when tool-call rawInput carries no usable parameters."
+  "Return non-nil when tool-call rawInput carries no usable parameters.
+
+Arguments: RAW."
   (or (null raw)
       (emagent-acp--tool-call-elisp-prin1-p raw)
       (and (stringp raw)
@@ -88,12 +110,16 @@ because generic names like `grep' collide with agent-native tools."
                                (cons 'status v)))))))
 
 (defun emagent-acp--ingest-tool-call-request (state tool-call)
-  "Merge TOOL-CALL from session/request_permission and refresh display."
+  "Merge TOOL-CALL from session/request_permission and refresh display.
+
+Arguments: STATE."
   (when-let ((update (emagent-acp--tool-call-update-from-request tool-call)))
     (emagent-acp--on-tool-call state update)))
 
 (defun emagent-acp--emit-tool-call-display (state id kind merged label status)
-  "Push TOOL-CALL LABEL to the chat buffer and update session UI."
+  "Push TOOL-CALL LABEL to the chat buffer and update session UI.
+
+Arguments: STATE, ID, KIND, MERGED, STATUS."
   (let* ((labels (emagent-acp-state-tool-call-labels state))
          (prev (and id labels (gethash id labels)))
          (decision (and id (when-let ((d (emagent-acp-state-tool-call-decisions state)))
@@ -371,9 +397,10 @@ commands."
 (defconst emagent-acp--shell-tool-names
   '("grep" "rg" "ripgrep" "ag" "cat" "ls" "find" "fd" "sed" "awk"
     "head" "tail")
-  "CLI utility names that, when used as a structured tool title, render as a
-reconstructed `sh' command (e.g. grep PATTERN).  Kept deliberately narrow so
-structured file read/write/search tools are never mistaken for shell commands.")
+  "List CLI utility names treated as structured shell tools.
+When used as a structured tool title, render as a reconstructed `sh'
+command (e.g. grep PATTERN).  Kept deliberately narrow so structured file
+read/write/search tools are never mistaken for shell commands.")
 
 (defun emagent-acp--tool-call-cli-tool (update)
   "Return the CLI command word (grep, cat, ...) named by UPDATE's title, or nil.
@@ -404,7 +431,7 @@ in the order they should appear after it, so e.g. grep renders both its
 pattern and path rather than a single field.")
 
 (defun emagent-acp--tool-call-display-quote (value)
-  "Wrap VALUE in double quotes for shell-command display when it needs quoting.
+  "Wrap VALUE in double quotes for `shell-command' display when needed.
 Only embedded double quotes are escaped; regexp backslashes are preserved so
 the displayed pattern matches what the agent actually searched for."
   (if (and (stringp value)
@@ -490,11 +517,13 @@ such as file paths stay as compact arrow lines."
            (not (member trimmed emagent-acp--tool-call-weak-details))))))
 
 (defun emagent-acp--tool-call-generic-title-p (state title)
-  "Return non-nil when TITLE is too generic to show without detail."
+  "Return non-nil when TITLE is too generic to show without detail.
+
+Arguments: STATE."
   (emagent-acp--provider-generic-title-p state title))
 
 (defun emagent-acp--tool-call-redundant-detail-p (title detail)
-  "Return non-nil when DETAIL adds nothing beyond generic TITLE."
+  "Return non-nil when DETAIL provides nothing beyond generic TITLE."
   (when (and (stringp title) (stringp detail))
     (let* ((t0 (downcase (string-trim title)))
            (d0 (downcase (string-trim detail)))
@@ -514,7 +543,9 @@ such as file paths stay as compact arrow lines."
                (string-match-p (regexp-quote basename) t0))))))
 
 (defun emagent-acp--tool-call-displayable-p (state update)
-  "Return non-nil when UPDATE should appear in the Thinking block."
+  "Return non-nil when UPDATE should appear in the Thinking block.
+
+Arguments: STATE."
   (let* ((title (string-trim (or (map-elt update 'title) "")))
          (detail (emagent-acp--tool-call-detail update)))
     (cond
@@ -571,7 +602,9 @@ such as file paths stay as compact arrow lines."
     merged))
 
 (defun emagent-acp--on-tool-call (state update)
-  "Display or refresh a tool-call line from ACP UPDATE."
+  "Display or refresh a tool-call line from ACP UPDATE.
+
+Arguments: STATE."
   (unless (emagent-acp-state-replaying-history state)
     (let* ((update (emagent-acp--provider-enrich-tool-call state update))
            (id (map-elt update 'toolCallId))

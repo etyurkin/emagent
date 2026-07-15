@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Detecting and reporting when the agent binary is a non-emagent gateway
@@ -23,7 +43,9 @@
 (require 'emagent-acp-provider)
 
 (defun emagent-acp--agent-launch-string (state)
-  "Return the agent argv as a single shell-like string, or nil."
+  "Return the agent argv as a single shell-like string, or nil.
+
+Arguments: STATE."
   (when-let ((client (emagent-acp-state-client state))
              (cmd (map-elt client :command)))
     (string-trim
@@ -32,7 +54,7 @@
                 " "))))
 
 (defun emagent-acp--external-refusal-text-p (text)
-  "Return non-nil when TEXT looks like an out-of-band tool refusal message."
+  "Return non-nil when TEXT resembles an out-of-band tool refusal message."
   (let ((s (downcase text)))
     (and (not (string-empty-p s))
          (or (string-search "user refused permission" s)
@@ -47,7 +69,9 @@
               (cons reason (emagent-acp-state-external-tool-gate-reasons state)))))
 
 (defun emagent-acp--infer-external-tool-gate-from-agent (state)
-  "Infer likely SDK-side tool gates from the agent executable (see defcustom)."
+  "Infer likely SDK-side tool gates from the agent executable (see defcustom).
+
+Arguments: STATE."
   (when emagent-acp-external-tool-gate-hints
     (when-let ((reason (emagent-acp--provider-external-gate-reason state)))
       (emagent-acp--external-tool-gate-add state reason))))
@@ -78,7 +102,9 @@
       (mapconcat #'identity (nreverse parts) "  "))))
 
 (defun emagent-acp--maybe-log-external-tool-gate-proactive (state)
-  "Log a one-time proactive hint after `initialize' when we inferred SDK gates."
+  "Log a one-time proactive hint after `initialize' when we inferred SDK gates.
+
+Arguments: STATE."
   (when emagent-acp-external-tool-gate-hints
     (unless (emagent-acp-state-external-tool-gate-logged state)
       (when-let ((reasons (emagent-acp-state-external-tool-gate-reasons state))
@@ -87,7 +113,9 @@
         (emagent-log "emagent: external tool permission hint — %s" msg)))))
 
 (defun emagent-acp--infer-external-tool-gate-from-initialize-response (state response)
-  "If RESPONSE `agentCapabilities' mention permission-like keys, record a hint."
+  "If RESPONSE `agentCapabilities' mention permission-like keys, record a hint.
+
+Arguments: STATE."
   (when emagent-acp-external-tool-gate-hints
     (when-let ((caps (map-elt response 'agentCapabilities)))
       (when (listp caps)
@@ -101,7 +129,9 @@
             (emagent-acp--external-tool-gate-add state 'agent-capability-metadata)))))))
 
 (defun emagent-acp--detect-external-refusal-in-text (state text)
-  "If TEXT looks like a tool refusal, record it and maybe log once."
+  "If TEXT resembles a tool refusal, record it and maybe log once.
+
+Arguments: STATE."
   (when (and emagent-acp-external-tool-gate-hints
              (emagent-acp--external-refusal-text-p text))
     (emagent-acp--external-tool-gate-add state 'observed-refusal-in-stream)

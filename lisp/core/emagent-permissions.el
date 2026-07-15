@@ -7,6 +7,26 @@
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; Assisted-by: Cursor:claude-sonnet-4.6
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Persists global, session, and project permission choices under
@@ -47,14 +67,20 @@ Layout:
   (replace-regexp-in-string "[^a-zA-Z0-9._-]+" "_" name))
 
 (defun emagent-permissions--global-file ()
+  
+  "Internal helper."
   (expand-file-name "global.json" emagent-permissions-directory))
 
 (defun emagent-permissions--session-file (session-id)
+  
+  "Internal helper for SESSION-ID."
   (expand-file-name
    (format "%s.json" (emagent-permissions--safe-filename session-id))
    (emagent-permissions--ensure-directory "sessions")))
 
 (defun emagent-permissions--project-file (directory)
+  
+  "Internal helper for DIRECTORY."
   (when directory
     (let ((norm (emagent-trust--normalize-dir directory)))
       (expand-file-name
@@ -62,21 +88,31 @@ Layout:
        (emagent-permissions--ensure-directory "projects")))))
 
 (defun emagent-permissions--invalidate (path)
+  
+  "Internal helper for PATH."
   (when path (remhash path emagent-permissions--cache)))
 
 (defun emagent-permissions--file-mtime (path)
+  
+  "Internal helper for PATH."
   (when (file-readable-p path)
     (file-attribute-modification-time (file-attributes path))))
 
 (defun emagent-permissions--read-json (path)
+  
+  "Internal helper for PATH."
   (or (emagent-trust--json-read-file path) nil))
 
 (defun emagent-permissions--write-json (path object)
+  
+  "Internal helper for PATH and OBJECT."
   (make-directory emagent-permissions-directory t)
   (emagent-trust--json-write-file object path)
   (emagent-permissions--invalidate path))
 
 (defun emagent-permissions--cached (path reader)
+  
+  "Internal helper for PATH and READER."
   (let ((mtime (emagent-permissions--file-mtime path)))
     (if-let ((entry (gethash path emagent-permissions--cache)))
         (if (equal (car entry) mtime)
@@ -89,22 +125,32 @@ Layout:
         data))))
 
 (defun emagent-permissions--vector-to-list (value)
+  
+  "Internal helper for VALUE."
   (cond
    ((vectorp value) (append value nil))
    ((listp value) value)
    (t nil)))
 
 (defun emagent-permissions--fingerprints (data)
+  
+  "Internal helper for DATA."
   (emagent-permissions--vector-to-list (cdr (assoc "fingerprints" data))))
 
 (defun emagent-permissions--tools (data)
+  
+  "Internal helper for DATA."
   (mapcar #'intern (emagent-permissions--vector-to-list (cdr (assoc "tools" data)))))
 
 (defun emagent-permissions--auto-approve-p (data)
+  
+  "Internal helper for DATA."
   (let ((value (cdr (assoc "autoApprove" data))))
     (and value (not (eq value :json-false)) (not (eq value :false)))))
 
 (defun emagent-permissions--maybe-migrate-legacy-global ()
+  
+  "Internal helper."
   (let* ((legacy (expand-file-name "allowed-permissions" emagent-permissions-directory))
          (global (emagent-permissions--global-file)))
     (when (and (file-readable-p legacy) (not (file-readable-p global)))
@@ -118,17 +164,23 @@ Layout:
          global `((fingerprints . ,(vconcat (delete-dups fingerprints)))))))))
 
 (defun emagent-permissions--read-global-data (path)
+  
+  "Internal helper for PATH."
   (emagent-permissions--maybe-migrate-legacy-global)
   (or (emagent-permissions--read-json path)
       '((fingerprints . []))))
 
 (defun emagent-permissions--read-session-data (session-id path)
+  
+  "Internal helper for SESSION-ID and PATH."
   (or (emagent-permissions--read-json path)
       `((sessionId . ,session-id)
         (fingerprints . [])
         (autoApprove . :json-false))))
 
 (defun emagent-permissions--read-project-data (directory path)
+  
+  "Internal helper for DIRECTORY and PATH."
   (or (emagent-permissions--read-json path)
       `((directory . ,(emagent-trust--normalize-dir directory))
         (fingerprints . [])

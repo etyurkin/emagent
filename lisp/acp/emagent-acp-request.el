@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Handles session/request_permission ACP method: display, user interaction,
@@ -62,7 +82,9 @@
           (emagent-acp--tool-call-raw-input-detail (map-elt tool-call 'rawInput))))))
 
 (defun emagent-acp--permission-question-line (emagent-acp-request)
-  "Return the command or path to show on the permission ? line."
+  "Return the command or path to show on the permission ? line.
+
+Arguments: EMAGENT-ACP-REQUEST."
   (let* ((tool-call (map-nested-elt emagent-acp-request '(params toolCall)))
          (detail (and tool-call (emagent-acp--tool-call-detail-from-tool-call tool-call)))
          (title (emagent-acp--permission-prompt-title emagent-acp-request))
@@ -80,14 +102,14 @@
      (t "Permission request"))))
 
 (defun emagent-acp--permission-prompt-title (emagent-acp-request)
-  "Return the primary permission question line from EMagent-ACP-REQUEST."
+  "Return the primary permission question line from EMAGENT-ACP-REQUEST."
   (when-let ((raw (or (map-nested-elt emagent-acp-request '(params title))
                        (map-nested-elt emagent-acp-request '(params toolCall title))
                        "Permission request")))
     (car (split-string raw "\n" t))))
 
 (defun emagent-acp--permission-prompt-text (emagent-acp-request)
-  "Return user-facing permission prompt text for EMagent-ACP-REQUEST."
+  "Return user-facing permission prompt text for EMAGENT-ACP-REQUEST."
   (let* ((title (emagent-acp--permission-prompt-title emagent-acp-request))
          (tool-call (map-nested-elt emagent-acp-request '(params toolCall)))
          (detail (emagent-acp--tool-call-detail-from-tool-call tool-call)))
@@ -181,7 +203,9 @@ non-blockingly and returns; ON-COMPLETE is called after the user responds."
 (defun emagent-acp--cancel-permission-request (state request)
   "Reply `cancelled' to permission REQUEST so the waiting agent does not hang.
 Used when a request is abandoned by an error, interrupt, or teardown rather
-than by a user decision."
+than by a user decision.
+
+Arguments: STATE."
   (when-let ((request-id (map-elt request 'id)))
     (ignore-errors
       (emagent-acp-send-response
@@ -193,7 +217,9 @@ than by a user decision."
   "Reply `cancelled' to every queued permission request, then clear the queue.
 Leaves `:permission-busy' untouched: an in-flight interactive prompt owns its
 own response.  Call from interrupt/teardown so abandoned requests never leave
-the agent blocked."
+the agent blocked.
+
+Arguments: STATE."
   (dolist (request (emagent-acp-state-permission-queue state))
     (emagent-acp--cancel-permission-request state request))
   (setf (emagent-acp-state-permission-queue state) nil))
@@ -203,7 +229,9 @@ the agent blocked."
 
 For auto-deny/auto-approve: synchronous.  For interactive prompts: inserts
 the dialog non-blockingly and returns; the response is sent from the button
-callback when the user decides."
+callback when the user decides.
+
+Arguments: STATE."
   (if (and (emagent-acp-state-permission-queue state)
            (active-minibuffer-window))
       ;; Minibuffer is active — inserting a dialog would conflict.  Poll.
@@ -256,18 +284,24 @@ callback when the user decides."
   "Process queued permission requests one at a time.
 
 Interactive prompts are deferred to the next event cycle so
-`recursive-edit' never runs inside the ACP process filter."
+`recursive-edit' never runs inside the ACP process filter.
+
+Arguments: STATE."
   (when (emagent-acp-state-permission-queue state)
     (if (emagent-acp--permission-interactive-p state)
         (emagent-acp--schedule-permission-drain state)
       (emagent-acp--drain-permission-queue-now state))))
 
 (cl-defun emagent-acp--on-permission (&key state emagent-acp-request)
+  
+  "Internal helper for STATE and EMAGENT-ACP-REQUEST."
   (setf (emagent-acp-state-permission-queue state)
             (append (emagent-acp-state-permission-queue state) (list emagent-acp-request)))
   (emagent-acp--drain-permission-queue state))
 
 (cl-defun emagent-acp--on-request (&key state emagent-acp-request)
+  
+  "Internal helper for STATE and EMAGENT-ACP-REQUEST."
   (pcase (map-elt emagent-acp-request 'method)
     ("fs/read_text_file"
      (emagent-acp--on-fs-read :state state :emagent-acp-request emagent-acp-request))

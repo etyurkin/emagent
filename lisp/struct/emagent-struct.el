@@ -5,6 +5,26 @@
 ;; SPDX-License-Identifier: MIT
 ;; Version: 1.2.3
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 ;;
 ;; Thin proxy over the lisp-sitter CLI (https://github.com/etyurkin/lisp-sitter).
@@ -101,7 +121,7 @@ Signal an error when lisp-sitter exits non-zero."
                           emagent-struct-lisp-sitter-bin nil out nil args)))
       (if (= exit 0)
           (string-trim (buffer-string))
-        (error "lisp-sitter exited %d: %s" exit
+        (error "Lisp-sitter exited %d: %s" exit
                (emagent-struct--lisp-sitter-error (buffer-string)))))))
 
 (defun emagent-struct--call-path (&rest args)
@@ -112,7 +132,7 @@ Signal an error when lisp-sitter exits non-zero."
                       (current-buffer) nil args)))
       (if (= exit 0)
           (string-trim (buffer-string))
-        (error "lisp-sitter exited %d: %s" exit
+        (error "Lisp-sitter exited %d: %s" exit
                (emagent-struct--lisp-sitter-error (buffer-string)))))))
 
 (defun emagent-struct--call-path-async (callback &rest args)
@@ -147,7 +167,9 @@ Signal an error when lisp-sitter exits non-zero."
        (file-executable-p emagent-struct-lisp-sitter-bin)))
 
 (defun emagent-struct-tree (content path &optional depth)
-  "Return JSON structural outline of CONTENT for PATH's language."
+  "Return JSON structural outline of CONTENT for PATH's language.
+
+Arguments: DEPTH."
   (emagent-struct--ensure)
   (let ((args (list "tree" "-" "--json" "--lang" (emagent-struct--lang-for path))))
     (when (and depth (> depth 1))
@@ -218,21 +240,27 @@ Returns \"OK\" or error text."
     (apply #'emagent-struct--call-path args)))
 
 (defun emagent-struct-rename-file (path old new &optional refs no-refs)
-  "Rename form OLD to NEW in file at PATH; return updated file text."
+  "Rename form OLD to NEW in file at PATH; return updated file text.
+
+Arguments: REFS, NO-REFS."
   (let ((args (list "rename" path old new)))
     (when refs (setq args (append args '("--refs"))))
     (when no-refs (setq args (append args '("--no-refs"))))
     (apply #'emagent-struct--call-path args)))
 
 (defun emagent-struct-wrap-file (path symbol wrap &optional bindings condition)
-  "Wrap SYMBOL's body in WRAP construct in file at PATH."
+  "Wrap SYMBOL's body in WRAP construct in file at PATH.
+
+Arguments: BINDINGS, CONDITION."
   (let ((args (list "wrap" path symbol "--in" wrap)))
     (when bindings (setq args (append args (list "--bindings" bindings))))
     (when condition (setq args (append args (list "--condition" condition))))
     (apply #'emagent-struct--call-path args)))
 
 (defun emagent-struct-remove-file (path symbol &optional keep-calls)
-  "Remove top-level SYMBOL from file at PATH."
+  "Remove top-level SYMBOL from file at PATH.
+
+Arguments: KEEP-CALLS."
   (let ((args (list "remove" path symbol)))
     (when keep-calls (setq args (append args '("--keep-calls"))))
     (apply #'emagent-struct--call-path args)))
@@ -247,7 +275,9 @@ Returns \"OK\" or error text."
                              "--pattern" pattern "--replacement" replacement))
 
 (defun emagent-struct-extract-file (path symbol pattern name &optional params)
-  "Extract PATTERN into new function NAME inside SYMBOL in file at PATH."
+  "Extract PATTERN into new function NAME inside SYMBOL in file at PATH.
+
+Arguments: PARAMS."
   (let ((args (list "extract" path symbol "--pattern" pattern "--name" name)))
     (when (and params (not (string-empty-p params)))
       (setq args (append args (list "--params" params))))
@@ -258,7 +288,9 @@ Returns \"OK\" or error text."
   (emagent-struct--call-path "callers" path symbol))
 
 (defun emagent-struct-instrument-file (path symbol &optional with at wrap)
-  "Instrument SYMBOL in file at PATH."
+  "Instrument SYMBOL in file at PATH.
+
+Arguments: WITH, WRAP."
   (let ((args (list "instrument" path symbol)))
     (when with (setq args (append args (list "--with" with))))
     (when at (setq args (append args (list "--at" at))))

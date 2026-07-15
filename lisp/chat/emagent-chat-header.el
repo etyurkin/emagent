@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; Read and write #+EMAGENT_* and #+STARTUP header properties in
@@ -116,7 +136,9 @@ Otherwise: the absolute PATH.
 
 Relative paths resolve against the project directory, not
 `default-directory' — saving the session file moves `default-directory'
-to the session file's directory, which is unrelated to the project."
+to the session file's directory, which is unrelated to the project.
+
+Arguments: PROJECT-DIR."
   (let* ((project (when-let ((raw (or project-dir
                                       (and (boundp 'emagent-chat-project-directory)
                                            emagent-chat-project-directory)
@@ -148,7 +170,7 @@ to the session file's directory, which is unrelated to the project."
 (defun emagent-chat--session-directory ()
   "Return the ACP working directory for the current emagent buffer.
 Reads #+EMAGENT_PROJECT from the buffer header if set, falling back to
-buffer-file-name, project-current or user-emacs-directory."
+variable `buffer-file-name', `project-current' or `user-emacs-directory'."
   (expand-file-name
    (or (emagent-chat--read-project-property)
        (and buffer-file-name (file-name-directory buffer-file-name))

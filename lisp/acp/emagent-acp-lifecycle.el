@@ -7,6 +7,26 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; This file is part of emagent.
+;;
+;; Permission is hereby granted, free of charge, to any person obtaining a copy
+;; of this software and associated documentation files (the "Software"), to deal
+;; in the Software without restriction, including without limitation the rights
+;; to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+;; copies of the Software, and to permit persons to whom the Software is
+;; furnished to do so, subject to the following conditions:
+;;
+;; The above copyright notice and this permission notice shall be included in all
+;; copies or substantial portions of the Software.
+;;
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+;; AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+;; OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+;; SOFTWARE.
+
 ;;; Commentary:
 
 ;; ACP session authenticate, connect, and load lifecycle.
@@ -30,7 +50,9 @@
 
 Called when `initialize' returns authMethods (e.g. cursor_login).
 The authenticate call completes the credential handshake so the agent
-grants full plan access (including Auto model) to this ACP session."
+grants full plan access (including Auto model) to this ACP session.
+
+Arguments: STATE, ON-READY."
   (emagent-acp--progress state (format "authenticating (%s)…" method-id))
   (emagent-acp--send-request
    :state state
@@ -44,6 +66,8 @@ grants full plan access (including Auto model) to this ACP session."
                  (emagent-acp--connect-session :state state :on-ready on-ready))))
 
 (cl-defun emagent-acp--initialize (&key state on-ready)
+  
+  "Internal helper for STATE and ON-READY."
   (emagent-acp--progress state "initializing ACP…")
   (emagent-acp--send-request
    :state state
@@ -87,6 +111,8 @@ grants full plan access (including Auto model) to this ACP session."
     (and value (not (eq value :false)) (not (eq value :json-false)))))
 
 (cl-defun emagent-acp--session-ready (&key state session-id on-ready resumed)
+  
+  "Internal helper for STATE and SESSION-ID and ON-READY and RESUMED."
   (setf (emagent-acp-state-session-id state) session-id)
   (setf (emagent-acp-state-ready state) t)
   (emagent-acp--persist-session-id state session-id)
@@ -105,6 +131,8 @@ grants full plan access (including Auto model) to this ACP session."
   (when on-ready (funcall on-ready)))
 
 (cl-defun emagent-acp--new-session (&key state on-ready compressed-context)
+  
+  "Internal helper for STATE and ON-READY and COMPRESSED-CONTEXT."
   (emagent-acp--progress state "creating session…")
   (emagent-acp--send-request
    :state state
@@ -129,6 +157,8 @@ grants full plan access (including Auto model) to this ACP session."
                           (or (map-elt error 'message) (format "%s" error)))))))
 
 (cl-defun emagent-acp--load-session (&key state session-id on-ready)
+  
+  "Internal helper for STATE and SESSION-ID and ON-READY."
   (emagent-acp--progress state "resuming session…")
   (setf (emagent-acp-state-replaying-history state) t)
   (emagent-acp--send-request
@@ -161,6 +191,8 @@ grants full plan access (including Auto model) to this ACP session."
                  (emagent-acp--new-session :state state :on-ready on-ready))))
 
 (cl-defun emagent-acp--connect-session (&key state on-ready)
+  
+  "Internal helper for STATE and ON-READY."
   (emagent-acp--progress state "connecting session…")
   (let ((saved (emagent-acp--saved-session-id state)))
     (if (and saved (not (string-empty-p saved)))
@@ -172,7 +204,9 @@ grants full plan access (including Auto model) to this ACP session."
 
 ON-REVEAL is called once when the chat buffer should be shown.
 CALLBACKS is an alist of rendering callbacks keyed by:
-  :cb-chunk, :cb-thought, :cb-finish, :cb-fail, :cb-slash-commands."
+  :cb-chunk, :cb-thought, :cb-finish, :cb-fail, :cb-slash-commands.
+
+Arguments: CLIENT, ON-READY."
   (when (and emagent-acp-prefer-emacs (not emagent-acp-file-access))
     (emagent-log "prefer-Emacs mode works best with `emagent-acp-file-access'"))
   (when emagent-acp-trace
