@@ -41,6 +41,9 @@
 (require 'emagent-acp-gate)
 
 (declare-function emagent-cursor-enrich-tool-call-update "emagent-cursor")
+(declare-function emagent-cursor--apply-store-entry "emagent-cursor")
+(declare-function emagent-cursor-tool-call-from-store "emagent-cursor")
+(declare-function emagent-cursor-tool-call-from-store-async "emagent-cursor")
 (declare-function emagent-cursor--generic-acp-title-p "emagent-cursor")
 (declare-function emagent-cursor-normalize-slash-prompt "emagent-cursor")
 (declare-function emagent-acp--merged-tool-call-update "emagent-acp-tool-call")
@@ -62,13 +65,16 @@
   (when-let ((launch (emagent-acp--agent-launch-string state)))
     (string-match-p "cursor-agent" launch)))
 
-(defun emagent-acp-cursor--enrich-tool-call (state update)
-  "Enrich UPDATE from Cursor store.db when rawInput is empty.
+(defun emagent-acp-cursor--enrich-tool-call (_state update)
+  "Return UPDATE unchanged — never sync-read Cursor store.db here.
 
-Arguments: STATE."
-  (if (fboundp 'emagent-cursor-enrich-tool-call-update)
-      (emagent-cursor-enrich-tool-call-update (emagent-acp-state-session-id state) update)
-    update))
+Cursor often omits tool args on the wire; looking them up in store.db via
+`shell-command-to-string' on every tool-call notification froze Emacs.
+Empty-arg updates are deferred and resolved asynchronously by
+`emagent-acp-cursor--resolve-tool-from-store'.
+
+Arguments: UPDATE."
+  update)
 
 (defun emagent-acp-cursor--defer-tool-call-p (_state update)
   "Return non-nil when Cursor sent a generic tool call without args yet.
@@ -103,6 +109,10 @@ Arguments: STATE, DELAY."
 (defun emagent-acp-cursor--drain-tool-resolve-queue (state &optional delay)
   "Resolve one queued Cursor tool call via `run-at-time'.
 
+The resolve worker stays set until `emagent-acp-cursor--resolve-tool-from-store'
+finishes (sync in tests, async process sentinel interactively), so store.db
+lookups never overlap and never run on the ACP process filter.
+
 Arguments: STATE, DELAY."
   (unless (emagent-acp-state-tool-resolve-worker state)
     (if-let ((id (car (emagent-acp-state-tool-resolve-queue state))))
@@ -111,28 +121,23 @@ Arguments: STATE, DELAY."
           (run-at-time
            (or delay 0) nil
            (lambda ()
-             (setf (emagent-acp-state-tool-resolve-worker state) nil)
              (setf (emagent-acp-state-tool-resolve-queue state)
-                         (cdr (emagent-acp-state-tool-resolve-queue state)))
-             (let ((retry-delay (emagent-acp-cursor--resolve-tool-from-store state id)))
-               (if retry-delay
-                   (emagent-acp-cursor--drain-tool-resolve-queue state retry-delay)
-                 (progn
-                   (emagent-acp-cursor--drain-tool-resolve-queue state 0)
-                   (emagent-acp--maybe-complete-deferred-prompt state)))))))
+                   (cdr (emagent-acp-state-tool-resolve-queue state)))
+             ;; Worker stays t until resolve's finish callback clears it.
+             (emagent-acp-cursor--resolve-tool-from-store state id))))
       (progn
         (emagent-acp--drain-permission-queue state)
         (emagent-acp--maybe-complete-deferred-prompt state)))))
 
-(defun emagent-acp-cursor--resolve-tool-from-store (state id)
-  "Look up tool-call ID in Cursor store.db; return retry delay or nil when done.
+(defun emagent-acp-cursor--apply-resolved-entry (state id entry)
+  "Apply store ENTRY to pending tool-call ID in STATE; return retry delay or nil.
 
-Arguments: STATE."
+Arguments: STATE, ID, ENTRY."
   (when-let* ((pending-table (emagent-acp-state-tool-call-pending state))
-              (merged (gethash id pending-table))
-              (session-id (emagent-acp-state-session-id state))
-              (fboundp 'emagent-cursor-enrich-tool-call-update))
-    (let* ((enriched (emagent-cursor-enrich-tool-call-update session-id merged))
+              (merged (gethash id pending-table)))
+    (let* ((enriched (if (and entry (fboundp 'emagent-cursor--apply-store-entry))
+                         (emagent-cursor--apply-store-entry merged entry)
+                       merged))
            (merged (if (equal enriched merged) merged
                      (emagent-acp--merged-tool-call-update state enriched)))
            (label (emagent-acp--tool-call-label merged))
@@ -156,8 +161,45 @@ Arguments: STATE."
         (puthash id (1+ attempts) attempts-table)
         (let ((queue (emagent-acp-state-tool-resolve-queue state)))
           (unless (member id queue)
-            (setf (emagent-acp-state-tool-resolve-queue state) (append queue (list id)))))
+            (setf (emagent-acp-state-tool-resolve-queue state)
+                  (append queue (list id)))))
         (* emagent-acp-cursor--tool-resolve-base-delay (expt 2 attempts)))))))
+
+(defun emagent-acp-cursor--resolve-tool-from-store (state id)
+  "Look up tool-call ID in Cursor store.db asynchronously.
+
+Returns nil immediately after starting the lookup (or applying a sync result
+in batch tests).  The resolve worker stays busy until the callback runs.
+
+Arguments: STATE, ID."
+  (cl-flet
+      ((finish (entry)
+         (let ((retry-delay
+                (emagent-acp-cursor--apply-resolved-entry state id entry)))
+           (setf (emagent-acp-state-tool-resolve-worker state) nil)
+           (if retry-delay
+               (emagent-acp-cursor--drain-tool-resolve-queue state retry-delay)
+             (progn
+               (emagent-acp-cursor--drain-tool-resolve-queue state 0)
+               (emagent-acp--maybe-complete-deferred-prompt state))))))
+    (let* ((pending-table (emagent-acp-state-tool-call-pending state))
+           (merged (and pending-table (gethash id pending-table)))
+           (session-id (emagent-acp-state-session-id state)))
+      (cond
+       ((not (and merged session-id))
+        (finish nil)
+        nil)
+       ;; ERT and other noninteractive callers mock the sync store helper and
+       ;; expect an immediate apply.
+       ((or noninteractive
+            (not (fboundp 'emagent-cursor-tool-call-from-store-async)))
+        (finish (and (fboundp 'emagent-cursor-tool-call-from-store)
+                     (emagent-cursor-tool-call-from-store session-id id)))
+        nil)
+       (t
+        (emagent-cursor-tool-call-from-store-async
+         session-id id (lambda (entry) (finish entry)))
+        nil)))))
 
 (defun emagent-acp-cursor--generic-title-p (title)
   "Return non-nil when TITLE is a generic Cursor ACP placeholder."

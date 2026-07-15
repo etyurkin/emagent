@@ -63,6 +63,8 @@
 
 (declare-function emagent-acp--send-request "emagent-acp")
 (declare-function emagent-acp--emit-tool-call-display "emagent-acp")
+(declare-function emagent-acp--provider-symbol "emagent-acp-provider")
+(declare-function emagent-cursor-enrich-tool-call-update "emagent-cursor")
 (declare-function emagent-chat--open-response-p "emagent-chat")
 
 (defun emagent-acp--permission-option-deny-p (opt)
@@ -472,12 +474,25 @@ Arguments: STATE, TOOL-CALL, VALIDATION, CHAT-BUFFER."
 (defun emagent-acp--permission-tool-call (state tool-call)
   "Return TOOL-CALL merged with session inputs and provider enrichment.
 
-Arguments: STATE."
+Cursor tool-call notifications skip sync store.db lookups (they freeze
+Emacs); permission prompts still enrich once here because the user is
+already waiting on the dialog.
+
+Arguments: STATE, TOOL-CALL."
   (when tool-call
     (let* ((update (or (emagent-acp--tool-call-update-from-request tool-call)
                        tool-call))
-           (merged (emagent-acp--merged-tool-call-update state update)))
-      (emagent-acp--provider-enrich-tool-call state merged))))
+           (merged (emagent-acp--merged-tool-call-update state update))
+           (enriched (emagent-acp--provider-enrich-tool-call state merged)))
+      ;; Cursor's provider enrich is intentionally a no-op on the hot path.
+      ;; A single sync store.db read is acceptable when showing a permission
+      ;; dialog so the user sees the real command/path.
+      (if (and (eq (emagent-acp--provider-symbol state) 'cursor)
+               (fboundp 'emagent-cursor-enrich-tool-call-update)
+               (emagent-acp-state-session-id state))
+          (emagent-cursor-enrich-tool-call-update
+           (emagent-acp-state-session-id state) enriched)
+        enriched))))
 
 (defun emagent-acp--tool-call-edit-field (item &rest keys)
   

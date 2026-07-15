@@ -86,10 +86,17 @@ Runs late on `org-mode-hook' so it overrides user hooks (e.g. org-modern
     (when (fboundp 'org-phscroll-mode)
       (org-phscroll-mode 1))))
 
+(defvar-local emagent-chat--safe-src-fontify-p nil
+  "Non-nil when this buffer should use `emagent-chat--safe-src-fontify'.
+Set for emagent sessions (including deferred plain-org restores) so the
+global advice can avoid calling `emagent-chat--session-buffer-p' on every
+src fontification.")
+
 (defun emagent-chat--setup-faces ()
   "Configure org highlighting, line wrap, and block folding for emagent buffers."
   (emagent-chat--disable-incompatible-org-minor-modes)
-  (setq-local org-src-fontify-natively t
+  (setq-local emagent-chat--safe-src-fontify-p t
+              org-src-fontify-natively t
               org-ellipsis "…"
               org-fontify-quote-and-verse-blocks t
               org-cycle-hide-block-startup t
@@ -106,28 +113,51 @@ Runs late on `org-mode-hook' so it overrides user hooks (e.g. org-modern
   (when (derived-mode-p 'emagent-mode)
     (emagent-chat--setup-faces)))
 
+(defun emagent-chat--fragile-shell-src-p (lang start end)
+  "Return non-nil when LANG src between START and END would break `sh-mode'.
+
+`sh-mode' signals `end-of-buffer' while font-locking a command substitution
+that wraps a heredoc (`$(cat <<'EOF'...)').  Detect that cheaply and skip
+native fontification instead of paying for the failing pass.
+
+Arguments: LANG, START, END."
+  (and (member (downcase (or lang "")) '("sh" "bash" "shell" "zsh"))
+       (< start end)
+       (save-excursion
+         (save-restriction
+           (narrow-to-region start end)
+           (goto-char start)
+           (and (search-forward "$(" end t)
+                (search-forward "<<" end t))))))
+
 (defun emagent-chat--safe-src-fontify (orig lang start end)
   "Around advice for `org-src-font-lock-fontify-block'.
 
 `sh-mode' font-lock signals `end-of-buffer' on command substitutions that
 wrap heredocs (`$(cat <<'EOF'...)'), which Org reports as \"Org mode
-fontification error\".  In emagent session buffers (including deferred
-plain-`org-mode' restores), fall back to a plain org-block face so opening
-saved sessions stays quiet.
+fontification error\".  In emagent session buffers, skip native fontification
+for that pattern (plain org-block face) and catch any other LANG font-lock
+errors the same way so opening/streaming large sessions stays quiet.
 
 Arguments: ORIG, LANG, START, END."
   (if (not (or (derived-mode-p 'emagent-mode)
                (bound-and-true-p emagent--session-pending)
+               (bound-and-true-p emagent-chat--safe-src-fontify-p)
                (emagent-chat--session-buffer-p)))
       (funcall orig lang start end)
-    (condition-case nil
-        (funcall orig lang start end)
-      (error
-       (add-text-properties
-        start end
-        '(face org-block src-block t
-          font-lock-fontified t fontified t font-lock-multiline t))
-       nil))))
+    (if (emagent-chat--fragile-shell-src-p lang start end)
+        (add-text-properties
+         start end
+         '(face org-block src-block t
+           font-lock-fontified t fontified t font-lock-multiline t))
+      (condition-case nil
+          (funcall orig lang start end)
+        (error
+         (add-text-properties
+          start end
+          '(face org-block src-block t
+            font-lock-fontified t fontified t font-lock-multiline t))
+         nil)))))
 
 ;;;###autoload
 (define-derived-mode emagent-mode org-mode "Emagent"

@@ -348,7 +348,8 @@ not intercept it.")
   ;; same org-appear / org-element safeguards as `emagent-mode' so desktop
   ;; restore and find-file do not trip \"Invalid search bound\" on large logs.
   (emagent-chat--disable-incompatible-org-minor-modes)
-  (setq-local emagent--session-pending t)
+  (setq-local emagent--session-pending t
+              emagent-chat--safe-src-fontify-p t)
   (cl-pushnew (current-buffer) emagent--pending-buffers)
   (emagent-log "session deferred until displayed: %s" (buffer-name)))
 
