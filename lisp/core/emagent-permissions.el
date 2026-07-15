@@ -4,6 +4,9 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
+
 ;;; Commentary:
 
 ;; Persists global, session, and project permission choices under

@@ -1,6 +1,18 @@
 ;;; emagent-acp-send.el --- ACP send module  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
+
+;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
+
+;; SPDX-License-Identifier: MIT
+
+;;; Commentary:
+
+;; Send prompts and manage in-flight ACP requests.
+
+;;; Code:
+
 (require 'cl-lib)
 (require 'map)
 (require 'emagent-log)
@@ -23,11 +35,6 @@
 (declare-function emagent-chat--promote-transient-to-thinking "emagent-chat-reasoning")
 (declare-function emagent-acp--chat-buffer "emagent-acp-usage")
 
-;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-
-;; SPDX-License-Identifier: MIT
-
-;;; Code:
 (defun emagent-acp-attach-context (text)
   "Attach TEXT to the next prompt in the current buffer."
   (let ((state (emagent-acp--session)))
