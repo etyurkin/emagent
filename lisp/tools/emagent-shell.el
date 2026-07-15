@@ -1,6 +1,7 @@
 ;;; emagent-shell.el --- Shell command routing for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; SPDX-License-Identifier: MIT
 ;; Version: 1.2.2
 
@@ -459,7 +460,7 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
 (defun emagent-shell-run-command-async (command directory callback)
   "Like `emagent-shell-run-command' but deliver the result via CALLBACK.
 CALLBACK is called as (CALLBACK OUTPUT IS-ERROR).  Synchronous guards
-(policy, --no-verify) run immediately; push guard, redirects, compile,
+\(policy, --no-verify) run immediately; push guard, redirects, compile,
 and shell fallback are non-blocking."
   (let* ((cmd (string-trim command))
          (words (emagent-shell--words cmd))

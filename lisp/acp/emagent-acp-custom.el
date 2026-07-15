@@ -3,6 +3,7 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -46,9 +47,9 @@ iCloud Drive prompts.  Set to nil only if you prefer the agent's own file tools.
 
 When nil (default), emagent prompts in the chat buffer unless the user has
 already allowed the request fingerprint for this ACP session
-(`emagent-permissions-directory'/sessions), globally (\"Allow always\"), per
+\(`emagent-permissions-directory'/sessions), globally (\"Allow always\"), per
 project directory (projects/), or in a legacy buffer header
-(#+EMAGENT_ALLOWED_PERMISSIONS).
+\(#+EMAGENT_ALLOWED_PERMISSIONS).
 
 When `safe', read and write tools are auto-approved without prompting.
 Execute (shell) commands are inspected for destructive operations — rm,
@@ -59,7 +60,7 @@ When t, all permission prompts that pass emagent validation are
 auto-approved without user interaction.
 
 Emagent always replies to the agent with a one-shot allow optionId
-(never allow_always), so every tool call still arrives at the emagent
+\(never allow_always), so every tool call still arrives at the emagent
 gate for validation even after the user chooses \"Allow always\"."
   :type '(choice
           (const :tag "Prompt for all permissions" nil)

@@ -1,8 +1,13 @@
 ;;; emagent-chat.el --- Org scratch buffer UI for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; SPDX-License-Identifier: MIT
 ;; Version: 1.2.2
+
+;;; Commentary:
+
+;; Org scratch buffer UI and session buffer helpers.
 
 ;;; Code:
 
@@ -214,7 +219,7 @@ to the agent."
   "Return the `/model' marker link for MODEL-ID.
 The visible text is the short model name; the link target is
 `agent/full-model-id', revealed on hover.  The `emagent://' scheme
-(never shown) tags this as the model marker so unrelated links a user
+\(never shown) tags this as the model marker so unrelated links a user
 pastes are not mistaken for it."
   (let* ((agent (emagent-chat-agent))
          (short (or (emagent-model-normalize-id model-id) model-id))
@@ -318,7 +323,7 @@ Used for the trailing (Allow: Session) / (Denied) annotation."
   "^\\*\\* Thinking\\(?: (\\[\\[emagent://[^][]+\\]\\[[^][]*\\]\\])\\| \\[\\[emagent://[^][]+\\]\\[[^][]*\\]\\]\\)?[ \t]*$"
   "Regexp matching the Thinking subsection headline.
 An optional model link marks a per-turn override
-(see `emagent-chat--turn-model'); both `** Thinking ([[…]])' and
+\(see `emagent-chat--turn-model'); both `** Thinking ([[…]])' and
 `** Thinking [[…]]' forms are recognized.")
 
 (defconst emagent-chat--switching-headline-re

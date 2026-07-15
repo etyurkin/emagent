@@ -4,6 +4,9 @@
 
 ;; SPDX-License-Identifier: MIT
 
+;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
+
 ;;; Commentary:
 
 ;; Declarative python rules for `emagent-policy-check-python'.
