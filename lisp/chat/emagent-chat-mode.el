@@ -113,7 +113,9 @@ Runs late on `org-mode-hook' so it overrides user hooks (e.g. org-modern
 wrap heredocs (`$(cat <<'EOF'...)'), which Org reports as \"Org mode
 fontification error\".  In emagent session buffers (including deferred
 plain-`org-mode' restores), fall back to a plain org-block face so opening
-saved sessions stays quiet."
+saved sessions stays quiet.
+
+Arguments: ORIG, LANG, START, END."
   (if (not (or (derived-mode-p 'emagent-mode)
                (bound-and-true-p emagent--session-pending)
                (emagent-chat--session-buffer-p)))
