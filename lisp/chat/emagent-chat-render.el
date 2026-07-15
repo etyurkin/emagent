@@ -833,15 +833,17 @@ Block tool calls carry their decision as an in-block comment, which org
 fontifies with the comment face natively.")
 
 (defun emagent-chat--fontify-tool-line (start end)
-  "Font-lock tool line START..END and repair org emphasis on paths."
+  "Font-lock tool line START..END and repair org emphasis on paths.
+Only touch START..END — do not re-fontify the whole response tail."
   (when (and start end (<= start end))
-    (emagent-chat--maybe-font-lock-flush)
+    (ignore-errors
+      (font-lock-ensure start end))
     (emagent-chat--repair-tool-line-faces start end)))
 
 (defun emagent-chat--fontify-tool-block (start end)
-  "Fontify an Org src-block tool display between START and END natively."
+  "Fontify an Org src-block tool display between START and END natively.
+Only touch START..END — do not re-fontify the whole response tail."
   (when (and start end (<= start end))
-    (emagent-chat--maybe-font-lock-flush)
     (ignore-errors
       (font-lock-ensure start end))))
 

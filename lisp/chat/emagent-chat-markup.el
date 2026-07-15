@@ -455,14 +455,26 @@ buffer (every window hidden or the frame iconified)."
 
 (defun emagent-chat--font-lock-region-start ()
   "Return a start position for incremental font-lock in the current buffer.
-Fontifies from the open response (when present) or the user zone — never the
-whole session log, which can be hundreds of thousands of characters."
-  (or (and (boundp 'emagent-chat--response-body-start)
-           emagent-chat--response-body-start
-           (marker-position emagent-chat--response-body-start))
-      (and (fboundp 'emagent-chat--user-zone-start)
-           (emagent-chat--user-zone-start))
-      (point-min)))
+
+When a response is open, only re-fontify a trailing window of that response.
+Long tool-heavy turns accumulate large `#+begin_src' blocks; re-fontifying
+them all on every stream/tool update blocked the event loop (the \"hang\" on
+large sessions).  Between turns, fall back to the user zone — never the
+whole session log."
+  (let* ((response-start
+          (and (boundp 'emagent-chat--response-body-start)
+               emagent-chat--response-body-start
+               (marker-position emagent-chat--response-body-start)))
+         (user-start
+          (and (fboundp 'emagent-chat--user-zone-start)
+               (emagent-chat--user-zone-start)))
+         (floor (or response-start user-start (point-min)))
+         ;; ~12k chars covers recent thought/tool/response chunks without
+         ;; redoing earlier src blocks in the same turn.
+         (window 12000))
+    (if response-start
+        (max floor (- (point-max) window))
+      floor)))
 
 (defun emagent-chat--font-lock-response-tail ()
   "Re-fontify the response tail without flushing the entire session buffer."

@@ -608,6 +608,30 @@ swallows it via `emagent-chat--safe-src-fontify' instead of demoting lang."
     (should (string-match-p ",#\\+END_SRC" out))
     (should (string-match-p "#\\+begin_src sh" out))))
 
+(ert-deftest emagent-chat-test-font-lock-region-start-caps-open-response ()
+  "Open responses only re-fontify a trailing window, not the whole turn."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (insert (make-string 40000 ?x))
+       (setq emagent-chat--response-body-start
+             (copy-marker (- (point-max) 40000) nil))
+       (let ((start (emagent-chat--font-lock-region-start)))
+         (should (>= start (- (point-max) 12000)))
+         (should (>= start (marker-position emagent-chat--response-body-start))))))))
+
+(ert-deftest emagent-chat-test-fragile-shell-src-p ()
+  (with-temp-buffer
+    (insert "gh pr create --body \"$(cat <<'EOF'\nhi\nEOF\n)\"\n")
+    (should (emagent-chat--fragile-shell-src-p "sh" (point-min) (point-max)))
+    (erase-buffer)
+    (insert "python3 - <<'PY'\nprint(1)\nPY\n")
+    (should-not (emagent-chat--fragile-shell-src-p "sh" (point-min) (point-max)))
+    (erase-buffer)
+    (insert "echo $(date)\n")
+    (should-not (emagent-chat--fragile-shell-src-p "sh" (point-min) (point-max)))))
+
 (ert-deftest emagent-chat-test-tool-call-multiline-updates-in-place ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)

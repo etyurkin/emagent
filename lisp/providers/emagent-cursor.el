@@ -174,6 +174,51 @@ Arguments: RAW."
          (replace-regexp-in-string "^call_" "tool_" tool-call-id)
          (replace-regexp-in-string "^tool_" "call_" tool-call-id))))
 
+(defconst emagent-cursor--store-recent-blobs-sql
+  "SELECT cast(data as text) FROM blobs ORDER BY rowid DESC LIMIT 120;"
+  "SQL to fetch recent Cursor store.db blobs for tool-call arg lookup.
+
+Avoids `cast(data as text) LIKE …` full-table scans, which block Emacs for
+tens of milliseconds on large sessions when run via `shell-command-to-string'.")
+
+(defun emagent-cursor--tool-call-from-sqlite-stdout (out tool-call-id)
+  "Parse sqlite3 OUT for TOOL-CALL-ID; return (NAME . ARGS) or nil."
+  (when (and (stringp out) (not (string-empty-p out)))
+    (catch 'found
+      (let ((variants (emagent-cursor--tool-call-id-variants tool-call-id)))
+        (dolist (line (split-string out "\n" t))
+          (dolist (variant variants)
+            (when-let ((entry (emagent-cursor--tool-call-from-blob-json line variant)))
+              (throw 'found entry))))))))
+
+(defun emagent-cursor-tool-call-from-store-async (session-id tool-call-id callback)
+  "Look up TOOL-CALL-ID in Cursor store.db asynchronously.
+
+CALLBACK is called with (TOOL-NAME . ARGS-ALIST) or nil.  Never blocks the
+Emacs command loop with `shell-command-to-string'.
+
+Arguments: SESSION-ID, TOOL-CALL-ID, CALLBACK."
+  (let ((db (emagent-cursor--store-db-path session-id))
+        (sqlite (executable-find "sqlite3")))
+    (if (not (and db sqlite (file-readable-p db)))
+        (funcall callback nil)
+      (let* ((buf (generate-new-buffer " *emagent-cursor-sqlite*"))
+             (proc (start-process "emagent-cursor-sqlite" buf
+                                  sqlite db
+                                  emagent-cursor--store-recent-blobs-sql)))
+        (set-process-query-on-exit-flag proc nil)
+        (set-process-sentinel
+         proc
+         (lambda (p _event)
+           (when (memq (process-status p) '(exit signal))
+             (let* ((ok (zerop (process-exit-status p)))
+                    (out (when (and ok (buffer-live-p buf))
+                           (with-current-buffer buf (buffer-string))))
+                    (entry (and out (emagent-cursor--tool-call-from-sqlite-stdout
+                                     out tool-call-id))))
+               (when (buffer-live-p buf) (kill-buffer buf))
+               (funcall callback entry)))))))))
+
 (defun emagent-cursor--parse-blob-json (text)
   "Parse JSON embedded in a store.db blob TEXT, skipping binary prefixes."
   (when (and (stringp text) (not (string-empty-p text)))
@@ -213,23 +258,20 @@ Arguments: RAW."
 (defun emagent-cursor-tool-call-from-store (session-id tool-call-id)
   "Return (TOOL-NAME . ARGS-ALIST) for TOOL-CALL-ID from Cursor store.db.
 
-Arguments: SESSION-ID."
+Scans only recent blobs (tool calls resolve within seconds of creation).
+Prefer `emagent-cursor-tool-call-from-store-async' on the interactive path —
+this synchronous helper is for tests and noninteractive fallbacks.
+
+Arguments: SESSION-ID, TOOL-CALL-ID."
   (when-let* ((db (emagent-cursor--store-db-path session-id))
-              (sqlite (executable-find "sqlite3")))
-    (catch 'found
-      (dolist (variant (emagent-cursor--tool-call-id-variants tool-call-id))
-        (let* ((needle (emagent-cursor--sql-escape variant))
-               (sql (format
-                     "SELECT cast(data as text) FROM blobs WHERE cast(data as text) LIKE '%%toolCallId\":\"%s\"%%' LIMIT 20;"
-                     needle))
-               (out (shell-command-to-string
-                     (format "%s %s %s"
-                             (shell-quote-argument sqlite)
-                             (shell-quote-argument db)
-                             (shell-quote-argument sql)))))
-          (dolist (line (split-string out "\n" t))
-            (when-let ((entry (emagent-cursor--tool-call-from-blob-json line variant)))
-              (throw 'found entry))))))))
+              (sqlite (executable-find "sqlite3"))
+              (out (shell-command-to-string
+                    (format "%s %s %s"
+                            (shell-quote-argument sqlite)
+                            (shell-quote-argument db)
+                            (shell-quote-argument
+                             emagent-cursor--store-recent-blobs-sql)))))
+    (emagent-cursor--tool-call-from-sqlite-stdout out tool-call-id)))
 
 (defconst emagent-cursor--generic-acp-titles
   '("MCP" "Read File" "Read" "Edit" "Write" "grep" "Grep" "Shell" "tool")
@@ -270,26 +312,36 @@ Arguments: ACP-TITLE, STORE-NAME."
   (and (stringp store-name)
        (string-match-p "\\`mcp_emagent_" store-name)))
 
+(defun emagent-cursor--apply-store-entry (update entry)
+  "Return UPDATE enriched with store.db ENTRY (NAME . ARGS), or UPDATE."
+  (if (not entry)
+      update
+    (let ((enriched
+           (emagent-cursor--update-put
+            (emagent-cursor--update-put
+             (emagent-cursor--update-put
+              (assoc-delete-all 'rawInput (assoc-delete-all 'arguments update))
+              'rawInput (or (cdr entry) '()))
+             'title (emagent-cursor--enriched-tool-title
+                     (map-elt update 'title) (car entry)))
+            'subtitle nil)))
+      (if (emagent-cursor--emagent-store-tool-p (car entry))
+          (emagent-cursor--update-put enriched 'emagent-tool t)
+        enriched))))
+
 (defun emagent-cursor-enrich-tool-call-update (session-id update)
   "Fill empty rawInput in UPDATE from Cursor store.db when available.
 
-Arguments: SESSION-ID."
+Interactive Cursor tool-call display must not call this on the ACP process
+filter — use `emagent-cursor-tool-call-from-store-async' via the resolve
+queue instead.  This synchronous helper remains for tests and offline use.
+
+Arguments: SESSION-ID, UPDATE."
   (let ((raw (or (map-elt update 'rawInput) (map-elt update 'arguments))))
     (if (emagent-cursor--tool-call-raw-empty-p raw)
         (or (when-let* ((id (map-elt update 'toolCallId))
                         (entry (emagent-cursor-tool-call-from-store session-id id)))
-              (let ((enriched
-                     (emagent-cursor--update-put
-                      (emagent-cursor--update-put
-                       (emagent-cursor--update-put
-                        (assoc-delete-all 'rawInput (assoc-delete-all 'arguments update))
-                        'rawInput (or (cdr entry) '()))
-                       'title (emagent-cursor--enriched-tool-title
-                               (map-elt update 'title) (car entry)))
-                      'subtitle nil)))
-                (if (emagent-cursor--emagent-store-tool-p (car entry))
-                    (emagent-cursor--update-put enriched 'emagent-tool t)
-                  enriched)))
+              (emagent-cursor--apply-store-entry update entry))
             update)
       update)))
 
