@@ -1,6 +1,7 @@
 ;;; emagent-trust.el --- Common workspace trust helpers -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; SPDX-License-Identifier: MIT
 ;; Version: 1.2.2
 
@@ -156,7 +157,7 @@ Loads lazily so `require' is not recursive at top level."
   "Handle trust setup for PROVIDER at PROJECT-DIR.
 
 When trust is missing on disk, writes Claude (~/.claude.json) or Cursor
-(~/.cursor/projects/.../.workspace-trusted) markers automatically."
+\(~/.cursor/projects/.../.workspace-trusted) markers automatically."
   (emagent-trust--ensure-provider-features)
   (cond
    ((not (and emagent-trust-enabled (memq provider '(claude cursor))))

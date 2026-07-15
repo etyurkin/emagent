@@ -1,6 +1,18 @@
 ;;; emagent-acp-notify.el --- ACP notify module  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
+
+;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
+
+;; SPDX-License-Identifier: MIT
+
+;;; Commentary:
+
+;; Handle ACP session/update and related notifications.
+
+;;; Code:
+
 (require 'cl-lib)
 (require 'map)
 (require 'emagent-log)
@@ -8,11 +20,6 @@
 (require 'emagent-acp-state)
 (require 'emagent-acp-protocol)
 
-;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-
-;; SPDX-License-Identifier: MIT
-
-;;; Code:
 (defun emagent-acp--trace-update (update-type emagent-acp-notification)
   "Log UPDATE-TYPE and a short payload summary when tracing."
   (let ((text (or (map-nested-elt emagent-acp-notification '(params update content text)) ""))

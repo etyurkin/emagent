@@ -1,6 +1,18 @@
 ;;; emagent-acp-lifecycle.el --- ACP lifecycle module  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
+
+;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
+
+;; SPDX-License-Identifier: MIT
+
+;;; Commentary:
+
+;; ACP session authenticate, connect, and load lifecycle.
+
+;;; Code:
+
 (require 'cl-lib)
 (require 'map)
 (require 'emagent-log)
@@ -13,11 +25,6 @@
 (require 'emagent-acp-usage)
 (require 'emagent-acp-notify)
 
-;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-
-;; SPDX-License-Identifier: MIT
-
-;;; Code:
 (cl-defun emagent-acp--authenticate (&key state method-id on-ready)
   "Send an authenticate request with METHOD-ID, then connect the session.
 

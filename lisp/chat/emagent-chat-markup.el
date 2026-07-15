@@ -3,6 +3,7 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -381,7 +382,7 @@ inside src blocks are left alone."
   "Convert leftover markdown markup in agent responses to org.
 
 Code fences are converted to src blocks first; the remaining prose transforms
-(inline backticks, tables, heading/spacing normalization) then run only outside
+\(inline backticks, tables, heading/spacing normalization) then run only outside
 those blocks, so a fenced backtick span, `## heading', or table row is never
 rewritten inside code."
   (let* ((text (replace-regexp-in-string "\r\n?" "\n" text))

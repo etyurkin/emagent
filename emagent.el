@@ -5,6 +5,7 @@
 ;; SPDX-License-Identifier: MIT
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; URL: https://github.com/etyurkin/emagent
 ;; Version: 1.2.2
 ;; Package-Requires: ((emacs "29.1"))
@@ -28,8 +29,8 @@
 (defmacro emagent--this-file ()
   "`.el' path for the file being loaded or byte-compiled.
 Resolved at macroexpansion time via `macroexp-file-name', which works during
-both byte-compilation and loading (unlike `byte-compile-dest-file', which is a
-function, not a bound variable, on Emacs 29+)."
+both byte-compilation and loading (unlike function `byte-compile-dest-file',
+which is a function, not a bound variable, on Emacs 29+)."
   (let ((file (or (macroexp-file-name) load-file-name)))
     (and file
          (if (string-suffix-p ".elc" file)
@@ -108,16 +109,16 @@ target BUFFER (hence the two-argument signature)."
   (mapcar #'expand-file-name
           '("~/.local/bin" "/usr/local/bin" "/opt/homebrew/bin"
             "/opt/homebrew/sbin" "/opt/local/bin"))
-  "Extra directories searched for agent binaries when not on `exec-path'.
+  "Extra directories searched for agent binaries when not on variable `exec-path'.
 When a binary is found in one of these directories, that directory is added
-to `exec-path' so the agent process can also be started normally."
+to variable `exec-path' so the agent process can also be started normally."
   :type '(repeat directory)
   :group 'emagent)
 
 (defun emagent--find-executable (command)
-  "Find COMMAND on `exec-path' or in `emagent-extra-exec-paths'.
+  "Find COMMAND on variable `exec-path' or in `emagent-extra-exec-paths'.
 When found via `emagent-extra-exec-paths', adds that directory to
-`exec-path' so subsequent lookups and process starts succeed."
+variable `exec-path' so subsequent lookups and process starts succeed."
   (or (executable-find command)
       (seq-some (lambda (dir)
                   (let ((path (expand-file-name command dir)))
@@ -251,6 +252,7 @@ Called on a successful turn: switches back to the captured base model and clears
 (defun emagent--turn-model-on-failure (&optional message)
   "After a failed `/model' turn, keep or restore the per-turn override.
 
+MESSAGE is the failure text used to classify transient vs permanent errors.
 Only transient network failures (after retries are exhausted) ask whether to
 keep the override for a manual `retry'.  Permanent errors such as context
 overflow restore the buffer model immediately."
@@ -346,6 +348,7 @@ not intercept it.")
 (defun emagent-mode--maybe-defer (orig-fn &rest args)
   "Defer ORIG-FN (`emagent-mode') for undisplayed session files on load.
 
+ARGS are forwarded to ORIG-FN when activation is not deferred.
 When `emagent-activate-on-display' is on and `emagent-mode' is triggered for a
 file-visiting buffer that is not yet displayed (e.g. the `mode: emagent' cookie
 during `find-file' or desktop restore), keep the buffer in `org-mode' and mark
@@ -402,8 +405,9 @@ Used for session files without the `mode: emagent' cookie (only the
 
 (defun emagent--provider-available-p (provider)
   "Return non-nil when PROVIDER's ACP agent executable can be found.
-Searches `exec-path' and `emagent-extra-exec-paths'; when found via the
-latter, adds that directory to `exec-path' so the agent starts normally."
+Searches variable `exec-path' and `emagent-extra-exec-paths'; when found
+via the latter, adds that directory to variable `exec-path' so the agent
+starts normally."
   (when-let ((command (pcase provider
                         ('cursor (emagent-cursor-command))
                         ('claude (emagent-claude-command)))))
@@ -445,7 +449,7 @@ When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
               label))))
 
 (defun emagent--probe-provider-models (provider cwd)
-  "Return model entries advertised by PROVIDER, or nil when probing fails."
+  "Return model entries advertised by PROVIDER at CWD, or nil on failure."
   (emagent-log "probing %s models…" (symbol-name provider))
   (let ((buffer (get-buffer-create " *emagent-probe*"))
         result)
@@ -534,6 +538,7 @@ current buffer."
 
 (defun emagent--start-with-provider (provider project-dir connect &optional model-id _handshake)
   "Start emagent using PROVIDER in PROJECT-DIR.
+CONNECT non-nil connects the ACP session immediately.
 When MODEL-ID is non-nil, persist it before connecting."
   (let ((buffer (emagent-chat-open :project-dir project-dir)))
     (with-current-buffer buffer
@@ -596,9 +601,9 @@ otherwise the project.el root, otherwise ~/."
 Must be called from an `emagent-mode' buffer.  Uses the buffer's project
 directory (`emagent-chat-project-directory') and agent (`emagent-chat-agent').
 
-By default updates trust only for this buffer's agent.  With a prefix
-argument, updates *both* Claude (=~/.claude.json=) and Cursor
-(=~/.cursor/projects/...=).
+BOTH-AGENTS non-nil (the prefix argument) updates *both* Claude
+\(=~/.claude.json=) and Cursor
+\(=~/.cursor/projects/...=).  Otherwise only this buffer's agent is updated.
 
 This command does not re-run startup trust setup.  For Claude, the
 running agent does not reload ~/.claude.json on session/load; after recording
@@ -606,7 +611,7 @@ trust use `emagent-trust-claude-reconnect' in this buffer (or clear
 #+EMAGENT_SESSION and toggle `emagent-mode') so a new session picks it up."
   (interactive "P")
   (unless (derived-mode-p 'emagent-mode)
-    (user-error "emagent-trust-workspace must be called from an emagent buffer"))
+    (user-error "Emagent-trust-workspace must be called from an emagent buffer"))
   (emagent-trust--ensure-provider-features)
   (let* ((dir0 (or (emagent-chat-project-directory)
                    (user-error "No project directory set in this buffer")))

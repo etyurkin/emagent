@@ -3,6 +3,7 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
+;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -440,10 +441,10 @@ command is complete."
   "Return (LANG . CODE) when UPDATE should render as an Org src block, else nil.
 Explicit shell commands render as `sh' and eval forms as `elisp' (their detail
 is real code).  A command that heredocs a script into a known interpreter
-(e.g. `python3 - <<EOF ... EOF') renders as that interpreter's language with
+\(e.g. `python3 - <<EOF ... EOF') renders as that interpreter's language with
 just the script body, not the shell wrapper.  A structured CLI tool (grep,
 cat, ...) renders as `sh' with its detail reconstructed into a command line
-(e.g. grep PATTERN).  A write/edit tool renders as a `diff' block so an
+\(e.g. grep PATTERN).  A write/edit tool renders as a `diff' block so an
 auto-allowed edit shows the same change a permission prompt would.  Any other
 tool renders as a block when its detail spans multiple lines or exceeds
 `emagent-acp--tool-call-detail-limit' characters; shorter single-line details
