@@ -43,7 +43,7 @@
 
 When non-nil (default), emagent tells the agent to reach for emagent MCP tools
 and Emacs Lisp first, but still allows Claude Code built-in tools, plugin slash
-commands, and forwarded MCP servers when Emacs cannot do the job.  File search
+commands, and forwarded MCP gateways when Emacs cannot do the job.  File search
 uses pure Emacs grep rather than ripgrep.  Keep `emagent-acp-file-access'
 enabled so ACP file read/write route through Emacs buffers."
   :type 'boolean
