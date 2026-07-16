@@ -9,7 +9,7 @@ jobs:
   version-sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check emagent.el and emagent-pkg.el versions match
         run: |
@@ -38,10 +38,17 @@ jobs:
           - 29.4
           - 30.1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      # Install Nix via the maintained action first; setup-emacs then skips its
+      # bundled installer and only runs `nix profile install` for Emacs.
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
 
       - name: Install Emacs ${{ matrix.emacs_version }}
-        uses: purcell/setup-emacs@master
+        uses: purcell/setup-emacs@1f1e9c315c2e3312705e920ae1ddd7e0e2b13c69
         with:
           version: ${{ matrix.emacs_version }}
 
