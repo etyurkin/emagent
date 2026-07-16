@@ -215,8 +215,8 @@ Arguments: TEXT."
     text))
 
 (defun emagent-acp-cursor--external-gate-reason (_state)
-  
-  "Internal helper."'cursor-agent-cli)
+  "Return the Cursor CLI trust-gate reason symbol."
+  'cursor-agent-cli)
 
 (emagent-acp--register-provider
  'cursor
