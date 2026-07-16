@@ -41,6 +41,7 @@
 (require 'emagent-acp-provider)
 (require 'emagent-acp-protocol)
 (require 'emagent-chat-compress)
+(require 'emagent-chat-mcp)
 
 ;; Defined in emagent-acp-prompt.el, which declares this file's functions the
 ;; same way; declaring here avoids a require cycle between the two modules.
@@ -333,6 +334,10 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
     (when (emagent-acp-state-busy state)
       (user-error "Emagent is busy"))
     (setq user-text (emagent-acp--provider-normalize-slash-prompt state user-text))
+    ;; Safety net if `/mcp' reaches ACP send (primary intercept is chat-send).
+    (when (emagent-chat--mcp-command-p user-text)
+      (emagent-chat--slash-mcp-apply user-text)
+      (cl-return-from emagent-acp-send-prompt))
     (let ((slash-command-p (emagent-chat--bare-slash-command-p user-text)))
       (when (and slash-command-p
                  (fboundp 'emagent-chat--compress-command-p)

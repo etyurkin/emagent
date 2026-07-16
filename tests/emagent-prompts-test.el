@@ -53,7 +53,9 @@
       (should (string-match-p "structural_replace" policy)))))
 
 (ert-deftest emagent-prompts-test-gateway-prompt ()
-  (should (string-match-p "OAuth" emagent-acp-system-prompt-gateway)))
+  (should (string-match-p "OAuth" emagent-acp-system-prompt-gateway))
+  (should (string-match-p "External MCP servers" emagent-acp-system-prompt-gateway))
+  (should (string-match-p "meta-prox" emagent-acp-system-prompt-gateway)))
 
 (provide 'emagent-prompts-test)
 

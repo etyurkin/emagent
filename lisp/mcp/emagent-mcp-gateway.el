@@ -29,20 +29,13 @@
 
 ;;; Commentary:
 
-;; MCP gateway between emagent tools and MCP clients.
+;; Feature shim for the MCP gateway.  Prompt gating and Cursor project
+;; approvals live in `emagent-mcp-server'
+;; (`emagent-mcp-gateway-system-prompt', `emagent-cursor-write-mcp-approvals').
 
 ;;; Code:
 
 (require 'cl-lib)
-(require 'map)
-(require 'emagent-log)
-(require 'emagent-tools)
-(require 'emagent-acp-custom)
-(defun emagent-mcp-gateway-system-prompt ()
-  "Return gateway guidance when extra MCP servers are configured, or nil."
-  (when (and emagent-acp-extra-mcp-config-file
-             (emagent-mcp-config-file-servers))
-    (bound-and-true-p emagent-acp-system-prompt-gateway)))
 
 (provide 'emagent-mcp-gateway)
 ;;; emagent-mcp-gateway.el ends here

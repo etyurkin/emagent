@@ -151,28 +151,33 @@ Sending a previous prompt replaces its old response."
            (override (emagent-chat--region-turn-model (car bounds) (cdr bounds))))
       (when (string-empty-p input)
         (user-error "Prompt is empty"))
-      (when override
-        (setq emagent-chat--turn-model override))
-      (let ((response-pos
-             (save-excursion
-               (goto-char (cdr bounds))
-               (end-of-line)
-               (if (eobp)
-                   (let ((inhibit-read-only t)) (insert "\n"))
-                 (forward-line 1))
-               (point))))
-        (emagent-chat--delete-following-response response-pos)
-        (emagent-log "send: %s" (emagent-log-truncate-line input 80))
-        (emagent-chat--send-pending-begin)
-        (emagent-chat--begin-response response-pos)
-        (let ((inhibit-read-only t))
-          (emagent-chat--writable)
-          (if emagent-chat--turn-model
-              (emagent-chat--insert-switching-scaffold)
-            (emagent-chat--insert-preparing-scaffold)))
-        (when emagent-chat--on-send
-          (funcall emagent-chat--on-send input))))))
-
+      ;; Client `/mcp' never goes to the agent (Claude or Cursor).
+      (if (and (fboundp 'emagent-chat--mcp-command-p)
+               (emagent-chat--mcp-command-p input))
+          (progn
+            (require 'emagent-chat-mcp)
+            (emagent-chat--slash-mcp-apply input))
+        (when override
+          (setq emagent-chat--turn-model override))
+        (let ((response-pos
+               (save-excursion
+                 (goto-char (cdr bounds))
+                 (end-of-line)
+                 (if (eobp)
+                     (let ((inhibit-read-only t)) (insert "\n"))
+                   (forward-line 1))
+                 (point))))
+          (emagent-chat--delete-following-response response-pos)
+          (emagent-log "send: %s" (emagent-log-truncate-line input 80))
+          (emagent-chat--send-pending-begin)
+          (emagent-chat--begin-response response-pos)
+          (let ((inhibit-read-only t))
+            (emagent-chat--writable)
+            (if emagent-chat--turn-model
+                (emagent-chat--insert-switching-scaffold)
+              (emagent-chat--insert-preparing-scaffold)))
+          (when emagent-chat--on-send
+            (funcall emagent-chat--on-send input)))))))
 (defun emagent-chat-interrupt ()
   "Stop any in-flight emagent work (ESC ESC).
 

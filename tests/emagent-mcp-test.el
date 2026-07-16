@@ -71,6 +71,62 @@
     (should (string-match-p "\"id\":1" resp))
     (should (string-match-p "\"ok\":true" resp))))
 
+(ert-deftest emagent-mcp-test-cursor-project-slug ()
+  (should (string= "Users-alice-config-my-app-project"
+                   (emagent-cursor-project-slug
+                    "/Users/alice/.config/my-app/project")))
+  (should (string= "Users-alice-src-demo-app"
+                   (emagent-cursor-project-slug
+                    "/Users/alice/src/demo-app/"))))
+
+(ert-deftest emagent-mcp-test-cursor-mcp-approval-key ()
+  "Match Cursor's name-sha256prefix format for http MCP approvals."
+  (should
+   (string=
+    "mcp-gateway-790a71ad022ef2d7"
+    (emagent-cursor--mcp-approval-key
+     "mcp-gateway"
+     "/Users/alice/src/demo-app"
+     "https://mcp.example.com/mcp"))))
+
+(ert-deftest emagent-mcp-test-cursor-write-mcp-approvals ()
+  (let* ((tmpdir (make-temp-file "emagent-mcp-approvals" t))
+         (cfg (expand-file-name "mcp.json" tmpdir))
+         (projects (expand-file-name "projects" tmpdir))
+         (cwd (expand-file-name "proj" tmpdir))
+         (emagent-mcp-cursor-config-file cfg))
+    (unwind-protect
+        (progn
+          (make-directory cwd t)
+          (with-temp-file cfg
+            (insert
+             (json-serialize
+              '((mcpServers
+                 (emagent . ((url . "http://127.0.0.1:9/mcp/x")))
+                 (mcp-gateway . ((url . "https://example.test/mcp"))))))))
+          (emagent-test--with-mocks
+              (((symbol-function 'emagent-cursor-mcp-approvals-file)
+                (lambda (dir)
+                  (expand-file-name
+                   "mcp-approvals.json"
+                   (expand-file-name (emagent-cursor-project-slug dir)
+                                     projects)))))
+            (let ((out (emagent-cursor-write-mcp-approvals cwd)))
+              (should (file-readable-p out))
+              (let* ((keys (json-parse-string
+                            (with-temp-buffer
+                              (insert-file-contents out)
+                              (buffer-string))
+                            :object-type 'alist
+                            :array-type 'list))
+                     (expected
+                      (emagent-cursor--mcp-approval-key
+                       "mcp-gateway"
+                       (directory-file-name (expand-file-name cwd))
+                       "https://example.test/mcp")))
+                (should (equal keys (list expected)))))))
+      (ignore-errors (delete-directory tmpdir t)))))
+
 (provide 'emagent-mcp-test)
 
 ;;; emagent-mcp-test.el ends here

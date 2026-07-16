@@ -46,6 +46,7 @@
 (require 'emagent-chat-header)
 (require 'emagent-session)
 (require 'emagent-chat-compress)
+(require 'emagent-chat-mcp)
 (require 'emagent-chat-mode-line)
 (require 'emagent-chat-slash)
 (require 'emagent-chat-attach)

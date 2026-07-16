@@ -50,11 +50,14 @@
 (declare-function emagent-acp--session "emagent-acp")
 (declare-function emagent-acp--connected-p "emagent-acp")
 (declare-function emagent-acp--model-choices "emagent-acp-model")
+(declare-function emagent-chat--slash-mcp-apply "emagent-chat-mcp")
 (declare-function cl-find "cl-lib")
 
 (defconst emagent-chat--client-slash-commands
   '(((name . "model")
-     (description . "switch model for this turn (marker stripped before send)")))
+     (description . "switch model for this turn (marker stripped before send)"))
+    ((name . "mcp")
+     (description . "list/authenticate MCP servers (Claude or Cursor CLI)")))
   "Slash commands emagent handles itself; never sent to the agent.")
 
 (defun emagent-chat--client-slash-command (name)
@@ -105,7 +108,10 @@ stripped from the text sent to the agent."
 (defun emagent-chat--run-client-slash-command (name)
   "Run the client slash command NAME (dispatch after completion)."
   (pcase name
-    ("model" (emagent-chat--slash-model-apply))))
+    ("model" (emagent-chat--slash-model-apply))
+    ("mcp"
+     (require 'emagent-chat-mcp)
+     (emagent-chat--slash-mcp-apply))))
 
 (defvar emagent-chat-provider)
 (defvar-local emagent-chat-slash-commands nil
