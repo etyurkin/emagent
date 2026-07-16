@@ -654,11 +654,20 @@ Without it, use write_file + check_elisp for basic .el editing."))
 (defconst emagent-acp-system-prompt-gateway
   "
 
-Forwarded MCP gateways from your Claude config are available in this session
-alongside emagent tools.  If OAuth authentication is requested, show the
-authorize URL as a clickable org link — the agent handles the browser and
-callback automatically.  Do not ask the user to paste a callback URL."
-  "Appended when `emagent-acp-extra-mcp-config-file' forwards MCP servers.")
+## External MCP servers
+
+Configured MCP servers beyond emagent are available in this session.  Prefer
+them for their domain over reinventing the same calls with shell/curl.
+
+Some servers are meta-proxies: they expose search/list/describe/dispatch tools
+rather than domain tools directly.  When those discovery tools are present,
+use them first to find the right backend tool and its schema, then invoke it
+— do not ask the user how the proxy works.
+
+If OAuth authentication is requested, show the authorize URL as a clickable
+org link — the agent or `/mcp' login handles the browser/callback.  Do not
+ask the user to paste a callback URL."
+  "Appended when Claude or Cursor has external MCP servers configured.")
 
 (provide 'emagent-prompts)
 

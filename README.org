@@ -429,13 +429,22 @@ after save.  Install lisp-sitter from [[https://github.com/etyurkin/lisp-sitter]
 Build commands (=mvn=, =gradle=, =cargo=, =make=, =npm test=, etc.) are always
 routed through =compile= for navigable error output, regardless of other settings.
 
-** MCP gateway forwarding
+** External MCP servers
 
 Emagent reads the =mcpServers= block from =emagent-acp-extra-mcp-config-file=
 (default =~/.claude.json=) and forwards those servers to the ACP agent alongside
 the built-in emagent tools.  This lets Claude-compatible agents use any MCP
-gateway you have configured — no separate setup required.  Set to =nil= to
-disable forwarding.
+servers you already have configured — no separate setup required.  Set to =nil=
+to disable forwarding.
+
+Cursor discovers servers from =~/.cursor/mcp.json= instead.  In either provider,
+type =/mcp= (TAB or =C-c C-c=) to list servers and authenticate via the matching
+CLI (=claude mcp login= or =cursor-agent mcp login=).  For Cursor, emagent also
+writes =~/.cursor/projects/<cwd-slug>/mcp-approvals.json= (and runs
+=mcp enable=) so ACP loads those servers for the session project.  After
+authenticating, reconnect the chat (=emagent-mode= off/on) so the agent
+reloads tools.  Meta-gateways (search/dispatch style tools) are covered in the
+session system prompt.
 
 * Related projects
 

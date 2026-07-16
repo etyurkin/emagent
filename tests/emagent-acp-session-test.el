@@ -532,7 +532,7 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
 (ert-deftest emagent-acp-session-test-permission-auto-approve-deep-queue ()
   "Auto-approve drains a long queue iteratively (no Lisp stack overflow).
 
-Cursor MCP gateway auth/tool prompts can enqueue dozens of
+Cursor MCP auth/tool prompts can enqueue dozens of
 `session/request_permission' messages.  Recursive on-complete drain used to
 SIGSEGV Emacs; keep max-lisp-eval-depth artificially low to catch regressions."
   (let* ((state (emagent-test--make-acp-state))

@@ -366,15 +366,102 @@ Only writes the file when the entry is absent or points to a different port."
           (insert (emagent-mcp--json-encode (emagent-mcp--lists-to-vectors data))))))
     file))
 
-;;;; External MCP gateway forwarding
+(defun emagent-cursor-project-slug (cwd)
+  "Return Cursor's ~/.cursor/projects/ slug for absolute CWD."
+  (let* ((abs (directory-file-name (expand-file-name cwd)))
+         (raw (replace-regexp-in-string "\\`/" "" abs))
+         (slug (replace-regexp-in-string "[^A-Za-z0-9]+" "-" raw)))
+    (replace-regexp-in-string "-+" "-" slug)))
+
+(defun emagent-cursor-mcp-approvals-file (cwd)
+  "Return path to Cursor mcp-approvals.json for CWD."
+  (expand-file-name
+   "mcp-approvals.json"
+   (expand-file-name (emagent-cursor-project-slug cwd)
+                     (expand-file-name "projects"
+                                       (expand-file-name ".cursor" "~")))))
+
+(defun emagent-cursor--mcp-approval-key (name cwd url)
+  "Return Cursor approval id for server NAME at CWD with http URL."
+  (let* ((payload (format "{\"path\":%s,\"server\":{\"url\":%s}}"
+                          (json-serialize cwd)
+                          (json-serialize url)))
+         (digest (substring (secure-hash 'sha256 payload) 0 16)))
+    (format "%s-%s" name digest)))
+
+(defun emagent-cursor--mcp-server-url (cfg)
+  "Return http/sse URL from MCP CFG alist/hash, or nil."
+  (or (map-elt cfg 'url)
+      (and (hash-table-p cfg) (gethash "url" cfg))))
+
+(defun emagent-mcp--cursor-extra-servers-p ()
+  "Return non-nil when ~/.cursor/mcp.json has a non-emagent server."
+  (when-let* ((file (bound-and-true-p emagent-mcp-cursor-config-file))
+              ((file-readable-p file))
+              (data (ignore-errors
+                      (with-temp-buffer
+                        (insert-file-contents file)
+                        (json-parse-buffer :object-type 'alist
+                                           :array-type 'list
+                                           :null-object nil
+                                           :false-object :false))))
+              (servers (map-elt data 'mcpServers)))
+    (cl-some (lambda (pair)
+               (let ((name (if (symbolp (car pair))
+                               (symbol-name (car pair))
+                             (format "%s" (car pair)))))
+                 (not (equal name emagent-mcp-server-name))))
+             servers)))
+
+(defun emagent-cursor-write-mcp-approvals (&optional cwd)
+  "Approve non-emagent http servers from ~/.cursor/mcp.json for CWD.
+
+Writes ~/.cursor/projects/<slug>/mcp-approvals.json using Cursor's
+`name-sha256prefix' key format.  `cursor-agent mcp enable' alone is not
+enough: ACP only loads servers listed in that file for the session cwd.
+Returns the approvals file path, or nil when there is nothing to write."
+  (let* ((cwd (directory-file-name
+               (expand-file-name
+                (or cwd default-directory))))
+         (file (bound-and-true-p emagent-mcp-cursor-config-file))
+         (data (and file (file-readable-p file)
+                    (ignore-errors
+                      (with-temp-buffer
+                        (insert-file-contents file)
+                        (json-parse-buffer :object-type 'alist
+                                           :array-type 'list
+                                           :null-object nil
+                                           :false-object :false)))))
+         (servers (map-elt data 'mcpServers))
+         keys)
+    (dolist (pair servers)
+      (let* ((name (if (symbolp (car pair))
+                       (symbol-name (car pair))
+                     (format "%s" (car pair))))
+             (url (emagent-cursor--mcp-server-url (cdr pair))))
+        (unless (or (equal name emagent-mcp-server-name)
+                    (not (stringp url))
+                    (string-empty-p url))
+          (push (emagent-cursor--mcp-approval-key name cwd url) keys))))
+    (setq keys (nreverse (delete-dups keys)))
+    (when keys
+      (let ((approvals (emagent-cursor-mcp-approvals-file cwd)))
+        (make-directory (file-name-directory approvals) t)
+        (with-temp-file approvals
+          (insert (emagent-mcp--json-encode (vconcat keys))))
+        (emagent-log "wrote Cursor mcp approvals (%s): %s"
+                     (length keys) approvals)
+        approvals))))
+
+;;;; External MCP server forwarding
 
 (defcustom emagent-acp-extra-mcp-config-file "~/.claude.json"
   "JSON file whose top-level `mcpServers' block is forwarded to ACP agents.
 
 Emagent reads the `mcpServers' object from this file and advertises those
 servers, alongside the in-Emacs emagent server, to agents that support http MCP
-over ACP (e.g. Claude).  This reuses an existing Claude gateway without
-re-declaring it for emagent.
+over ACP (e.g. Claude).  This reuses existing Claude MCP server entries without
+re-declaring them for emagent.
 
 Only agents wired through ACP `mcpServers' are affected; Cursor discovers MCP
 servers from its own ~/.cursor/mcp.json and ignores this option.
@@ -451,9 +538,9 @@ CHAT-BUFFER is the emagent chat buffer (for the per-buffer token)."
         (vconcat (list emagent-server) extra)))))
 
 (defun emagent-mcp-gateway-system-prompt ()
-  "Return gateway guidance when extra MCP servers are configured, or nil."
-  (when (and emagent-acp-extra-mcp-config-file
-             (emagent-mcp-config-file-servers))
+  "Return MCP guidance when external servers are configured, or nil."
+  (when (or (emagent-mcp-config-file-servers)
+            (emagent-mcp--cursor-extra-servers-p))
     (bound-and-true-p emagent-acp-system-prompt-gateway)))
 
 (provide 'emagent-mcp-server)

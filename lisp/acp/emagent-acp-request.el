@@ -228,7 +228,7 @@ Arguments: STATE."
   "Process queued permission requests without recursive auto-approve nesting.
 
 For auto-deny/auto-approve: drain the queue iteratively in this call so a
-flood of Cursor MCP permissions (e.g. mcp-gateway auth/tool prompts) cannot
+flood of Cursor MCP permissions (e.g. auth/tool prompts) cannot
 overflow the Lisp stack.  For interactive prompts: insert one dialog and
 return; the button callback schedules the next drain.
 
