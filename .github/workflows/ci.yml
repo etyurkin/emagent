@@ -40,17 +40,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Install Nix via the maintained action first; setup-emacs then skips its
-      # bundled installer and only runs `nix profile install` for Emacs.
+      # Install Nix with an authenticated GitHub token. Anonymous api.github.com
+      # calls from Actions IPs frequently 503 on flake commits/HEAD lookups.
       - name: Install Nix
         uses: cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
+          github_access_token: ${{ github.token }}
 
+      # Pin nix-emacs-ci to a commit so Nix does not resolve commits/HEAD.
       - name: Install Emacs ${{ matrix.emacs_version }}
-        uses: purcell/setup-emacs@1f1e9c315c2e3312705e920ae1ddd7e0e2b13c69
-        with:
-          version: ${{ matrix.emacs_version }}
+        run: |
+          ver="${{ matrix.emacs_version }}"
+          attr="emacs-${ver//./-}"
+          nix profile install --accept-flake-config \
+            "github:purcell/nix-emacs-ci/ca88f42462347e8e17859645aa59b156617e98fb#${attr}"
+          echo "$HOME/.nix-profile/bin" >> "$GITHUB_PATH"
+          emacs --version
 
       - name: Install Elpaca
         run: git clone --depth 1 https://github.com/progfolio/elpaca.git "$RUNNER_TEMP/elpaca"
