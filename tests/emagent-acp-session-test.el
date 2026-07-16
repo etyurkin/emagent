@@ -529,6 +529,35 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
         (should responded)
         (should (null (emagent-acp-state-permission-queue state)))))))
 
+(ert-deftest emagent-acp-session-test-permission-auto-approve-deep-queue ()
+  "Auto-approve drains a long queue iteratively (no Lisp stack overflow).
+
+Cursor MCP gateway auth/tool prompts can enqueue dozens of
+`session/request_permission' messages.  Recursive on-complete drain used to
+SIGSEGV Emacs; keep max-lisp-eval-depth artificially low to catch regressions."
+  (let* ((state (emagent-test--make-acp-state))
+         (n 60)
+         (responded 0)
+         (emagent-acp-auto-approve-permissions t)
+         (max-lisp-eval-depth 40)
+         (max-specpdl-size 600))
+    (setf (emagent-acp-state-permission-queue state)
+          (cl-loop for i from 1 to n
+                   collect `((id . ,(format "req-%d" i))
+                             (params . ((title . "Allow MCP?")
+                                        (options . [((optionId . "allow_once")
+                                                     (kind . "allow_once"))]))))))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp-send-response)
+          (lambda (&rest _) (cl-incf responded)))
+         ((symbol-function 'emagent-acp--show-permission-decision)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line)
+          (lambda (&rest _) nil)))
+      (emagent-acp--drain-permission-queue state)
+      (should (= responded n))
+      (should (null (emagent-acp-state-permission-queue state))))))
+
 (ert-deftest emagent-acp-session-test-permission-drains-after-tool-resolve ()
   (let* ((state (emagent-test--make-acp-state))
          (request '((id . "req3")

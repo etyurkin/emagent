@@ -195,29 +195,40 @@ tens of milliseconds on large sessions when run via `shell-command-to-string'.")
   "Look up TOOL-CALL-ID in Cursor store.db asynchronously.
 
 CALLBACK is called with (TOOL-NAME . ARGS-ALIST) or nil.  Never blocks the
-Emacs command loop with `shell-command-to-string'.
+Emacs command loop with `shell-command-to-string'.  When the lookup cannot
+start (missing db/sqlite), CALLBACK still runs on a timer so callers never
+re-enter synchronously from this helper.
 
 Arguments: SESSION-ID, TOOL-CALL-ID, CALLBACK."
-  (let ((db (emagent-cursor--store-db-path session-id))
-        (sqlite (executable-find "sqlite3")))
-    (if (not (and db sqlite (file-readable-p db)))
-        (funcall callback nil)
-      (let* ((buf (generate-new-buffer " *emagent-cursor-sqlite*"))
-             (proc (start-process "emagent-cursor-sqlite" buf
-                                  sqlite db
-                                  emagent-cursor--store-recent-blobs-sql)))
-        (set-process-query-on-exit-flag proc nil)
-        (set-process-sentinel
-         proc
-         (lambda (p _event)
-           (when (memq (process-status p) '(exit signal))
-             (let* ((ok (zerop (process-exit-status p)))
-                    (out (when (and ok (buffer-live-p buf))
-                           (with-current-buffer buf (buffer-string))))
-                    (entry (and out (emagent-cursor--tool-call-from-sqlite-stdout
-                                     out tool-call-id))))
-               (when (buffer-live-p buf) (kill-buffer buf))
-               (funcall callback entry)))))))))
+  (cl-labels
+      ((done (entry)
+         ;; Always defer: a sync callback here re-enters the Cursor tool-resolve
+         ;; finish/drain path on the same stack (and can nest via timer_check).
+         (run-at-time 0 nil (lambda () (funcall callback entry)))))
+    (let ((db (emagent-cursor--store-db-path session-id))
+          (sqlite (executable-find "sqlite3")))
+      (if (not (and db sqlite (file-readable-p db)))
+          (done nil)
+        (let ((buf (generate-new-buffer " *emagent-cursor-sqlite*")))
+          (condition-case _err
+              (let ((proc (start-process "emagent-cursor-sqlite" buf
+                                        sqlite db
+                                        emagent-cursor--store-recent-blobs-sql)))
+                (set-process-query-on-exit-flag proc nil)
+                (set-process-sentinel
+                 proc
+                 (lambda (p _event)
+                   (when (memq (process-status p) '(exit signal))
+                     (let* ((ok (zerop (process-exit-status p)))
+                            (out (when (and ok (buffer-live-p buf))
+                                   (with-current-buffer buf (buffer-string))))
+                            (entry (and out (emagent-cursor--tool-call-from-sqlite-stdout
+                                             out tool-call-id))))
+                       (when (buffer-live-p buf) (kill-buffer buf))
+                       (done entry))))))
+            (error
+             (when (buffer-live-p buf) (kill-buffer buf))
+             (done nil))))))))
 
 (defun emagent-cursor--parse-blob-json (text)
   "Parse JSON embedded in a store.db blob TEXT, skipping binary prefixes."
