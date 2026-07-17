@@ -471,15 +471,33 @@ session present (the UI no longer pulls from the ACP layer)."
        (should (emagent-chat--spinner-refresh-buffer buffer))
        (should (string-match-p "Thinking ○●○" emagent-chat--mode-line-head))))))
 
-(ert-deftest emagent-chat-test-restore-window-views-keeps-point ()
+(ert-deftest emagent-chat-test-restore-window-views-follows-bottom ()
   (with-temp-buffer
     (insert "line1\nline2\n")
-    (let ((saved-point 6)
-          (win (selected-window)))
-      (goto-char saved-point)
+    (let ((win (selected-window))
+          (buf (current-buffer)))
+      (set-window-buffer win buf)
+      (goto-char 6)
       (emagent-chat--restore-window-views
        `((:window ,win :start 1 :at-bottom t)))
-      (should (= saved-point (point))))))
+      ;; Follow moves window-point (and selected-window point) to EOB —
+      ;; matching `emagent-log' — so redisplay cannot undo the scroll.
+      (should (eq buf (window-buffer win)))
+      (should (= (point-max) (window-point win)))
+      (should (= (point-max) (point))))))
+
+(ert-deftest emagent-chat-test-restore-window-views-keeps-scroll-when-pinned ()
+  (with-temp-buffer
+    (insert (mapconcat #'identity (make-list 80 "line") "\n"))
+    (let ((win (selected-window))
+          (saved-point 6))
+      (set-window-buffer win (current-buffer))
+      (goto-char saved-point)
+      (set-window-start win 1)
+      (emagent-chat--restore-window-views
+       `((:window ,win :start 1 :at-bottom nil)))
+      (should (= saved-point (point)))
+      (should (= 1 (window-start win))))))
 
 (ert-deftest emagent-chat-test-show-tool-call-no-open-response ()
   (emagent-test--with-emagent-buffer
