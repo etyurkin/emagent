@@ -700,39 +700,48 @@ after focus moves elsewhere."
     views))
 
 (defun emagent-chat--restore-window-views (views)
-  "Restore scroll state from VIEWS returned by `emagent-chat--save-window-views'."
+  "Restore scroll state from VIEWS returned by `emagent-chat--save-window-views'.
+
+Windows that were at the buffer end keep following newly inserted text by
+moving their `window-point' to `point-max', matching `emagent-log'."
   (dolist (view views)
     (let ((win (plist-get view :window)))
       (when (window-live-p win)
         (if (plist-get view :at-bottom)
-            (with-selected-window win
-              (save-excursion
-                (goto-char (point-max))
+            (progn
+              (set-window-point win (point-max))
+              (with-selected-window win
                 (recenter -1)))
           (set-window-start win (plist-get view :start) t))))))
 
 (defun emagent-chat--with-stable-view (fn)
   "Run FN while preserving window scroll unless already at buffer end."
-  (if (emagent-chat--buffer-active-p)
-      (let ((saved-point (point-marker))
-            (saved-windows (emagent-chat--save-window-views)))
-        (unwind-protect
-            (funcall fn)
-          (when (marker-position saved-point)
-            (goto-char saved-point))
-          (set-marker saved-point nil)
-          (emagent-chat--restore-window-views saved-windows)))
-    (funcall fn)))
+  (let* ((saved-point (point-marker))
+         (saved-windows (emagent-chat--save-window-views))
+         (selected (selected-window))
+         (follow (cl-some (lambda (v)
+                            (and (eq (plist-get v :window) selected)
+                                 (plist-get v :at-bottom)))
+                          saved-windows)))
+    (unwind-protect
+        (funcall fn)
+      (emagent-chat--restore-window-views saved-windows)
+      (unless follow
+        (when (marker-position saved-point)
+          (goto-char saved-point)))
+      (set-marker saved-point nil))))
 
 (defun emagent-chat--with-streaming-view (fn)
-  "Run FN during live streaming without disturbing windows already at buffer end."
-  (if (emagent-chat--buffer-active-p)
-      (let* ((views (emagent-chat--save-window-views))
-             (pinned (cl-remove-if (lambda (v) (plist-get v :at-bottom)) views)))
-        (unwind-protect
-            (funcall fn)
-          (emagent-chat--restore-window-views pinned)))
-    (funcall fn)))
+  "Run FN during live streaming, following windows already at buffer end.
+
+Windows scrolled away from the end keep their `window-start'; windows that
+were showing `point-max' are scrolled to the new end after FN returns.
+Inserts use `save-excursion', so this explicit follow is required — Emacs
+does not auto-scroll when `window-point' is not at the insertion point."
+  (let ((views (emagent-chat--save-window-views)))
+    (unwind-protect
+        (funcall fn)
+      (emagent-chat--restore-window-views views))))
 
 (provide 'emagent-chat)
 ;;; emagent-chat.el ends here
