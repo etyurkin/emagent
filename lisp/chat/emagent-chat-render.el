@@ -606,7 +606,7 @@ re-inserted after TEXT, leaving the marker at the true content end."
   "Wrap file paths in org =verbatim= to prevent /italic/ and =verbatim= glitches.
 Matches any token containing a / that follows whitespace, a colon, or the
 start of the string.  Paths are shortened via `emagent-chat--display-path'
-before wrapping.
+before wrapping.  URL-like tokens are left alone so they stay clickable.
 
 Arguments: TEXT."
   ;; Capture the project before entering the temp buffer: both the
@@ -620,12 +620,14 @@ Arguments: TEXT."
       (goto-char (point-min))
       (while (re-search-forward
               "\\(\\(?:^\\|[ \t:]\\)\\)\\([^ \t\n]+/[^ \t\n]*\\)" nil t)
-        (replace-match
-         (concat (match-string 1)
-                 "="
-                 (emagent-chat--display-path (match-string 2) project)
-                 "=")
-         t t))
+        (let ((path (match-string 2)))
+          (unless (emagent-chat--url-like-p path)
+            (replace-match
+             (concat (match-string 1)
+                     "="
+                     (emagent-chat--display-path path project)
+                     "=")
+             t t))))
       (buffer-string))))
 
 (defun emagent-chat--format-tool-line (label)
@@ -1242,8 +1244,7 @@ buffer shows formatted org while the response is still arriving."
                      (safe (emagent-chat--map-outside-src-blocks
                             (lambda (s)
                               (let ((case-fold-search nil))
-                                (replace-regexp-in-string
-                                 "`\\([^`\n]+\\)`" "=\\1="
+                                (emagent-chat--convert-inline-code-spans
                                  (replace-regexp-in-string
                                   "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*"
                                   (replace-regexp-in-string

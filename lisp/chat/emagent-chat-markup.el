@@ -184,6 +184,25 @@ Prose-only transforms applied outside src blocks, so a fenced `arr[i](fn)' or
        "\\1\\2 \\3"
        result))))
 
+(defun emagent-chat--url-like-p (text)
+  "Return non-nil if TEXT is a clickable URL or Org link target."
+  (string-match-p "\\`\\(?:https?://\\|file:\\|emagent://\\|mailto:\\)"
+                  text))
+
+(defun emagent-chat--convert-inline-code-spans (text)
+  "Replace markdown `code` spans in TEXT with org markup.
+
+URL-like spans become org links (`[[url]]') so they stay clickable; other
+spans become org verbatim (`=code=')."
+  (replace-regexp-in-string
+   "`\\([^`\n]+\\)`"
+   (lambda (match)
+     (let ((code (substring match 1 -1)))
+       (if (emagent-chat--url-like-p code)
+           (format "[[%s]]" code)
+         (format "=%s=" code))))
+   text))
+
 (defun emagent-chat--normalize-response-spacing (text)
   "Normalize spacing around blocks and tables in TEXT.
 
@@ -258,8 +277,7 @@ held across a streaming boundary)."
            (text (replace-regexp-in-string
                   "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*" text))
            ;; Markdown inline code `code` → org verbatim =code=
-           (text (replace-regexp-in-string
-                  "`\\([^`\n]+\\)`" "=\\1=" text))
+           (text (emagent-chat--convert-inline-code-spans text))
            (lines (split-string text "\n")))
       ;; Finally escape any remaining # / * at line starts so org
       ;; does not mis-parse them as keywords or headings.
@@ -427,7 +445,7 @@ Arguments: TEXT."
                    (emagent-chat--convert-markdown-prose
                     (emagent-chat--convert-markdown-tables
                      (emagent-chat--convert-markdown-headings
-                      (replace-regexp-in-string "`\\([^`\n]+\\)`" "=\\1=" s)))))
+                      (emagent-chat--convert-inline-code-spans s)))))
                  fenced)))
     ;; Whole-text spacing normalization needs to see the block/table markers.
     (emagent-chat--close-unclosed-org-src
