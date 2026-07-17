@@ -59,6 +59,39 @@ By default emagent writes only to `emagent-log-buffer-name'."
   :type 'boolean
   :group 'emagent-log)
 
+(defface emagent-log-timestamp
+  '((t (:inherit font-lock-comment-face)))
+  "Face for timestamps in the emagent log."
+  :group 'emagent-log)
+
+(defface emagent-log-error
+  '((t (:inherit error)))
+  "Face for error keywords in the emagent log."
+  :group 'emagent-log)
+
+(defface emagent-log-warning
+  '((t (:inherit warning)))
+  "Face for warning keywords in the emagent log."
+  :group 'emagent-log)
+
+(defface emagent-log-success
+  '((t (:inherit success)))
+  "Face for success keywords in the emagent log."
+  :group 'emagent-log)
+
+(defvar emagent-log-font-lock-keywords
+  `(("^\\(\\[[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\]\\)"
+     (1 'emagent-log-timestamp))
+    ("\\b\\(error\\|failed\\|denied\\|refused\\|stalled\\|aborted?\\)\\b"
+     (1 'emagent-log-error))
+    ("\\b\\(skipping\\|hint\\)\\b"
+     (1 'emagent-log-warning))
+    ("\\b\\(ok\\|auto-approve\\)\\b"
+     (1 'emagent-log-success)))
+  "Font-lock keywords for `emagent-log-mode'.
+
+Kept small and keywords-only so append-heavy logging stays cheap.")
+
 (defvar emagent-log--mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "q") #'bury-buffer)
@@ -147,7 +180,9 @@ Arguments: FORMAT-STRING, ARGS."
   "Major mode for the emagent status log."
   (setq buffer-read-only t)
   (setq truncate-lines t)
-  (setq-local revert-buffer-function #'emagent-log-refresh))
+  (setq-local revert-buffer-function #'emagent-log-refresh)
+  ;; Keywords-only (no syntactic pass); jit-lock fonts only visible text.
+  (setq font-lock-defaults '(emagent-log-font-lock-keywords t t)))
 
 (provide 'emagent-log)
 
