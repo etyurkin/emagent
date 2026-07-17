@@ -40,11 +40,11 @@
 (require 'bookmark)
 (require 'emagent-log)
 
-(declare-function emagent-chat-model "emagent-chat")
+(declare-function emagent-session-model "emagent-session")
 (declare-function emagent-chat-set-model "emagent-chat")
-(declare-function emagent-chat-project-directory "emagent-chat")
-(declare-function emagent-chat-set-agent "emagent-chat")
-(declare-function emagent-chat-set-session-id "emagent-chat")
+(declare-function emagent-session-project-directory "emagent-session")
+(declare-function emagent-session-set-agent "emagent-session")
+(declare-function emagent-session-set-id "emagent-session")
 (declare-function emagent-chat-open "emagent-chat")
 
 (defvar emagent-chat-provider)
@@ -73,9 +73,9 @@
 
 (defun emagent-chat--bookmark-make-record ()
   "Return a bookmark record for the current emagent buffer."
-  (let* ((session-id (emagent-chat-session-id))
-         (project-dir (emagent-chat-project-directory))
-         (model (emagent-chat-model))
+  (let* ((session-id (emagent-session-id))
+         (project-dir (emagent-session-project-directory))
+         (model (emagent-session-model))
          (provider (when emagent-chat-provider (symbol-name emagent-chat-provider))))
     `(,(buffer-name)
       (handler . emagent-chat--bookmark-jump)
@@ -98,8 +98,8 @@
     (when buffer
       (with-current-buffer buffer
         (when model (emagent-chat-set-model model))
-        (when provider (emagent-chat-set-agent provider))
-        (when session-id (emagent-chat-set-session-id session-id)))
+        (when provider (emagent-session-set-agent provider))
+        (when session-id (emagent-session-set-id session-id)))
       (pop-to-buffer buffer)
       (when pos (goto-char pos)))))
 

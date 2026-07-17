@@ -98,7 +98,7 @@ target BUFFER (hence the two-argument signature)."
 (declare-function emagent-chat-append-thought "emagent-chat")
 (declare-function emagent-chat-append-assistant "emagent-chat")
 (declare-function emagent-chat-finish-assistant "emagent-chat")
-(declare-function emagent-chat-fail-assistant "emagent-chat-render")
+(declare-function emagent-chat-fail-assistant "emagent-chat-response")
 (declare-function emagent-chat-set-slash-commands "emagent-chat")
 (declare-function emagent-chat--buffer-displayed-p "emagent-chat")
 (declare-function emagent-chat--disable-incompatible-org-minor-modes "emagent-chat-mode")
@@ -293,7 +293,7 @@ overflow restore the buffer model immediately."
   (setq emagent-chat--on-send #'emagent--send-prompt
         emagent-chat--on-attach #'emagent-acp-attach-context
         emagent-chat--on-quit #'emagent-acp-shutdown-buffer
-        emagent-chat-provider (or (emagent-chat-agent) emagent-default-provider)))
+        emagent-chat-provider (or (emagent-session-agent) emagent-default-provider)))
 
 (defun emagent--on-mode-enable ()
   "Wire callbacks when enabling `emagent-mode'.
@@ -462,7 +462,7 @@ prompting; when both are installed prompt (defaulting to
 When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
   (let* ((id (or (map-elt entry :model-id) (emagent-acp--model-entry-id entry)))
          (name (or (map-elt entry :name) (emagent-acp--model-entry-name entry)))
-         (label (emagent-chat--model-choice-label-display id name)))
+         (label (emagent-model-choice-label-display id name)))
     (if omit-provider-prefix
         label
       (concat (propertize (symbol-name provider) 'face 'emagent-model-choice-agent)
@@ -565,7 +565,7 @@ When MODEL-ID is non-nil, persist it before connecting."
     (with-current-buffer buffer
       (when (eq provider 'cursor)
         (kill-local-variable 'emagent-chat-cursor-acp-extra-args))
-      (emagent-chat-set-agent provider)
+      (emagent-session-set-agent provider)
       (when (and model-id (not (string-empty-p model-id)))
         (emagent-chat-set-model model-id))
       (if connect
@@ -619,8 +619,9 @@ otherwise the project.el root, otherwise ~/."
 (defun emagent-trust-workspace (&optional both-agents)
   "Write on-disk workspace trust for Claude and/or Cursor.
 
-Must be called from an `emagent-mode' buffer.  Uses the buffer's project
-directory (`emagent-chat-project-directory') and agent (`emagent-chat-agent').
+Must be called from an `emagent-mode' buffer.  Uses the buffer's
+project directory (`emagent-session-project-directory') and agent
+\(`emagent-session-agent').
 
 BOTH-AGENTS non-nil (the prefix argument) updates *both* Claude
 \(=~/.claude.json=) and Cursor
@@ -634,12 +635,12 @@ trust use `emagent-trust-claude-reconnect' in this buffer (or clear
   (unless (derived-mode-p 'emagent-mode)
     (user-error "Emagent-trust-workspace must be called from an emagent buffer"))
   (emagent-trust--ensure-provider-features)
-  (let* ((dir0 (or (emagent-chat-project-directory)
+  (let* ((dir0 (or (emagent-session-project-directory)
                    (user-error "No project directory set in this buffer")))
          (dir (emagent-trust--normalize-dir (expand-file-name dir0)))
          (providers (if both-agents
                         '(claude cursor)
-                      (list (or (emagent-chat-agent)
+                      (list (or (emagent-session-agent)
                                 (user-error "No agent set in this buffer")))))
          (reconnect-hint
           (when (emagent-acp--connected-p)
@@ -672,9 +673,9 @@ Requires `emagent-mode' in a buffer whose agent is Claude."
   (interactive)
   (unless (derived-mode-p 'emagent-mode)
     (user-error "Turn on emagent-mode in this buffer first"))
-  (unless (eq (emagent-chat-agent) 'claude)
+  (unless (eq (emagent-session-agent) 'claude)
     (user-error "This buffer's agent is not Claude (see #+EMAGENT_AGENT)"))
-  (emagent-chat-clear-session-id)
+  (emagent-session-clear-id)
   (when emagent-acp--session
     (emagent-acp-shutdown-buffer))
   (emagent-acp-ensure-connected)
@@ -708,23 +709,23 @@ leaves the session files in the old location and causes session/load to fail."
   (interactive
    (list (expand-file-name
           (read-directory-name "New project directory: "
-                               (emagent-chat-project-directory)
+                               (emagent-session-project-directory)
                                nil t))))
   (unless (derived-mode-p 'emagent-mode)
     (user-error "Must be called from an emagent buffer"))
-  (let* ((old-dir (emagent-chat-project-directory))
+  (let* ((old-dir (emagent-session-project-directory))
          (new-dir (directory-file-name (expand-file-name new-dir)))
          (old-dir-norm (and old-dir (directory-file-name (expand-file-name old-dir)))))
     (when (equal old-dir-norm new-dir)
       (user-error "Directory is already %s" new-dir))
-    (let* ((session-id (emagent-chat-session-id)))
+    (let* ((session-id (emagent-session-id)))
       ;; Update provider-specific session storage for the new directory.
       (when (and session-id (not (string-empty-p session-id)) old-dir-norm)
         (pcase emagent-chat-provider
           ('claude (emagent-claude-relocate-session session-id old-dir-norm new-dir))
           ('cursor (emagent-cursor-relocate-session session-id old-dir-norm new-dir))))
       ;; Update the buffer header and reconnect.
-      (emagent-chat-set-project-directory new-dir)
+      (emagent-session-set-project-directory new-dir)
       (when (bound-and-true-p emagent-acp--session)
         (emagent-acp-shutdown-buffer))
       (emagent-acp-ensure-connected)

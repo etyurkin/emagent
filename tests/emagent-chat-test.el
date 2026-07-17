@@ -168,41 +168,41 @@ signal), so finalizing a response containing one does not crash."
     (should (string= "●○○" (substring-no-properties (emagent-chat--spinner-dot-grid))))))
 
 (ert-deftest emagent-chat-test-normalize-model-id ()
-  (should (string= "auto" (emagent-chat--normalize-model-id "default[]")))
-  (should (string= "auto" (emagent-chat--normalize-model-id "default")))
+  (should (string= "auto" (emagent-model-normalize-id "default[]")))
+  (should (string= "auto" (emagent-model-normalize-id "default")))
   (should (string= "grok-4.3"
-                   (emagent-chat--normalize-model-id "grok-4.3[context=200k]")))
+                   (emagent-model-normalize-id "grok-4.3[context=200k]")))
   (should (string= "claude-sonnet-4-6"
-                   (emagent-chat--normalize-model-id
+                   (emagent-model-normalize-id
                     "claude-sonnet-4-6[thinking=true]")))
-  (should (string= "gpt-4" (emagent-chat--normalize-model-id "gpt-4"))))
+  (should (string= "gpt-4" (emagent-model-normalize-id "gpt-4"))))
 
 (ert-deftest emagent-chat-test-canonical-model-id ()
-  (should (string= "default[]" (emagent-chat--canonical-model-id "auto")))
-  (should (string= "default[]" (emagent-chat--canonical-model-id "default")))
+  (should (string= "default[]" (emagent-model-canonical-id "auto")))
+  (should (string= "default[]" (emagent-model-canonical-id "default")))
   (should (string= "grok-4.3[context=200k]"
-                   (emagent-chat--canonical-model-id "grok-4.3[context=200k]"))))
+                   (emagent-model-canonical-id "grok-4.3[context=200k]"))))
 
 (ert-deftest emagent-chat-test-model-choice-label ()
   (should (string= "grok-4.3[context=200k]"
-                   (emagent-chat--model-choice-label
+                   (emagent-model-choice-label
                     "grok-4.3[context=200k]" "grok-4.3")))
   (should (string= "default[] (Auto)"
-                   (emagent-chat--model-choice-label "default[]" "Auto")))
+                   (emagent-model-choice-label "default[]" "Auto")))
   (should (string= "gpt-4 (GPT 4)"
-                   (emagent-chat--model-choice-label "gpt-4" "GPT 4"))))
+                   (emagent-model-choice-label "gpt-4" "GPT 4"))))
 
 (ert-deftest emagent-chat-test-model-choice-label-display ()
-  (let ((label (emagent-chat--model-choice-label-display
+  (let ((label (emagent-model-choice-label-display
                 "composer-2.5[fast=true]" "composer-2.5")))
     (should (string= "composer-2.5[fast=true]" (substring-no-properties label)))
     (should (eq 'emagent-model-choice-model (get-text-property 0 'face label)))
     (should (eq 'emagent-model-choice-detail (get-text-property 12 'face label))))
-  (let ((label (emagent-chat--model-choice-label-display "default[]" "Auto")))
+  (let ((label (emagent-model-choice-label-display "default[]" "Auto")))
     (should (string= "default[] (Auto)" (substring-no-properties label)))
     (should (eq 'emagent-model-choice-model (get-text-property 0 'face label)))
     (should (eq 'emagent-model-choice-detail (get-text-property 7 'face label))))
-  (let ((label (emagent-chat--model-choice-label-display "haiku" "Haiku")))
+  (let ((label (emagent-model-choice-label-display "haiku" "Haiku")))
     (should (string= "haiku (Haiku)" (substring-no-properties label)))
     (should (eq 'emagent-model-choice-model (get-text-property 0 'face label)))
     (should (eq 'emagent-model-choice-detail (get-text-property 5 'face label)))))
@@ -212,12 +212,12 @@ signal), so finalizing a response containing one does not crash."
    (lambda (buffer _dir)
      (with-current-buffer buffer
        (emagent-chat-set-model "default[]")
-       (should (string= "default[]" (emagent-chat-model)))
+       (should (string= "default[]" (emagent-session-model)))
        (should (string= "auto" (emagent-chat-model-display)))
        (should (string-match-p "^#\\+EMAGENT_MODEL: default\\[\\]"
                                (buffer-string)))
        (emagent-chat-set-model "grok-4.3[context=200k]")
-       (should (string= "grok-4.3[context=200k]" (emagent-chat-model)))
+       (should (string= "grok-4.3[context=200k]" (emagent-session-model)))
        (should (string= "grok-4.3" (emagent-chat-model-display)))))))
 
 (ert-deftest emagent-chat-test-mode-line-thinking ()
@@ -1600,6 +1600,22 @@ makes the link unclickable in org-mode."
   (should (string= "see https://example.com/a/b"
                    (emagent-chat--org-verbatim-paths
                     "see https://example.com/a/b"))))
+
+(ert-deftest emagent-chat-test-inline-code-preserves-backslashes ()
+  "Inline-code conversion must not reinterpret backslashes in the span.
+
+Regression for finish failing with Invalid use of backslash in
+replacement text when agent output contains paths like C:\\Users."
+  (should (string-match-p
+           "=foo\\\\1bar="
+           (emagent-chat--convert-agent-markup "use `foo\\1bar` here")))
+  (should (string-match-p
+           "=C:\\\\Users\\\\x="
+           (emagent-chat--convert-agent-markup "path `C:\\Users\\x`")))
+  (should (string-match-p
+           "\\[\\[https://example.com/a\\\\b\\]\\]"
+           (emagent-chat--convert-agent-markup
+            "see `https://example.com/a\\b`"))))
 
 (ert-deftest emagent-chat-test-finish-moves-point-to-user-prompt ()
   (emagent-test--with-emagent-buffer

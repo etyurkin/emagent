@@ -186,7 +186,7 @@ Arguments: STATE, ON-READY."
                    (with-current-buffer buf
                      (let ((was-modified (buffer-modified-p)))
                        (unwind-protect
-                           (emagent-chat-clear-session-id)
+                           (emagent-session-clear-id)
                          (set-buffer-modified-p was-modified)))))
                  (emagent-acp--new-session :state state :on-ready on-ready))))
 

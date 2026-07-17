@@ -242,7 +242,7 @@ The visible text is the short model name; the link target is
 `agent/full-model-id', revealed on hover.  The `emagent://' scheme
 \(never shown) tags this as the model marker so unrelated links a user
 pastes are not mistaken for it."
-  (let* ((agent (emagent-chat-agent))
+  (let* ((agent (ignore))
          (short (or (emagent-model-normalize-id model-id) model-id))
          (path (if agent (format "%s/%s" agent model-id) model-id)))
     (format "[[emagent://%s][%s]]" path short)))
@@ -520,14 +520,6 @@ response is open."
           (setq n (1+ n)))
         (format "*emagent %s-%d*" label n)))))
 
-;; Session-identity accessors moved to `emagent-session'.  These aliases keep
-;; the historical `emagent-chat-*' entry points working for UI callers.
-(defalias 'emagent-chat-session-id #'emagent-session-id)
-(defalias 'emagent-chat-set-session-id #'emagent-session-set-id)
-(defalias 'emagent-chat-clear-session-id #'emagent-session-clear-id)
-(defalias 'emagent-chat-set-project-directory #'emagent-session-set-project-directory)
-(defalias 'emagent-chat-project-directory #'emagent-session-project-directory)
-(defalias 'emagent-chat-model #'emagent-session-model)
 (declare-function emagent-acp-current-model-id "emagent-acp")
 
 (defun emagent-chat-model-display ()
@@ -543,16 +535,7 @@ saved #+EMAGENT_MODEL."
               (t (emagent-session-model)))))
     (when id (emagent-session-model-display id))))
 
-(defalias 'emagent-chat-set-agent #'emagent-session-set-agent)
-(defalias 'emagent-chat-agent #'emagent-session-agent)
-(defalias 'emagent-chat-allowed-tools #'emagent-session-allowed-tools)
-(defalias 'emagent-chat-add-allowed-tool #'emagent-session-add-allowed-tool)
-(defalias 'emagent-chat-allowed-permissions #'emagent-session-allowed-permissions)
-(defalias 'emagent-chat-add-allowed-permission #'emagent-session-add-allowed-permission)
-(defalias 'emagent-chat-session-allowed-permissions #'emagent-session-allowed-permissions-for)
-(defalias 'emagent-chat-add-session-permission #'emagent-session-add-session-permission)
-(defalias 'emagent-chat-session-auto-approve-p #'emagent-session-auto-approve-p)
-(defalias 'emagent-chat-set-session-auto-approve #'emagent-session-set-auto-approve)
+
 
 (defun emagent-chat-set-model (model)
   "Store ACP MODEL id in the current buffer and refresh the mode line."

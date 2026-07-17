@@ -162,7 +162,7 @@ Choices:
 
 (defun emagent-acp-set-model-transient (model-id on-done)
   "Switch this buffer's ACP session model to MODEL-ID without persisting it.
-The buffer model (`emagent-chat-model') is left unchanged, so this is a
+The buffer model (`emagent-session-model') is left unchanged, so this is a
 per-turn override.  ON-DONE is called once the switch resolves (success or
 failure) so the caller can proceed to send the prompt."
   (let ((state (emagent-acp--session)))

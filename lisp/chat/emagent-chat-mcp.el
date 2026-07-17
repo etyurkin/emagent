@@ -41,8 +41,8 @@
 (require 'cl-lib)
 (require 'map)
 (require 'emagent-log)
+(require 'emagent-session)
 
-(declare-function emagent-chat-project-directory "emagent-chat")
 (declare-function emagent-chat--slash-token-bounds "emagent-chat-slash")
 (declare-function emagent-cursor-command "emagent-cursor")
 (declare-function emagent-cursor-check-command "emagent-cursor")
@@ -129,12 +129,12 @@ Supports Cursor \(`name: status'\) and Claude
     ('cursor
      (require 'emagent-cursor)
      (emagent-cursor-check-command)
-     (cons (emagent-cursor-command) (emagent-chat-project-directory)))
+     (cons (emagent-cursor-command) (emagent-session-project-directory)))
     ('claude
      (unless (executable-find emagent-claude-mcp-command)
        (user-error "Claude CLI not found on PATH (%s)"
                    emagent-claude-mcp-command))
-     (cons emagent-claude-mcp-command (emagent-chat-project-directory)))
+     (cons emagent-claude-mcp-command (emagent-session-project-directory)))
     (_
      (user-error "/mcp is only supported for Claude and Cursor"))))
 
@@ -347,7 +347,7 @@ braces.  Best-effort; failures are logged."
   (require 'emagent-cursor)
   (when (and (eq emagent-chat-provider 'cursor)
              (executable-find (emagent-cursor-command)))
-    (let* ((directory (emagent-chat-project-directory))
+    (let* ((directory (emagent-session-project-directory))
            (program (emagent-cursor-command))
            (file (bound-and-true-p emagent-mcp-cursor-config-file))
            (data (and file (file-readable-p file)

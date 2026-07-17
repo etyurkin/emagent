@@ -193,7 +193,10 @@ Prose-only transforms applied outside src blocks, so a fenced `arr[i](fn)' or
   "Replace markdown `code` spans in TEXT with org markup.
 
 URL-like spans become org links (`[[url]]') so they stay clickable; other
-spans become org verbatim (`=code=')."
+spans become org verbatim (`=code=').
+
+Use a literal replacement: lambda return values are still scanned for
+replacement escapes, so spans containing backslashes would error."
   (replace-regexp-in-string
    "`\\([^`\n]+\\)`"
    (lambda (match)
@@ -201,7 +204,7 @@ spans become org verbatim (`=code=')."
        (if (emagent-chat--url-like-p code)
            (format "[[%s]]" code)
          (format "=%s=" code))))
-   text))
+   text nil t))
 
 (defun emagent-chat--normalize-response-spacing (text)
   "Normalize spacing around blocks and tables in TEXT.
