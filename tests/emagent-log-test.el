@@ -28,6 +28,38 @@
         (emagent-log "test line %d" 42))
       (should (string-match-p "test line 42" (buffer-string))))))
 
+(ert-deftest emagent-log-test-font-lock-keywords-only ()
+  "Log mode uses keywords-only font-lock (no syntactic pass)."
+  (let ((buffer (emagent-log--get-buffer)))
+    (with-current-buffer buffer
+      (should (eq (nth 1 font-lock-defaults) t))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "[12:34:56] permission denied; mcp enable foo: ok\n"))
+      (font-lock-ensure (point-min) (point-max))
+      (should (eq (get-text-property 1 'face) 'emagent-log-timestamp))
+      (goto-char (point-min))
+      (search-forward "denied")
+      (should (eq (get-text-property (match-beginning 0) 'face)
+                  'emagent-log-error))
+      (search-forward "ok")
+      (should (eq (get-text-property (match-beginning 0) 'face)
+                  'emagent-log-success)))))
+
+(ert-deftest emagent-log-test-font-lock-skips-lisp-error-form ()
+  "Do not highlight `error' inside dumped Lisp such as `(error (e) …)'."
+  (let ((buffer (emagent-log--get-buffer)))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "[12:34:56] eval:\n")
+        (insert "(handler-case (funcall f) (error (e) e))\n"))
+      (font-lock-ensure (point-min) (point-max))
+      (goto-char (point-min))
+      (search-forward "(error")
+      (should-not (eq (get-text-property (- (point) (length "error")) 'face)
+                      'emagent-log-error)))))
+
 (provide 'emagent-log-test)
 
 ;;; emagent-log-test.el ends here

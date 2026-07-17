@@ -1582,6 +1582,25 @@ directory; agent tool paths must still display under the project root."
     (should (string= (format "→ Read: =%s=" (file-truename "/tmp/x"))
                      (emagent-chat--format-tool-line "Read: /tmp/x")))))
 
+(ert-deftest emagent-chat-test-backtick-urls-become-org-links ()
+  "Backtick-wrapped URLs must stay clickable as org links, not =verbatim=.
+Agents often write `https://…` as inline code; converting that to =url=
+makes the link unclickable in org-mode."
+  (should (string-match-p
+           "\\[\\[https://example.com/x\\]\\]"
+           (emagent-chat--convert-agent-markup
+            "see `https://example.com/x` now")))
+  (should (string-match-p
+           "=code="
+           (emagent-chat--convert-agent-markup "use `code` here")))
+  (should-not (string-match-p
+               "=https://"
+               (emagent-chat--convert-agent-markup
+                "see `https://example.com/x` now")))
+  (should (string= "see https://example.com/a/b"
+                   (emagent-chat--org-verbatim-paths
+                    "see https://example.com/a/b"))))
+
 (ert-deftest emagent-chat-test-finish-moves-point-to-user-prompt ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
