@@ -95,14 +95,6 @@ desktop restore) does not mark the session buffer modified."
   "Return the #+EMAGENT_MODEL value at the top of the buffer."
   (emagent-chat--read-top-property "EMAGENT_MODEL"))
 
-;; Model-id helpers moved to the `emagent-model' leaf.  These aliases keep the
-;; historical `emagent-chat--*' names working for existing callers.
-(defalias 'emagent-chat--canonical-model-id #'emagent-model-canonical-id)
-(defalias 'emagent-chat--normalize-model-id #'emagent-model-normalize-id)
-(defalias 'emagent-chat--model-choice-label-parts #'emagent-model-choice-label-parts)
-(defalias 'emagent-chat--model-choice-label #'emagent-model-choice-label)
-(defalias 'emagent-chat--model-choice-label-display #'emagent-model-choice-label-display)
-
 (defun emagent-chat--read-session-property ()
   "Return the #+EMAGENT_SESSION value at the top of the buffer."
   (emagent-chat--read-top-property "EMAGENT_SESSION"))

@@ -50,7 +50,7 @@
 (declare-function emagent-chat--send-pending-begin "emagent-chat")
 (declare-function emagent-chat--send-pending-end "emagent-chat")
 (declare-function emagent-chat--send-active-p "emagent-chat")
-(declare-function emagent-chat--reset-response-state "emagent-chat-render")
+(declare-function emagent-chat--reset-response-state "emagent-chat-response")
 (declare-function emagent-chat--sync-user-zone-marker "emagent-chat-input")
 (declare-function emagent-chat--insert-switching-scaffold "emagent-chat-reasoning")
 (declare-function emagent-chat--insert-preparing-scaffold "emagent-chat-reasoning")

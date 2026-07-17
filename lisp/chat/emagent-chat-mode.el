@@ -184,7 +184,7 @@ Run \\[emagent-mode] to reconnect a saved session."
   (setq emagent-chat-session-id (or emagent-chat-session-id
                                     (emagent-chat--read-session-property))
         emagent-chat-model (or emagent-chat-model (emagent-chat--read-model-property))
-        emagent-chat-provider (emagent-chat-agent)
+        emagent-chat-provider (emagent-session-agent)
         emagent-chat-allowed-tools (or emagent-chat-allowed-tools
                                        (emagent-chat--read-allowed-tools-property))
         emagent-chat-allowed-permissions (or emagent-chat-allowed-permissions
@@ -192,7 +192,7 @@ Run \\[emagent-mode] to reconnect a saved session."
         emagent-chat--font-lock-deferred-p nil
         emagent-chat--table-align-deferred-p nil)
   (when-let ((model (or emagent-chat-model (emagent-chat--read-model-property))))
-    (setq emagent-chat-model (emagent-chat--canonical-model-id model)))
+    (setq emagent-chat-model (emagent-model-canonical-id model)))
   (setq-local default-directory (emagent-chat--session-directory))
   (if (bound-and-true-p doom-modeline-mode)
       (emagent-chat--setup-doom-modeline)
@@ -201,7 +201,7 @@ Run \\[emagent-mode] to reconnect a saved session."
                           '(" " (:eval (emagent-mode-line))))))
   (org-indent-mode -1)
   (emagent-chat--disable-incompatible-org-minor-modes)
-  (when-let ((dir (emagent-chat-project-directory)))
+  (when-let ((dir (emagent-session-project-directory)))
     (rename-buffer (emagent-chat--buffer-name-for-label
                     (emagent-chat--short-cwd-label dir))
                    t))
@@ -281,7 +281,7 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
       (setq emagent-chat-slug slug
             emagent-chat-session-id (or emagent-chat-session-id
                                         (emagent-chat--read-session-property)))
-      (emagent-chat-set-project-directory dir))
+      (emagent-session-set-project-directory dir))
     buffer))
 
 (advice-remove 'emagent-mode #'emagent-mode--safe-org-init)

@@ -37,8 +37,8 @@
 (require 'cl-lib)
 (require 'emagent-log)
 (require 'emagent-context)
+(require 'emagent-session)
 
-(declare-function emagent-chat-project-directory "emagent-chat")
 (declare-function flymake-diagnostics "flymake")
 (declare-function flymake-diagnostic-beg "flymake")
 (declare-function flymake-diagnostic-type "flymake")
@@ -197,10 +197,10 @@ active flymake diagnostics.  Attaches a combined error context block."
   "Pick project files and attach summaries to the next prompt.
 
 Presents `completing-read-multiple' over files under
-`emagent-chat-project-directory'.  For each chosen file includes its
+`emagent-session-project-directory'.  For each chosen file includes its
 relative path, size in lines, and a short content preview."
   (interactive)
-  (let* ((root (or (emagent-chat-project-directory)
+  (let* ((root (or (emagent-session-project-directory)
                    default-directory))
          (all-files (directory-files-recursively root "[^.].*" nil t))
          (rel-files (seq-filter

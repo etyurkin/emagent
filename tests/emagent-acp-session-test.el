@@ -275,8 +275,8 @@ function must be a cl-defun for its cl-return-from to have an enclosing block."
       (((symbol-function 'emagent-permissions-global-fingerprints)
         (lambda () '("tool:Allow web search?")))
        ((symbol-function 'emagent-permissions-session-fingerprints) (lambda (_) nil))
-       ((symbol-function 'emagent-chat-allowed-permissions) (lambda () nil))
-       ((symbol-function 'emagent-chat-project-directory) (lambda () nil))
+       ((symbol-function 'emagent-session-allowed-permissions) (lambda () nil))
+       ((symbol-function 'emagent-session-project-directory) (lambda () nil))
        ((symbol-function 'emagent-permissions-project-fingerprints) (lambda (_) nil)))
     (let ((state (emagent-test--make-acp-state)))
       (should (eq :allow-always

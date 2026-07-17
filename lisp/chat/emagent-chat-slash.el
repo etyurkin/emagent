@@ -42,7 +42,7 @@
   "Emagent chat UI."
   :group 'emagent)
 
-(declare-function emagent-chat-project-directory "emagent-chat")
+(declare-function emagent-session-project-directory "emagent-session")
 (declare-function emagent-chat--user-zone-start "emagent-chat")
 (declare-function emagent-chat--user-heading-re "emagent-chat")
 (declare-function emagent-chat-cycle-or-org-cycle "emagent-chat")
@@ -176,7 +176,7 @@ Arguments: DESCRIPTION, HINT."
              (fboundp 'emagent-cursor-slash-commands))
     (setq emagent-chat-slash-commands
           (emagent-chat--merge-slash-commands
-           (emagent-cursor-slash-commands (emagent-chat-project-directory))
+           (emagent-cursor-slash-commands (emagent-session-project-directory))
            emagent-chat-slash-commands))))
 
 ;;;###autoload
@@ -187,7 +187,7 @@ Arguments: DESCRIPTION, HINT."
           (if (and (eq emagent-chat-provider 'cursor)
                    (fboundp 'emagent-cursor-slash-commands))
               (emagent-chat--merge-slash-commands
-               (emagent-cursor-slash-commands (emagent-chat-project-directory))
+               (emagent-cursor-slash-commands (emagent-session-project-directory))
                incoming)
             incoming))
     (when (and emagent-chat-notify-slash-commands

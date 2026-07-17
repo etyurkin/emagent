@@ -50,7 +50,7 @@
 (declare-function emagent-acp--agent-error-only-response-p "emagent-acp-prompt")
 (declare-function emagent-acp--turn-hit-transient-error-p "emagent-acp-prompt")
 (declare-function emagent-acp--turn-did-no-work-p "emagent-acp-prompt")
-(declare-function emagent-chat-begin-thought "emagent-chat-render")
+(declare-function emagent-chat-begin-thought "emagent-chat-thought")
 (declare-function emagent-chat--open-response-p "emagent-chat")
 (declare-function emagent-chat--send-pending-end "emagent-chat")
 (declare-function emagent-chat--promote-transient-to-thinking "emagent-chat-reasoning")
