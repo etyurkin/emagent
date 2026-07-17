@@ -3,7 +3,7 @@
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; SPDX-License-Identifier: MIT
-;; Version: 1.2.4
+;; Version: 1.2.5
 
 ;; This file is part of emagent.
 ;;
