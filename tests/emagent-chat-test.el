@@ -1601,6 +1601,22 @@ makes the link unclickable in org-mode."
                    (emagent-chat--org-verbatim-paths
                     "see https://example.com/a/b"))))
 
+(ert-deftest emagent-chat-test-inline-code-preserves-backslashes ()
+  "Inline-code conversion must not reinterpret backslashes in the span.
+
+Regression for finish failing with Invalid use of backslash in
+replacement text when agent output contains paths like C:\\Users."
+  (should (string-match-p
+           "=foo\\\\1bar="
+           (emagent-chat--convert-agent-markup "use `foo\\1bar` here")))
+  (should (string-match-p
+           "=C:\\\\Users\\\\x="
+           (emagent-chat--convert-agent-markup "path `C:\\Users\\x`")))
+  (should (string-match-p
+           "\\[\\[https://example.com/a\\\\b\\]\\]"
+           (emagent-chat--convert-agent-markup
+            "see `https://example.com/a\\b`"))))
+
 (ert-deftest emagent-chat-test-finish-moves-point-to-user-prompt ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
