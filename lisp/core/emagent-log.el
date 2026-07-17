@@ -82,11 +82,13 @@ By default emagent writes only to `emagent-log-buffer-name'."
 (defvar emagent-log-font-lock-keywords
   `(("^\\(\\[[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\]\\)"
      (1 'emagent-log-timestamp))
-    ("\\b\\(error\\|failed\\|denied\\|refused\\|stalled\\|aborted?\\)\\b"
+    ;; Require bol/whitespace before the keyword so Lisp forms like
+    ;; `(error …)' and `:error' in dumped code are not highlighted.
+    ("\\(?:^\\|\\s-\\)\\(error\\|failed\\|denied\\|refused\\|stalled\\|aborted?\\)\\>"
      (1 'emagent-log-error))
-    ("\\b\\(skipping\\|hint\\)\\b"
+    ("\\(?:^\\|\\s-\\)\\(skipping\\|hint\\)\\>"
      (1 'emagent-log-warning))
-    ("\\b\\(ok\\|auto-approve\\)\\b"
+    ("\\(?:^\\|\\s-\\)\\(ok\\|auto-approve\\)\\>"
      (1 'emagent-log-success)))
   "Font-lock keywords for `emagent-log-mode'.
 
