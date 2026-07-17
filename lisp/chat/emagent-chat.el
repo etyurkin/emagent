@@ -703,7 +703,7 @@ after focus moves elsewhere."
   "Restore scroll state from VIEWS returned by `emagent-chat--save-window-views'.
 
 Windows that were at the buffer end keep following newly inserted text by
-moving their window-point to `point-max', matching `emagent-log'."
+moving their `window-point' to `point-max', matching `emagent-log'."
   (dolist (view views)
     (let ((win (plist-get view :window)))
       (when (window-live-p win)
@@ -737,7 +737,7 @@ moving their window-point to `point-max', matching `emagent-log'."
 Windows scrolled away from the end keep their `window-start'; windows that
 were showing `point-max' are scrolled to the new end after FN returns.
 Inserts use `save-excursion', so this explicit follow is required — Emacs
-does not auto-scroll when window-point is not at the insertion point."
+does not auto-scroll when `window-point' is not at the insertion point."
   (let ((views (emagent-chat--save-window-views)))
     (unwind-protect
         (funcall fn)
