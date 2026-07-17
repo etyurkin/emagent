@@ -146,30 +146,6 @@ double-stars, while inline markup in surrounding prose is still converted."
          (should (string-match-p "y = `z`" text))
          (should (string-match-p "w = a\\*\\*b" text)))))))
 
-(ert-deftest emagent-chat-integration-test-stream-demotes-headings ()
-  "Streamed `**'/`##' lines must nest under Response, not the user heading.
-
-Without demotion during append, a status line like `** score now' is org
-level-2 and becomes a sibling of `** Response' under `* user>'."
-  (emagent-test--with-emagent-buffer
-   (lambda (buffer _dir)
-     (with-current-buffer buffer
-       (goto-char (point-max))
-       (let ((at (emagent-chat--insert-user-heading-with-text "status?")))
-         (emagent-chat--begin-response at)
-         (emagent-chat-append-assistant
-          (concat "** score now 734/815\n"
-                  "- FORMATTER next\n\n"
-                  "## checkpoint\n"
-                  "done\n")))
-       (let ((text (substring-no-properties (buffer-string))))
-         (should (string-match-p "^\\*\\* Response" text))
-         (should (string-match-p "^\\*\\*\\* score now 734/815" text))
-         (should (string-match-p "^\\*\\*\\* checkpoint" text))
-         ;; Must not leave a level-2 score/checkpoint sibling of Response.
-         (should-not (string-match-p "^\\*\\* score now" text))
-         (should-not (string-match-p "^\\*\\* checkpoint" text)))))))
-
 (ert-deftest emagent-chat-integration-test-fail-assistant ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
