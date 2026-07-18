@@ -1651,7 +1651,8 @@ replacement text when agent output contains paths like C:\\Users."
           (emagent-chat-append-thought "planning...")
           (goto-char (point-min))
           (emagent-chat-finish-assistant "Done.")
-          (should (>= (point) (emagent-chat--user-zone-start)))
+          (should (emagent-chat--user-prompt-input-pos))
+          (should (= (point) (emagent-chat--user-prompt-input-pos)))
           (save-excursion
             (beginning-of-line)
             (should (looking-at (emagent-chat--user-heading-re))))))))))
@@ -1670,8 +1671,8 @@ replacement text when agent output contains paths like C:\\Users."
             (should (string-match-p "^\\*\\* Response$" text))
             (should (string-match-p "Hello world\\." text))
             (should-not (string-match-p "^\\*\\* Thinking" text))
-            (should-not (string-match-p (regexp-quote (emagent-chat--user-heading-prefix))
-                                        (match-string 0 text))))))))))
+            (should (string-match-p (emagent-chat--user-heading-re) text))
+            (should (= (point) (emagent-chat--user-prompt-input-pos))))))))))
 
 (ert-deftest emagent-chat-test-finish-keeps-tools-in-reasoning ()
   (emagent-test--with-emagent-buffer

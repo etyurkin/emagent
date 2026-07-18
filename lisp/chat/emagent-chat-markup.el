@@ -502,12 +502,13 @@ whole session log."
 (defun emagent-chat--font-lock-response-tail ()
   "Re-fontify the response tail without flushing the entire session buffer."
   (when font-lock-mode
-    (let ((start (emagent-chat--font-lock-region-start))
-          (end (point-max)))
-      (when (< start end)
-        (condition-case nil
-            (font-lock-fontify-region start end)
-          (error nil))))))
+    (save-excursion
+      (let ((start (emagent-chat--font-lock-region-start))
+            (end (point-max)))
+        (when (< start end)
+          (condition-case nil
+              (font-lock-fontify-region start end)
+            (error nil)))))))
 
 (defun emagent-chat--maybe-font-lock-flush ()
   "Run org font-lock on the response tail when safe; defer otherwise.
