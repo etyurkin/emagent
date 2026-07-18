@@ -81,7 +81,7 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
   prompt-finalized prompt-finishing (prompt-generation 0)
   prompt-retry-gen
   finish-token finish-timer prompt-watchdog prompt-watchdog-timer
-  extra-context compress-pending replaying-history
+  extra-context compress-pending quiet-prompt replaying-history
   continue-attempts deferred-complete-response
   current-tool current-tool-kind tool-call-since-last-chunk
   (tool-call-titles (make-hash-table :test 'equal))

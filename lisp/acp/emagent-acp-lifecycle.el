@@ -157,8 +157,7 @@ Arguments: STATE, ON-READY."
                           (or (map-elt error 'message) (format "%s" error)))))))
 
 (cl-defun emagent-acp--load-session (&key state session-id on-ready)
-  
-  "Internal helper for STATE and SESSION-ID and ON-READY."
+  "Resume SESSION-ID for STATE, falling back to session/new on failure."
   (emagent-acp--progress state "resuming session…")
   (setf (emagent-acp-state-replaying-history state) t)
   (emagent-acp--send-request
@@ -179,8 +178,11 @@ Arguments: STATE, ON-READY."
                   :response response
                   :on-ready on-ready
                   :resumed t))
-   :on-failure (lambda (_error _raw)
+   :on-failure (lambda (error _raw)
                  (setf (emagent-acp-state-replaying-history state) nil)
+                 (emagent-log "session/load failed for %s: %s"
+                              session-id
+                              (or (map-elt error 'message) (format "%s" error)))
                  (emagent-acp--progress state "resume failed, creating session…")
                  (when-let ((buf (emagent-acp--chat-buffer state)))
                    (with-current-buffer buf

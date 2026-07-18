@@ -121,6 +121,35 @@ Arguments: STATE."
         (funcall cb "No conversation to compress"))))
   (emagent-acp--refresh-mode-line state))
 
+(defconst emagent-acp--materialize-prompt-text
+  (concat "Acknowledge that this compacted session is ready. "
+          "Reply with exactly: ready. Do not use tools.")
+  "Quiet prompt text that forces the agent to persist a new session.
+
+Cursor ACP creates only meta.json until the first session/prompt; without
+this turn, compact then restart fails session/load.")
+
+(defun emagent-acp--materialize-session (state)
+  "Send a quiet prompt so STATE's new session is durable across restarts.
+
+Called after /compact creates a fresh session/new.  The reply is not
+rendered into the chat buffer."
+  (when-let ((session-id (emagent-acp-state-session-id state)))
+    (when (and (emagent-acp-state-ready state)
+               (not (emagent-acp-state-busy state)))
+      (emagent-log "materializing compacted session…")
+      (emagent-acp--progress state "materializing compacted session…")
+      (setf (emagent-acp-state-quiet-prompt state) t)
+      (emagent-acp--turn-begin state)
+      (emagent-acp--dispatch-prompt-request
+       :state state
+       :session-id session-id
+       :blocks `[((type . "text")
+                  (text . ,emagent-acp--materialize-prompt-text))]
+       :images nil
+       :gen (emagent-acp-state-prompt-generation state)
+       :attempt 1))))
+
 (defun emagent-acp--schedule-prompt-retry (state session-id blocks images gen attempt reason)
   "Re-dispatch the in-flight prompt after exponential backoff.
 
@@ -314,14 +343,15 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
   (emagent-acp--cancel-prompt-render state)
   (emagent-acp--clear-thought-buffer state)
   (emagent-acp--schedule-prompt-watchdog state)
-  (when (fboundp 'emagent-chat--send-pending-end)
-    (when-let ((buf (emagent-acp--chat-buffer state)))
-      (with-current-buffer buf
-        (emagent-chat--send-pending-end))))
-  (when (fboundp 'emagent-chat--promote-transient-to-thinking)
-    (when-let ((buf (emagent-acp--chat-buffer state)))
-      (with-current-buffer buf
-        (emagent-chat--promote-transient-to-thinking))))
+  (unless (emagent-acp-state-quiet-prompt state)
+    (when (fboundp 'emagent-chat--send-pending-end)
+      (when-let ((buf (emagent-acp--chat-buffer state)))
+        (with-current-buffer buf
+          (emagent-chat--send-pending-end))))
+    (when (fboundp 'emagent-chat--promote-transient-to-thinking)
+      (when-let ((buf (emagent-acp--chat-buffer state)))
+        (with-current-buffer buf
+          (emagent-chat--promote-transient-to-thinking)))))
   ;; Push the now-busy status; the mode line starts the spinner from it.
   (emagent-acp--refresh-mode-line state))
 

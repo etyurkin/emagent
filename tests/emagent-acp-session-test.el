@@ -1213,6 +1213,52 @@ project directory rather than opening up unconfined access."
     (should (string= (emagent-acp--system-prompt)
                      (emagent-acp--session-system-prompt "")))))
 
+(ert-deftest emagent-acp-session-test-quiet-prompt-skips-buffer-stream ()
+  (let ((state (emagent-test--make-acp-state))
+        (emagent-acp-stream-to-buffer t)
+        (emagent-acp-thought-progress 'both))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-quiet-prompt state) t)
+    (should-not (emagent-acp--stream-to-buffer-p state))
+    (should-not (emagent-acp--stream-thought-to-buffer-p state))))
+
+(ert-deftest emagent-acp-session-test-materialize-dispatches-quiet-prompt ()
+  "After compact, materialize sends a quiet session/prompt for durability."
+  (let* ((requests nil)
+         (client (emagent-test--make-test-client
+                  :request-sender
+                  (cl-function
+                   (lambda (&key request on-success &allow-other-keys)
+                     (push (map-elt request :method) requests)
+                     (when on-success
+                       (funcall on-success '((stopReason . "end_turn"))))))))
+         (state (emagent-test--make-acp-state client)))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--client-started-p) (lambda (_client) t))
+         ((symbol-function 'emagent-acp--schedule-prompt-watchdog) (lambda (_state) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (_state) nil)))
+      (setf (emagent-acp-state-ready state) t
+            (emagent-acp-state-session-id state) "sess-compact"
+            (emagent-acp-state-prompt-generation state) 0)
+      (emagent-acp--materialize-session state)
+      (should (equal (car requests) "session/prompt"))
+      (should (emagent-acp-state-quiet-prompt state))
+      (should (emagent-acp-state-prompt-finishing state)))))
+
+(ert-deftest emagent-acp-session-test-quiet-render-skips-finish-callback ()
+  (let* ((finished nil)
+         (state (emagent-test--make-acp-state)))
+    (setf (emagent-acp-state-quiet-prompt state) t
+          (emagent-acp-state-prompt-finishing state) t
+          (emagent-acp-state-assistant-text state) "ready"
+          (emagent-acp-state-cb-finish state)
+          (lambda (&rest _) (setq finished t)))
+    (emagent-acp--render-prompt-response state)
+    (should-not finished)
+    (should-not (emagent-acp-state-quiet-prompt state))
+    (should (emagent-acp-state-prompt-finalized state))
+    (should (string-empty-p (emagent-acp-state-assistant-text state)))))
+
 (ert-deftest emagent-acp-session-test-mcp-http-capable-p ()
   (should (emagent-acp--mcp-http-capable-p
            '((agentCapabilities . ((mcpCapabilities . ((http . t))))))))

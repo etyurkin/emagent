@@ -131,6 +131,7 @@ still settling (`prompt-finishing'), so late agent text is not stranded
 after an early stub.  Once `prompt-finalized' is set, streaming stops."
   (and emagent-acp-stream-to-buffer
        (not (emagent-acp-state-compress-pending state))
+       (not (emagent-acp-state-quiet-prompt state))
        (not (emagent-acp-state-prompt-finalized state))
        (or (emagent-acp-state-busy state)
            (emagent-acp-state-prompt-finishing state))))
@@ -141,6 +142,7 @@ after an early stub.  Once `prompt-finalized' is set, streaming stops."
 Arguments: STATE."
   (and (memq emagent-acp-thought-progress '(buffer both))
        (not (emagent-acp-state-compress-pending state))
+       (not (emagent-acp-state-quiet-prompt state))
        (not (emagent-acp-state-prompt-finalized state))
        (or (emagent-acp-state-busy state)
            (emagent-acp-state-prompt-finishing state))))
@@ -178,27 +180,47 @@ callback update state and reschedule; an early stub must not land before
 the final text is stable."
   (when (emagent-acp-state-prompt-finishing state)
     (when-let ((buffer (emagent-acp--chat-buffer state)))
-      (if (emagent-acp-state-compress-pending state)
-          (let ((summary (string-trim (or (emagent-acp-state-assistant-text state) ""))))
-            (setf (emagent-acp-state-compress-pending state) nil)
-            (if (string-empty-p summary)
-                (progn
-                  (emagent-log "compression aborted: empty summary")
-                  (with-current-buffer buffer
-                    (when-let ((cb (emagent-acp-state-cb-fail state)))
-                      (funcall cb "Compression produced no summary; conversation left intact"))))
-              (with-current-buffer buffer
-                (when-let ((cb (emagent-acp-state-cb-finish state)))
-                  (funcall cb
-                           (format "*Context compacted.* Agent session reset; the summary below is its only memory of the prior conversation.\n\n%s"
-                                   summary))))
-              (emagent-log "compressed session (%d chars)" (length summary))
-              (emagent-acp--new-session :state state :compressed-context summary))
-            (setf (emagent-acp-state-prompt-finishing state) nil)
-            (setf (emagent-acp-state-prompt-finalized state) t)
+      (cond
+       ((emagent-acp-state-quiet-prompt state)
+        (setf (emagent-acp-state-quiet-prompt state) nil)
+        (setf (emagent-acp-state-assistant-text state) "")
+        (setf (emagent-acp-state-thought-text state) "")
+        (emagent-acp--clear-thought-buffer state)
+        (emagent-acp--cancel-prompt-render state)
+        (setf (emagent-acp-state-prompt-finishing state) nil)
+        (setf (emagent-acp-state-prompt-finalized state) t)
+        (emagent-log "compacted session materialized")
+        (emagent-acp--progress state "connected")
+        (emagent-acp--refresh-mode-line state))
+       ((emagent-acp-state-compress-pending state)
+        (let ((summary (string-trim (or (emagent-acp-state-assistant-text state) ""))))
+          (setf (emagent-acp-state-compress-pending state) nil)
+          (if (string-empty-p summary)
+              (progn
+                (emagent-log "compression aborted: empty summary")
+                (with-current-buffer buffer
+                  (when-let ((cb (emagent-acp-state-cb-fail state)))
+                    (funcall cb "Compression produced no summary; conversation left intact"))))
             (with-current-buffer buffer
-              (emagent-chat--flush-deferred-font-lock))
-            (emagent-acp--refresh-mode-line state))
+              (when-let ((cb (emagent-acp-state-cb-finish state)))
+                (funcall cb
+                         (format "*Context compacted.* Agent session reset; the summary below is its only memory of the prior conversation.\n\n%s"
+                                 summary))))
+            (emagent-log "compressed session (%d chars)" (length summary))
+            (emagent-acp--new-session
+             :state state
+             :compressed-context summary
+             :on-ready
+             (lambda ()
+               (unless (fboundp 'emagent-acp--materialize-session)
+                 (require 'emagent-acp-send))
+               (emagent-acp--materialize-session state))))
+          (setf (emagent-acp-state-prompt-finishing state) nil)
+          (setf (emagent-acp-state-prompt-finalized state) t)
+          (with-current-buffer buffer
+            (emagent-chat--flush-deferred-font-lock))
+          (emagent-acp--refresh-mode-line state)))
+       (t
         (let ((token (emagent-acp-state-finish-token state))
               (assistant (emagent-acp-state-assistant-text state))
               (thought (emagent-acp-state-thought-text state))
@@ -237,7 +259,7 @@ the final text is stable."
            ((and (emagent-acp-state-prompt-finishing state)
                  (eq (emagent-acp-state-finish-token state) token))
             ;; Text changed during finish but no newer timer was scheduled.
-            (emagent-acp--schedule-prompt-render state))))))))
+            (emagent-acp--schedule-prompt-render state)))))))))
 
 (defun emagent-acp--permission-pending-p (state)
   "Return non-nil when STATE has unanswered permission requests."
@@ -441,6 +463,7 @@ prompt with backoff rather than surface the error.  Matching uses
 machine-generated error markers."
   (let ((text (string-trim (or (emagent-acp-state-assistant-text state) ""))))
     (and (not (emagent-acp-state-compress-pending state))
+         (not (emagent-acp-state-quiet-prompt state))
          (emagent-acp--turn-did-no-work-p state)
          (not (string-empty-p text))
          (string-match-p emagent-acp--agent-error-signature-re text))))
@@ -455,26 +478,31 @@ like commits or pushes); instead emagent resumes it by sending \"continue\",
 mirroring what a user does by hand."
   (let ((text (or (emagent-acp-state-assistant-text state) "")))
     (and (not (emagent-acp-state-compress-pending state))
+         (not (emagent-acp-state-quiet-prompt state))
          (string-match-p emagent-acp--agent-error-signature-re text))))
 
 (defun emagent-acp--abort-prompt (state message)
   "Abort the in-flight prompt for STATE and show MESSAGE."
   (setf (emagent-acp-state-prompt-retry-gen state) nil)
   (when (or (emagent-acp-state-busy state) (emagent-acp-state-prompt-finishing state))
-    (emagent-acp--clear-prompt-watchdog state)
-    (emagent-acp--cancel-prompt-render state)
-    (setf (emagent-acp-state-busy state) nil)
-    (setf (emagent-acp-state-prompt-finishing state) nil)
-    (setf (emagent-acp-state-prompt-finalized state) nil)
-    (setf (emagent-acp-state-assistant-text state) "")
-    (setf (emagent-acp-state-compress-pending state) nil)
-    (emagent-acp--trace "prompt aborted: %s" message)
-    (emagent-acp--flush-thought-buffer state)
-    (when-let ((buffer (emagent-acp--chat-buffer state)))
-      (with-current-buffer buffer
-        (when-let ((cb (emagent-acp-state-cb-fail state)))
-          (funcall cb message))))
-    (emagent-acp--refresh-mode-line state)))
+    (let ((quiet (emagent-acp-state-quiet-prompt state)))
+      (emagent-acp--clear-prompt-watchdog state)
+      (emagent-acp--cancel-prompt-render state)
+      (setf (emagent-acp-state-busy state) nil)
+      (setf (emagent-acp-state-prompt-finishing state) nil)
+      (setf (emagent-acp-state-prompt-finalized state) nil)
+      (setf (emagent-acp-state-assistant-text state) "")
+      (setf (emagent-acp-state-compress-pending state) nil)
+      (setf (emagent-acp-state-quiet-prompt state) nil)
+      (emagent-acp--trace "prompt aborted: %s" message)
+      (emagent-acp--flush-thought-buffer state)
+      (if quiet
+          (emagent-log "compacted session materialize failed: %s" message)
+        (when-let ((buffer (emagent-acp--chat-buffer state)))
+          (with-current-buffer buffer
+            (when-let ((cb (emagent-acp-state-cb-fail state)))
+              (funcall cb message)))))
+      (emagent-acp--refresh-mode-line state))))
 
 (cl-defun emagent-acp--send-request (&key state request on-success on-failure)
   

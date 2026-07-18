@@ -605,7 +605,8 @@ Arguments: STATE."
   "Display or refresh a tool-call line from ACP UPDATE.
 
 Arguments: STATE."
-  (unless (emagent-acp-state-replaying-history state)
+  (unless (or (emagent-acp-state-replaying-history state)
+              (emagent-acp-state-quiet-prompt state))
     (let* ((update (emagent-acp--provider-enrich-tool-call state update))
            (id (map-elt update 'toolCallId))
            (status (map-elt update 'status))
