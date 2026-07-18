@@ -752,6 +752,55 @@ Continuation uses `run-at-time'; pump those timers iteratively."
         (emagent-acp--fire-wakeup state "should not send")
         (should-not sent)))))
 
+(ert-deftest emagent-acp-session-test-wakeup-abort-clears ()
+  "Aborting a turn drops a captured ScheduleWakeup so it cannot arm later."
+  (let ((state (emagent-acp--state-create))
+        (emagent-acp-honor-schedule-wakeup t))
+    (setf (emagent-acp-state-busy state) t)
+    (emagent-acp--capture-schedule-wakeup
+     state (emagent-acp-session-test--wakeup-update '(("delaySeconds" . 60))))
+    (should (emagent-acp-state-wakeup-request state))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--chat-buffer) (lambda (_) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--flush-thought-buffer) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--clear-prompt-watchdog) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--cancel-prompt-render) (lambda (&rest _) nil)))
+      (emagent-acp--abort-prompt state "boom"))
+    (should-not (emagent-acp-state-wakeup-request state))
+    (should-not (emagent-acp-state-wakeup-timer state))))
+
+(ert-deftest emagent-acp-session-test-wakeup-interrupt-clears ()
+  "Finalize-in-flight (interrupt) cancels a pending or armed wakeup."
+  (let ((state (emagent-acp--state-create))
+        (emagent-acp-honor-schedule-wakeup t)
+        (emagent-acp--session nil))
+    (emagent-acp--capture-schedule-wakeup
+     state (emagent-acp-session-test--wakeup-update '(("delaySeconds" . 60))))
+    (emagent-acp--arm-wakeup state)
+    (should (timerp (emagent-acp-state-wakeup-timer state)))
+    (setf (emagent-acp-state-busy state) t)
+    (setq emagent-acp--session state)
+    (unwind-protect
+        (emagent-test--with-mocks
+            (((symbol-function 'emagent-acp--clear-prompt-watchdog)
+              (lambda (&rest _) nil))
+             ((symbol-function 'emagent-acp--cancel-prompt-render)
+              (lambda (&rest _) nil))
+             ((symbol-function 'emagent-acp--flush-thought-buffer)
+              (lambda (&rest _) nil))
+             ((symbol-function 'emagent-acp--reset-permission-gate)
+              (lambda (&rest _) nil))
+             ((symbol-function 'emagent-acp--render-prompt-response)
+              (lambda (&rest _) nil))
+             ((symbol-function 'emagent-acp--refresh-mode-line)
+              (lambda (&rest _) nil)))
+          (should (emagent-acp--finalize-in-flight-prompt "stopped"))
+          (should-not (emagent-acp-state-wakeup-timer state))
+          (should-not (emagent-acp-state-wakeup-request state)))
+      (emagent-acp--cancel-wakeup state)
+      (setq emagent-acp--session nil))))
+
 ;;;; Tool-call display
 
 (ert-deftest emagent-acp-session-test-edit-patch-string-keeps-blank-lines ()

@@ -420,6 +420,8 @@ finalized."
       (cl-return-from emagent-acp--finalize-in-flight-prompt nil))
     (emagent-acp--clear-prompt-watchdog state)
     (emagent-acp--cancel-prompt-render state)
+    ;; Interrupt/stop must not leave a ScheduleWakeup to arm later.
+    (emagent-acp--cancel-wakeup state)
     (emagent-acp--flush-thought-buffer state)
     (when (and stop-notice (not (string-empty-p stop-notice)))
       (let* ((text (or (emagent-acp-state-assistant-text state) ""))

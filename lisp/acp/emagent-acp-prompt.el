@@ -566,6 +566,8 @@ was still working."
         (force (and (not (emagent-acp-state-quiet-prompt state))
                     (emagent-acp--quota-error-p message))))
     (when (or in-flight force)
+      ;; Do not arm a ScheduleWakeup captured during a failed/aborted turn.
+      (emagent-acp--cancel-wakeup state)
       (when in-flight
         (emagent-acp--clear-prompt-watchdog state)
         (emagent-acp--cancel-prompt-render state)
