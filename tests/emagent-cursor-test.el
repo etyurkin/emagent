@@ -68,6 +68,21 @@
       (when (file-exists-p root)
         (delete-directory root t)))))
 
+(ert-deftest emagent-cursor-test-store-db-path-caches ()
+  "store.db path lookup is cached so chats/ is not rescanned every resolve."
+  (clrhash emagent-cursor--store-db-cache)
+  (let* ((lookups 0)
+         (emagent-cursor-dir "/tmp/emagent-cursor-test-missing"))
+    (cl-letf (((symbol-function 'emagent-cursor--locate-store-db)
+               (lambda (id)
+                 (cl-incf lookups)
+                 (format "/fake/%s/store.db" id))))
+      (should (string= (emagent-cursor--store-db-path "sess-1")
+                       "/fake/sess-1/store.db"))
+      (should (string= (emagent-cursor--store-db-path "sess-1")
+                       "/fake/sess-1/store.db"))
+      (should (= lookups 1)))))
+
 (provide 'emagent-cursor-test)
 
 ;;; emagent-cursor-test.el ends here

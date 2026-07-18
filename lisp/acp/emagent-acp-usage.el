@@ -55,6 +55,14 @@
   "Return non-nil when the current buffer's ACP session is processing a prompt."
   (and emagent-acp--session (emagent-acp-state-busy emagent-acp--session)))
 
+(defun emagent-acp-turn-in-flight-p ()
+  "Return non-nil while the session is busy or finishing a prompt.
+
+Used to defer expensive org font-lock until the turn settles."
+  (and emagent-acp--session
+       (or (emagent-acp-state-busy emagent-acp--session)
+           (emagent-acp-state-prompt-finishing emagent-acp--session))))
+
 (defun emagent-acp-waiting-permission-p ()
   "Return non-nil while permission requests are queued or being answered."
   (and emagent-acp--session

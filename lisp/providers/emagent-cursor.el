@@ -144,8 +144,24 @@ Arguments: RAW."
       (and (listp raw) (null raw))
       (and (hash-table-p raw) (zerop (hash-table-count raw)))))
 
+(defvar emagent-cursor--store-db-cache (make-hash-table :test 'equal)
+  "Map Cursor ACP session-id to a resolved store.db path.
+
+Avoids re-scanning ~/.cursor/chats on every tool-resolve attempt.")
+
 (defun emagent-cursor--store-db-path (session-id)
-  "Return store.db for Cursor ACP SESSION-ID, or nil when missing."
+  "Return store.db for Cursor ACP SESSION-ID, or nil when missing.
+
+Caches successful lookups: each tool-call resolve may retry several times,
+and the chats/ fallback walks every hash directory."
+  (or (gethash session-id emagent-cursor--store-db-cache)
+      (let ((path (emagent-cursor--locate-store-db session-id)))
+        (when path
+          (puthash session-id path emagent-cursor--store-db-cache))
+        path)))
+
+(defun emagent-cursor--locate-store-db (session-id)
+  "Locate store.db for SESSION-ID under `emagent-cursor-dir'."
   (let ((flat (expand-file-name
                (format "acp-sessions/%s/store.db" session-id)
                emagent-cursor-dir)))
@@ -156,9 +172,10 @@ Arguments: RAW."
             found)
         (when (file-directory-p chats)
           (dolist (hash (directory-files chats t) (unless found nil))
-            (unless found
+            (unless (or found
+                        (member (file-name-nondirectory hash) '("." "..")))
               (let ((candidate (expand-file-name
-                                 (format "%s/store.db" session-id) hash)))
+                                (format "%s/store.db" session-id) hash)))
                 (when (file-readable-p candidate)
                   (setq found candidate))))))
         found)))))
@@ -175,11 +192,12 @@ Arguments: RAW."
          (replace-regexp-in-string "^tool_" "call_" tool-call-id))))
 
 (defconst emagent-cursor--store-recent-blobs-sql
-  "SELECT cast(data as text) FROM blobs ORDER BY rowid DESC LIMIT 120;"
+  "SELECT cast(data as text) FROM blobs ORDER BY rowid DESC LIMIT 60;"
   "SQL to fetch recent Cursor store.db blobs for tool-call arg lookup.
 
 Avoids `cast(data as text) LIKE …` full-table scans, which block Emacs for
-tens of milliseconds on large sessions when run via `shell-command-to-string'.")
+tens of milliseconds on large sessions when run via `shell-command-to-string'.
+Limit stays small: tool args appear in the newest blobs within seconds.")
 
 (defun emagent-cursor--tool-call-from-sqlite-stdout (out tool-call-id)
   "Parse sqlite3 OUT for TOOL-CALL-ID; return (NAME . ARGS) or nil."
@@ -198,6 +216,9 @@ CALLBACK is called with (TOOL-NAME . ARGS-ALIST) or nil.  Never blocks the
 Emacs command loop with `shell-command-to-string'.  When the lookup cannot
 start (missing db/sqlite), CALLBACK still runs on a timer so callers never
 re-enter synchronously from this helper.
+
+JSON parsing of sqlite output is deferred off the process sentinel so other
+filters and timers can run between process exit and the resolve callback.
 
 Arguments: SESSION-ID, TOOL-CALL-ID, CALLBACK."
   (cl-labels
@@ -221,11 +242,15 @@ Arguments: SESSION-ID, TOOL-CALL-ID, CALLBACK."
                    (when (memq (process-status p) '(exit signal))
                      (let* ((ok (zerop (process-exit-status p)))
                             (out (when (and ok (buffer-live-p buf))
-                                   (with-current-buffer buf (buffer-string))))
-                            (entry (and out (emagent-cursor--tool-call-from-sqlite-stdout
-                                             out tool-call-id))))
+                                   (with-current-buffer buf (buffer-string)))))
                        (when (buffer-live-p buf) (kill-buffer buf))
-                       (done entry))))))
+                       ;; Parse blob JSON on a timer, not inside the sentinel.
+                       (run-at-time
+                        0 nil
+                        (lambda ()
+                          (done (and out
+                                     (emagent-cursor--tool-call-from-sqlite-stdout
+                                      out tool-call-id))))))))))
             (error
              (when (buffer-live-p buf) (kill-buffer buf))
              (done nil))))))))

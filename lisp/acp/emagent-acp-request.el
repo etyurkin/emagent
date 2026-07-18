@@ -227,10 +227,11 @@ Arguments: STATE."
 (defun emagent-acp--drain-permission-queue-now (state)
   "Process queued permission requests without recursive auto-approve nesting.
 
-For auto-deny/auto-approve: drain the queue iteratively in this call so a
-flood of Cursor MCP permissions (e.g. mcp-gateway auth/tool prompts) cannot
-overflow the Lisp stack.  For interactive prompts: insert one dialog and
-return; the button callback schedules the next drain.
+For auto-deny/auto-approve: handle at most
+`emagent-acp-permission-drain-batch-size' requests, then reschedule so a flood
+of MCP permissions cannot peg the Emacs command loop.  For interactive
+prompts: insert one dialog and return; the button callback schedules the
+next drain.
 
 Arguments: STATE."
   (if (and (emagent-acp-state-permission-queue state)
@@ -243,43 +244,53 @@ Arguments: STATE."
                            (lambda ()
                              (setf (emagent-acp-state-permission-drain-timer state) nil)
                              (emagent-acp--drain-permission-queue-now state)))))
-    (while (and (emagent-acp-state-permission-queue state)
-                (not (emagent-acp-state-permission-busy state)))
-      (let ((request (car (emagent-acp-state-permission-queue state))))
-        (setf (emagent-acp-state-permission-queue state)
-              (cdr (emagent-acp-state-permission-queue state)))
-        (setf (emagent-acp-state-permission-busy state) t)
-        (emagent-acp--refresh-mode-line state)
-        (condition-case err
-            (emagent-acp--handle-one-permission
-             :state state
-             :emagent-acp-request request
-             :on-complete
-             (lambda ()
-               ;; Auto-approve runs this before handle-one returns (busy
-               ;; clears; the while loop continues).  Interactive prompts
-               ;; run this later from the button callback.
-               (setf (emagent-acp-state-permission-busy state) nil)
-               (emagent-acp--refresh-mode-line state)
-               (condition-case cont-err
-                   (progn
-                     (emagent-acp--maybe-complete-deferred-prompt state)
-                     (when (and (emagent-acp-state-permission-queue state)
-                                (emagent-acp--permission-interactive-p state))
-                       (emagent-acp--schedule-permission-drain state)))
-                 ((error quit)
-                  (emagent-log "permission on-complete error: %s"
-                               (error-message-string cont-err))))))
-          ((error quit)
-           ;; Request was popped but not answered: cancel so the agent is
-           ;; not left blocked, then continue the iterative drain.
-           (emagent-log "permission handler error: %s" (error-message-string err))
-           (emagent-acp--cancel-permission-request state request)
-           (setf (emagent-acp-state-permission-busy state) nil)
-           (emagent-acp--refresh-mode-line state)
-           (when (and (emagent-acp-state-permission-queue state)
-                      (emagent-acp--permission-interactive-p state))
-             (emagent-acp--schedule-permission-drain state))))))))
+    (let ((batch 0)
+          (limit (max 1 emagent-acp-permission-drain-batch-size))
+          (interactive (emagent-acp--permission-interactive-p state)))
+      (while (and (emagent-acp-state-permission-queue state)
+                  (not (emagent-acp-state-permission-busy state))
+                  (or interactive (< batch limit)))
+        (setq batch (1+ batch))
+        (let ((request (car (emagent-acp-state-permission-queue state))))
+          (setf (emagent-acp-state-permission-queue state)
+                (cdr (emagent-acp-state-permission-queue state)))
+          (setf (emagent-acp-state-permission-busy state) t)
+          (emagent-acp--refresh-mode-line state)
+          (condition-case err
+              (emagent-acp--handle-one-permission
+               :state state
+               :emagent-acp-request request
+               :on-complete
+               (lambda ()
+                 ;; Auto-approve runs this before handle-one returns (busy
+                 ;; clears; the while loop continues).  Interactive prompts
+                 ;; run this later from the button callback.
+                 (setf (emagent-acp-state-permission-busy state) nil)
+                 (emagent-acp--refresh-mode-line state)
+                 (condition-case cont-err
+                     (progn
+                       (emagent-acp--maybe-complete-deferred-prompt state)
+                       (when (and (emagent-acp-state-permission-queue state)
+                                  (emagent-acp--permission-interactive-p state))
+                         (emagent-acp--schedule-permission-drain state)))
+                   ((error quit)
+                    (emagent-log "permission on-complete error: %s"
+                                 (error-message-string cont-err))))))
+            ((error quit)
+             ;; Request was popped but not answered: cancel so the agent is
+             ;; not left blocked, then continue the iterative drain.
+             (emagent-log "permission handler error: %s" (error-message-string err))
+             (emagent-acp--cancel-permission-request state request)
+             (setf (emagent-acp-state-permission-busy state) nil)
+             (emagent-acp--refresh-mode-line state)
+             (when (and (emagent-acp-state-permission-queue state)
+                        (emagent-acp--permission-interactive-p state))
+               (emagent-acp--schedule-permission-drain state))))))
+      ;; Yield after an auto-approve batch so redisplay can run.
+      (when (and (not interactive)
+                 (emagent-acp-state-permission-queue state)
+                 (not (emagent-acp-state-permission-busy state)))
+        (emagent-acp--schedule-permission-drain state)))))
 
 (defun emagent-acp--drain-permission-queue (state)
   "Process queued permission requests one at a time.

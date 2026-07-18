@@ -457,6 +457,8 @@ Arguments: TEXT."
 (defvar-local emagent-chat--font-lock-deferred-p nil
   "When non-nil, defer org font-lock until the emagent buffer is active.")
 
+(declare-function emagent-acp-turn-in-flight-p "emagent-acp-usage")
+
 (defun emagent-chat--buffer-active-p (&optional buffer)
   "Return non-nil when BUFFER is displayed in the selected window."
   (let ((buf (or buffer (current-buffer))))
@@ -508,8 +510,14 @@ whole session log."
           (error nil))))))
 
 (defun emagent-chat--maybe-font-lock-flush ()
-  "Run org font-lock on the response tail when active; defer otherwise."
-  (if (emagent-chat--buffer-active-p)
+  "Run org font-lock on the response tail when safe; defer otherwise.
+
+Defer when the buffer is not selected, and also while an ACP turn is
+busy or finishing — fontifying large Thinking/tool regions on every
+chunk pegs the command loop for both Cursor and Claude."
+  (if (and (emagent-chat--buffer-active-p)
+           (not (and (fboundp 'emagent-acp-turn-in-flight-p)
+                     (emagent-acp-turn-in-flight-p))))
       (progn
         (setq emagent-chat--font-lock-deferred-p nil)
         (emagent-chat--font-lock-response-tail))

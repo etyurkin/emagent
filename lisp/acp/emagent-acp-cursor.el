@@ -60,6 +60,12 @@
 (defconst emagent-acp-cursor--tool-resolve-base-delay 0.05
   "Initial idle delay between Cursor store.db resolve retries.")
 
+(defconst emagent-acp-cursor--tool-resolve-yield 0.01
+  "Delay before starting the next queued store.db lookup after one finishes.
+
+Keeps successive sqlite + JSON parse bursts from stacking on zero-delay
+timers during tool-heavy Cursor turns.")
+
 (defun emagent-acp-cursor--detect-p (state)
   "Return non-nil when STATE's agent is Cursor's cursor-agent CLI."
   (when-let ((launch (emagent-acp--agent-launch-string state)))
@@ -180,7 +186,8 @@ Arguments: STATE, ID."
            (if retry-delay
                (emagent-acp-cursor--drain-tool-resolve-queue state retry-delay)
              (progn
-               (emagent-acp-cursor--drain-tool-resolve-queue state 0)
+               (emagent-acp-cursor--drain-tool-resolve-queue
+                state emagent-acp-cursor--tool-resolve-yield)
                (emagent-acp--maybe-complete-deferred-prompt state))))))
     (let* ((pending-table (emagent-acp-state-tool-call-pending state))
            (merged (and pending-table (gethash id pending-table)))

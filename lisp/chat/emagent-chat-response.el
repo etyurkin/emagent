@@ -83,6 +83,8 @@ Thinking block."
           emagent-chat--thought-open-p nil
           emagent-chat--reasoning-streamed-p nil)))
 
+(declare-function emagent-chat--flush-deferred-font-lock "emagent-chat")
+
 (defun emagent-chat-insert-system (message)
   "Append system MESSAGE to `emagent-log-buffer-name'."
   (emagent-log "%s" message))
@@ -276,7 +278,8 @@ buffer shows formatted org while the response is still arriving."
             (emagent-chat--reset-response-state)
             (emagent-chat--sync-user-zone-marker)
             (emagent-chat--maybe-font-lock-flush))))))
-  (emagent-chat--insert-user-heading-stub))
+  (emagent-chat--insert-user-heading-stub)
+  (emagent-chat--flush-deferred-font-lock))
 
 (defun emagent-chat--finalize-streamed-assistant (converted)
   "Replace the `** Response' body with CONVERTED assistant text."
@@ -316,7 +319,8 @@ Called once the ACP finish render has settled (no newer assistant text)."
     (setq emagent-chat--pending-hide-reasoning nil))
   (emagent-chat--reset-response-state)
   (emagent-chat--sync-user-zone-marker)
-  (emagent-chat--insert-user-heading-stub))
+  (emagent-chat--insert-user-heading-stub)
+  (emagent-chat--flush-deferred-font-lock))
 
 (defun emagent-chat--demote-headlines-in-region (beg end)
   "Demote org headlines at level 1-2 between BEG and END to level 3.
@@ -375,7 +379,8 @@ so a subsequent finish can replace the body if more assistant text arrives."
   (when emagent-chat--finish-close
     ;; Insert stub after stable view is restored, so point ends up at the
     ;; user prompt heading rather than being restored to the entry position.
-    (emagent-chat--insert-user-heading-stub)))
+    (emagent-chat--insert-user-heading-stub)
+    (emagent-chat--flush-deferred-font-lock)))
 
 (provide 'emagent-chat-response)
 ;;; emagent-chat-response.el ends here
