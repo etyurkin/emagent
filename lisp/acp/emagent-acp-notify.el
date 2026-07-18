@@ -131,8 +131,7 @@ Arguments: EMAGENT-ACP-NOTIFICATION."
         (_ nil)))))
 
 (cl-defun emagent-acp--subscribe (&key state)
-  
-  "Internal helper for STATE."
+  "Subscribe STATE's client to ACP errors, notifications, and requests."
   (let ((buffer (emagent-acp--chat-buffer state)))
     (emagent-acp-subscribe-to-errors
      :client (emagent-acp-state-client state)
@@ -142,9 +141,11 @@ Arguments: EMAGENT-ACP-NOTIFICATION."
        (let ((message (or (map-elt emagent-acp-error 'message)
                           (format "%s" emagent-acp-error))))
          (emagent-acp--log-agent-stderr message)
-         (when (and (emagent-acp-state-busy state)
-                    (emagent-acp--fatal-agent-error-p message)
-                    (not (emagent-acp--prompt-retry-pending-p state)))
+         (when (and (emagent-acp--fatal-agent-error-p message)
+                    (not (emagent-acp--prompt-retry-pending-p state))
+                    (or (emagent-acp-state-busy state)
+                        (emagent-acp-state-prompt-finishing state)
+                        (emagent-acp--quota-error-p message)))
            (emagent-acp--abort-prompt state message))
          (when (emagent-acp--stderr-notify-p emagent-acp-error)
            (emagent-acp--notify-user state (format "emagent error: %s" message))))))
@@ -176,6 +177,7 @@ Arguments: EMAGENT-ACP-NOTIFICATION."
 (declare-function emagent-acp--persist-model-id "emagent-acp-usage")
 (declare-function emagent-acp--update-usage-from-notification "emagent-acp-usage")
 (declare-function emagent-acp--fatal-agent-error-p "emagent-acp-prompt")
+(declare-function emagent-acp--quota-error-p "emagent-acp-prompt")
 (declare-function emagent-acp--prompt-retry-pending-p "emagent-acp-prompt")
 (declare-function emagent-acp--abort-prompt "emagent-acp-prompt")
 (declare-function emagent-acp--notify-user "emagent-acp-prompt")

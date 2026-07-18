@@ -175,8 +175,10 @@ Interactive permission prompts still insert one dialog and return."
   "Seconds of inactivity before the prompt watchdog fires.
 
 The watchdog resets on each tool-call notification, so this measures idle
-time since the last tool call, not total prompt duration.  Increase if your
-agent regularly makes long chains of tool calls."
+time since the last tool call, not total prompt duration.  When ACP work is
+still outstanding (pending request, permission prompt, tool-resolve), the
+watchdog extends instead of closing the Response.  Increase if your agent
+regularly makes long chains of tool calls."
   :type 'integer
   :group 'emagent)
 

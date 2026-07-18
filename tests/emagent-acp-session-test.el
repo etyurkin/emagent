@@ -1268,10 +1268,53 @@ project directory rather than opening up unconfined access."
 (ert-deftest emagent-acp-session-test-fatal-agent-error-p ()
   (should (emagent-acp--fatal-agent-error-p "request timed out"))
   (should (emagent-acp--fatal-agent-error-p "failed with status 500"))
+  (should (emagent-acp--fatal-agent-error-p
+           "Internal error: You've hit your session limit · resets 11:10pm"))
   (should-not (emagent-acp--fatal-agent-error-p "still working"))
   (should-not
    (emagent-acp--fatal-agent-error-p
     "Internal error: API Error: Unable to connect to API (ConnectionRefused)")))
+
+(ert-deftest emagent-acp-session-test-quota-error-p ()
+  (should (emagent-acp--quota-error-p
+           "Internal error: You've hit your session limit · resets 11:10pm (America/Toronto)"))
+  (should (emagent-acp--quota-error-p "rate limit exceeded"))
+  (should-not (emagent-acp--quota-error-p "request timed out"))
+  (should-not (emagent-acp--quota-error-p nil)))
+
+(ert-deftest emagent-acp-session-test-abort-prompt-surfaces-quota-after-finalize ()
+  "Quota errors still reach cb-fail after the watchdog cleared busy."
+  (let* ((seen nil)
+         (state (emagent-test--make-acp-state)))
+    (setf (emagent-acp-state-busy state) nil
+          (emagent-acp-state-prompt-finishing state) nil
+          (emagent-acp-state-cb-fail state)
+          (lambda (message) (setq seen message)))
+    (emagent-acp--abort-prompt
+     state
+     "prompt failed: Internal error: You've hit your session limit · resets 11:10pm")
+    (should (string-match-p "session limit" seen))))
+
+(ert-deftest emagent-acp-session-test-watchdog-extends-when-pending ()
+  "Watchdog must not finalize while ACP requests are still pending."
+  (let* ((state (emagent-test--make-acp-state))
+         (completed nil)
+         (emagent-acp-watchdog-timeout 0.01))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-assistant-text state) "partial"
+          (map-elt (emagent-acp-state-client state) :pending-requests)
+          '(("1" . t)))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--complete-prompt)
+          (lambda (&rest _) (setq completed t)))
+         ((symbol-function 'emagent-acp--abort-prompt)
+          (lambda (&rest _) (setq completed 'aborted)))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (_s) nil)))
+      (emagent-acp--schedule-prompt-watchdog state)
+      (sleep-for 0.05)
+      (should-not completed)
+      (should (emagent-acp-state-prompt-watchdog-timer state))
+      (emagent-acp--clear-prompt-watchdog state))))
 
 (ert-deftest emagent-acp-session-test-retriable-prompt-error-p ()
   (should (emagent-acp--retriable-prompt-error-p

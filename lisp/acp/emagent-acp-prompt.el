@@ -94,32 +94,46 @@ Arguments: STATE."
 
 Cancel any existing watchdog first: this is re-invoked on every displayed tool
 call and permission answer, and without the cancel each call would leak a live
-timer (token-guarded no-ops that still pin STATE for the whole timeout)."
+timer (token-guarded no-ops that still pin STATE for the whole timeout).
+
+When ACP work is still outstanding (pending RPC, permission prompt, or
+tool-resolve), extend the watchdog instead of finalizing: otherwise the UI
+closes the Response while the agent keeps working and logging."
   (when-let ((old (emagent-acp-state-prompt-watchdog-timer state)))
     (cancel-timer old))
   (let* ((token (cl-gensym "emagent-prompt-watchdog"))
          (timer (run-with-timer
-     emagent-acp-watchdog-timeout nil
-     (lambda ()
-       (when (and (eq (emagent-acp-state-prompt-watchdog state) token)
-                  (emagent-acp-state-busy state))
-         (let* ((client (emagent-acp-state-client state))
-                (pending (and client (map-elt client :pending-requests))))
-           (emagent-log "emagent: prompt stalled (no ACP completion in %ds)"
-                        emagent-acp-watchdog-timeout)
-           (when pending
-             (emagent-log "emagent: pending ACP request count: %d"
-                          (length pending)))
-           (if (and (emagent-acp-state-assistant-text state)
-                    (not (string-empty-p (emagent-acp-state-assistant-text state))))
-               (progn
-                 (emagent-log "emagent: prompt stalled; finalizing partial response")
-                 (emagent-acp--complete-prompt state nil))
-             (emagent-acp--abort-prompt
-              state
-              "prompt stalled — reconnect with M-x emagent-mode or kill and reopen the buffer"))))))))
-  (setf (emagent-acp-state-prompt-watchdog state) token)
-  (setf (emagent-acp-state-prompt-watchdog-timer state) timer)))
+                 emagent-acp-watchdog-timeout nil
+                 (lambda ()
+                   (when (and (eq (emagent-acp-state-prompt-watchdog state) token)
+                              (emagent-acp-state-busy state))
+                     (let* ((client (emagent-acp-state-client state))
+                            (pending (and client (map-elt client :pending-requests)))
+                            (waiting
+                             (or pending
+                                 (emagent-acp--permission-pending-p state)
+                                 (and (fboundp 'emagent-acp--provider-tool-resolve-active-p)
+                                      (emagent-acp--provider-tool-resolve-active-p state)))))
+                       (emagent-log "emagent: prompt stalled (no ACP completion in %ds)"
+                                    emagent-acp-watchdog-timeout)
+                       (when pending
+                         (emagent-log "emagent: pending ACP request count: %d"
+                                      (length pending)))
+                       (cond
+                        (waiting
+                         (emagent-log "emagent: prompt still waiting on agent work; extending watchdog")
+                         (emagent-acp--schedule-prompt-watchdog state))
+                        ((and (emagent-acp-state-assistant-text state)
+                              (not (string-empty-p
+                                    (emagent-acp-state-assistant-text state))))
+                         (emagent-log "emagent: prompt stalled; finalizing partial response")
+                         (emagent-acp--complete-prompt state nil))
+                        (t
+                         (emagent-acp--abort-prompt
+                          state
+                          "prompt stalled — reconnect with M-x emagent-mode or kill and reopen the buffer")))))))))
+    (setf (emagent-acp-state-prompt-watchdog state) token)
+    (setf (emagent-acp-state-prompt-watchdog-timer state) timer)))
 
 (defun emagent-acp--stream-to-buffer-p (state)
   "Return non-nil when agent chunks may update the chat buffer live.
@@ -393,17 +407,31 @@ Arguments: STATE."
   (emagent-acp--notify-user state message)
   (emagent-acp--reveal-buffer state))
 
+(defun emagent-acp--quota-error-p (message)
+  "Return non-nil when MESSAGE is a session/rate/usage quota error."
+  (and (stringp message)
+       (string-match-p
+        (concat "session limit\\|rate limit\\|usage limit\\|spend limit"
+                "\\|You've hit your\\|hit your limit\\|out of credits"
+                "\\|quota exceeded\\|quota limit")
+        message)))
+
 (defun emagent-acp--fatal-agent-error-p (message)
   "Return non-nil when MESSAGE should abort the in-flight prompt.
 
 RetriableError and other transient network failures are excluded: those are
 retried by `emagent-acp--schedule-prompt-retry' and must not be double-handled
-via stderr subscription (which would clear `:busy' before the retry fires)."
+via stderr subscription (which would clear `:busy' before the retry fires).
+
+Session/rate quota errors are fatal so they surface in the chat buffer even
+when they arrive only on agent stderr."
   (and (stringp message)
        (not (string-match-p "RetriableError" message))
        (not (emagent-acp--retriable-prompt-error-p message))
-       (string-match-p "timed out\\|timeout\\|failed with status\\|ApiError\\|API Error\\|\\[31merror"
-                       message)))
+       (or (emagent-acp--quota-error-p message)
+           (string-match-p
+            "timed out\\|timeout\\|failed with status\\|ApiError\\|API Error\\|\\[31merror"
+            message))))
 
 (defun emagent-acp--prompt-retry-pending-p (state)
   "Return non-nil when STATE is waiting to replay a failed prompt."
@@ -482,26 +510,37 @@ mirroring what a user does by hand."
          (string-match-p emagent-acp--agent-error-signature-re text))))
 
 (defun emagent-acp--abort-prompt (state message)
-  "Abort the in-flight prompt for STATE and show MESSAGE."
+  "Abort the in-flight prompt for STATE and show MESSAGE.
+
+Quota/session-limit errors are always shown in the chat buffer, even when the
+watchdog already finalized a partial Response (busy cleared) while the agent
+was still working."
   (setf (emagent-acp-state-prompt-retry-gen state) nil)
-  (when (or (emagent-acp-state-busy state) (emagent-acp-state-prompt-finishing state))
-    (let ((quiet (emagent-acp-state-quiet-prompt state)))
-      (emagent-acp--clear-prompt-watchdog state)
-      (emagent-acp--cancel-prompt-render state)
-      (setf (emagent-acp-state-busy state) nil)
-      (setf (emagent-acp-state-prompt-finishing state) nil)
-      (setf (emagent-acp-state-prompt-finalized state) nil)
-      (setf (emagent-acp-state-assistant-text state) "")
-      (setf (emagent-acp-state-compress-pending state) nil)
-      (setf (emagent-acp-state-quiet-prompt state) nil)
+  (let ((quiet (emagent-acp-state-quiet-prompt state))
+        (in-flight (or (emagent-acp-state-busy state)
+                       (emagent-acp-state-prompt-finishing state)))
+        (force (and (not (emagent-acp-state-quiet-prompt state))
+                    (emagent-acp--quota-error-p message))))
+    (when (or in-flight force)
+      (when in-flight
+        (emagent-acp--clear-prompt-watchdog state)
+        (emagent-acp--cancel-prompt-render state)
+        (setf (emagent-acp-state-busy state) nil)
+        (setf (emagent-acp-state-prompt-finishing state) nil)
+        (setf (emagent-acp-state-prompt-finalized state) nil)
+        (setf (emagent-acp-state-assistant-text state) "")
+        (setf (emagent-acp-state-compress-pending state) nil)
+        (setf (emagent-acp-state-quiet-prompt state) nil)
+        (emagent-acp--flush-thought-buffer state))
       (emagent-acp--trace "prompt aborted: %s" message)
-      (emagent-acp--flush-thought-buffer state)
-      (if quiet
-          (emagent-log "compacted session materialize failed: %s" message)
+      (cond
+       (quiet
+        (emagent-log "compacted session materialize failed: %s" message))
+       (t
         (when-let ((buffer (emagent-acp--chat-buffer state)))
           (with-current-buffer buffer
             (when-let ((cb (emagent-acp-state-cb-fail state)))
-              (funcall cb message)))))
+              (funcall cb message))))))
       (emagent-acp--refresh-mode-line state))))
 
 (cl-defun emagent-acp--send-request (&key state request on-success on-failure)
