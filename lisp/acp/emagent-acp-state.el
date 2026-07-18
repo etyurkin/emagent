@@ -233,7 +233,7 @@ underlying representation for now."
 (defun emagent-acp--cancel-state-timers (state)
   "Cancel every timer stored in STATE and clear its slot.
 Prevents a reconnect or shutdown from leaving repeating/pending timers
-(RSS poll, watchdog, finish, permission drain, wakeup) pointed at dead
+\(RSS poll, watchdog, finish, permission drain, wakeup) pointed at dead
 state."
   (dolist (timer (list (emagent-acp-state-agent-rss-timer state)
                        (emagent-acp-state-prompt-watchdog-timer state)

@@ -321,7 +321,7 @@ Arguments: STATE."
 (declare-function emagent-chat--begin-response "emagent-chat-render")
 
 (defun emagent-acp--arm-wakeup (state)
-  "Start the timer for a ScheduleWakeup request captured this turn.
+  "Start the ScheduleWakeup timer for STATE after this turn completes.
 Called when the turn completes: the agent has ended its reply and now
 waits to be re-invoked.  The wakeup prompt is sent as a regular user
 turn so the transcript records what re-started the agent."
@@ -344,7 +344,7 @@ turn so the transcript records what re-started the agent."
 (defun emagent-acp--fire-wakeup (state text)
   "Send TEXT as a new user turn for STATE's chat buffer.
 Skips silently when the buffer is gone or a prompt is already running
-(a manual turn superseded the loop)."
+\(a manual turn superseded the loop)."
   (setf (emagent-acp-state-wakeup-timer state) nil)
   (when-let ((buffer (emagent-acp--chat-buffer state)))
     (with-current-buffer buffer
