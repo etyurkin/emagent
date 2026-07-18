@@ -62,6 +62,9 @@
   "Append MESSAGE to `emagent-log-buffer-name'."
   (emagent-log "%s" message))
 
+(defvar emagent-chat--finish-close)
+(declare-function emagent-chat--close-finished-response "emagent-chat-response")
+
 
 (defun emagent-acp--trace (format-string &rest args)
   "Append a trace line when `emagent-acp-trace' is non-nil.
@@ -119,22 +122,26 @@ timer (token-guarded no-ops that still pin STATE for the whole timeout)."
 (defun emagent-acp--stream-to-buffer-p (state)
   "Return non-nil when agent chunks may update the chat buffer live.
 
-Arguments: STATE."
+Arguments: STATE.
+
+Chunks may stream while the prompt is busy or while a finish render is
+still settling (`prompt-finishing'), so late agent text is not stranded
+after an early stub.  Once `prompt-finalized' is set, streaming stops."
   (and emagent-acp-stream-to-buffer
-       (emagent-acp-state-busy state)
        (not (emagent-acp-state-compress-pending state))
        (not (emagent-acp-state-prompt-finalized state))
-       (not (emagent-acp-state-prompt-finishing state))))
+       (or (emagent-acp-state-busy state)
+           (emagent-acp-state-prompt-finishing state))))
 
 (defun emagent-acp--stream-thought-to-buffer-p (state)
   "Return non-nil when reasoning may stream into the chat buffer live.
 
 Arguments: STATE."
   (and (memq emagent-acp-thought-progress '(buffer both))
-       (emagent-acp-state-busy state)
        (not (emagent-acp-state-compress-pending state))
        (not (emagent-acp-state-prompt-finalized state))
-       (not (emagent-acp-state-prompt-finishing state))))
+       (or (emagent-acp-state-busy state)
+           (emagent-acp-state-prompt-finishing state))))
 
 (defun emagent-acp--cancel-prompt-render (state)
   "Cancel a pending debounced render for STATE."
@@ -160,7 +167,13 @@ Arguments: STATE."
                    (emagent-acp--render-prompt-response state)))))))
 
 (defun emagent-acp--render-prompt-response (state)
-  "Render accumulated prompt text into the chat buffer for STATE."
+  "Render accumulated prompt text into the chat buffer for STATE.
+
+For a normal finish, rewrite the open response without closing it, then
+close only when assistant/thought text is still the snapshot that was
+rendered.  Late chunks that arrive during the debounce or the finish
+callback update state and reschedule; an early stub must not land before
+the final text is stable."
   (when (emagent-acp-state-prompt-finishing state)
     (when-let ((buffer (emagent-acp--chat-buffer state)))
       (if (emagent-acp-state-compress-pending state)
@@ -178,21 +191,47 @@ Arguments: STATE."
                            (format "*Context compacted.* Agent session reset; the summary below is its only memory of the prior conversation.\n\n%s"
                                    summary))))
               (emagent-log "compressed session (%d chars)" (length summary))
-              (emagent-acp--new-session :state state :compressed-context summary)))
-        (condition-case err
+              (emagent-acp--new-session :state state :compressed-context summary))
+            (setf (emagent-acp-state-prompt-finishing state) nil)
+            (setf (emagent-acp-state-prompt-finalized state) t)
+            (emagent-acp--refresh-mode-line state))
+        (let ((token (emagent-acp-state-finish-token state))
+              (assistant (emagent-acp-state-assistant-text state))
+              (thought (emagent-acp-state-thought-text state))
+              (failed nil))
+          (condition-case err
+              (with-current-buffer buffer
+                (when-let ((cb (emagent-acp-state-cb-finish state)))
+                  (let ((emagent-chat--finish-close nil))
+                    (funcall cb assistant thought))))
+            (error
+             (setq failed t)
+             (emagent-log "emagent: finish failed: %s" (error-message-string err))
+             (with-current-buffer buffer
+               (when-let ((cb (emagent-acp-state-cb-fail state)))
+                 (funcall cb (format "response finalize failed: %s"
+                                     (error-message-string err)))))))
+          (cond
+           (failed
+            (setf (emagent-acp-state-prompt-finishing state) nil)
+            (setf (emagent-acp-state-prompt-finalized state) t)
+            (emagent-acp--refresh-mode-line state))
+           ((and (emagent-acp-state-prompt-finishing state)
+                 (eq (emagent-acp-state-finish-token state) token)
+                 (eq (emagent-acp-state-assistant-text state) assistant)
+                 (eq (emagent-acp-state-thought-text state) thought))
+            ;; Finalize before close so a reentrant chunk cannot stream or
+            ;; schedule another render against a half-closed response.
+            (setf (emagent-acp-state-prompt-finalized state) t)
+            (setf (emagent-acp-state-prompt-finishing state) nil)
+            (emagent-acp--cancel-prompt-render state)
             (with-current-buffer buffer
-              (when-let ((cb (emagent-acp-state-cb-finish state)))
-                (funcall cb (emagent-acp-state-assistant-text state)
-                         (emagent-acp-state-thought-text state))))
-          (error
-           (emagent-log "emagent: finish failed: %s" (error-message-string err))
-           (with-current-buffer buffer
-             (when-let ((cb (emagent-acp-state-cb-fail state)))
-               (funcall cb (format "response finalize failed: %s"
-                                   (error-message-string err)))))))))
-    (setf (emagent-acp-state-prompt-finishing state) nil)
-    (setf (emagent-acp-state-prompt-finalized state) t)
-    (emagent-acp--refresh-mode-line state)))
+              (emagent-chat--close-finished-response))
+            (emagent-acp--refresh-mode-line state))
+           ((and (emagent-acp-state-prompt-finishing state)
+                 (eq (emagent-acp-state-finish-token state) token))
+            ;; Text changed during finish but no newer timer was scheduled.
+            (emagent-acp--schedule-prompt-render state))))))))
 
 (defun emagent-acp--permission-pending-p (state)
   "Return non-nil when STATE has unanswered permission requests."
