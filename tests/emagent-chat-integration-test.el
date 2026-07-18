@@ -146,6 +146,114 @@ double-stars, while inline markup in surrounding prose is still converted."
          (should (string-match-p "y = `z`" text))
          (should (string-match-p "w = a\\*\\*b" text)))))))
 
+(ert-deftest emagent-chat-integration-test-stream-demotes-headings ()
+  "Streamed `**'/`##' lines must nest under Response, not the user heading.
+
+Without demotion during append, a status line like `** score now' is org
+level-2 and becomes a sibling of `** Response' under `* user>'."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (let ((at (emagent-chat--insert-user-heading-with-text "status?")))
+         (emagent-chat--begin-response at)
+         (emagent-chat-append-assistant
+          (concat "** score now 734/815\n"
+                  "- FORMATTER next\n\n"
+                  "## checkpoint\n"
+                  "done\n")))
+       (let ((text (substring-no-properties (buffer-string))))
+         (should (string-match-p "^\\*\\* Response" text))
+         (should (string-match-p "^\\*\\*\\* score now 734/815" text))
+         (should (string-match-p "^\\*\\*\\* checkpoint" text))
+         ;; Must not leave a level-2 score/checkpoint sibling of Response.
+         (should-not (string-match-p "^\\*\\* score now" text))
+         (should-not (string-match-p "^\\*\\* checkpoint" text)))))))
+
+(ert-deftest emagent-chat-integration-test-stream-demotes-split-headline ()
+  "A `**' headline split across chunks must still demote after the line completes."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (let ((at (emagent-chat--insert-user-heading-with-text "status?")))
+         (emagent-chat--begin-response at)
+         (emagent-chat-append-assistant "Continuing.\n\n**")
+         (emagent-chat-append-assistant " 2026-07-17: 742 -> 777/815 (+35)\n"))
+       (let ((text (substring-no-properties (buffer-string))))
+         (should (string-match-p "^\\*\\*\\* 2026-07-17: 742" text))
+         (should-not (string-match-p "^\\*\\* 2026-07-17: 742" text)))))))
+
+(ert-deftest emagent-chat-integration-test-finish-render-waits-for-late-chunk ()
+  "Finish render must not close/stub while assistant text is still changing.
+
+Reproduces the race where an early debounced finish inserts the user stub
+before a late score line arrives, leaving `** score' under the empty stub."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let* ((client (emagent-test--make-test-client))
+            (state (emagent-test--make-acp-state client buffer))
+            (finish-calls 0))
+       (setf (emagent-acp-state-cb-finish state)
+             (lambda (text &optional thought)
+               (cl-incf finish-calls)
+               (emagent-chat-finish-assistant text thought)
+               (when (= finish-calls 1)
+                 (setf (emagent-acp-state-assistant-text state)
+                       (concat text
+                               "** 2026-07-17: 742 -> 777/815 (+35)\n"
+                               "- next: WRITE\n")))))
+       (with-current-buffer buffer
+         (goto-char (point-max))
+         (let ((at (emagent-chat--insert-user-heading-with-text "go")))
+           (emagent-chat--begin-response at)
+           (emagent-chat-append-assistant "Continuing with FORMAT.\n\n")
+           (setf (emagent-acp-state-assistant-text state)
+                 "Continuing with FORMAT.\n\n")
+           (setf (emagent-acp-state-prompt-finishing state) t)
+           (setf (emagent-acp-state-finish-token state) 'tok1)
+           (emagent-acp--render-prompt-response state)
+           (should (emagent-acp-state-prompt-finishing state))
+           (should-not (emagent-acp-state-prompt-finalized state))
+           (should (emagent-chat--open-response-p))
+           (emagent-acp--cancel-prompt-render state)
+           (setf (emagent-acp-state-finish-token state) 'tok2)
+           (emagent-acp--render-prompt-response state)
+           (should (emagent-acp-state-prompt-finalized state))
+           (should-not (emagent-acp-state-prompt-finishing state))
+           (let ((text (substring-no-properties (buffer-string))))
+             (should (string-match-p "^\\*\\* Response" text))
+             (should (string-match-p "^\\*\\*\\* 2026-07-17: 742" text))
+             (should-not (string-match-p "^\\*\\* 2026-07-17: 742" text))
+             (should (string-match "^\\*\\*\\* 2026-07-17: 742" text))
+             (should (string-match-p
+                      (emagent-chat--user-heading-re)
+                      (substring text (match-end 0)))))))))))
+
+(ert-deftest emagent-chat-integration-test-stream-while-finishing ()
+  "Late chunks must stream while prompt-finishing and busy is already nil."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let* ((client (emagent-test--make-test-client))
+            (state (emagent-test--make-acp-state client buffer)))
+       (setq emagent-acp-stream-to-buffer t)
+       (setf (emagent-acp-state-cb-chunk state) #'emagent-chat-append-assistant)
+       (setf (emagent-acp-state-busy state) nil)
+       (setf (emagent-acp-state-prompt-finishing state) t)
+       (setf (emagent-acp-state-prompt-finalized state) nil)
+       (should (emagent-acp--stream-to-buffer-p state))
+       (with-current-buffer buffer
+         (goto-char (point-max))
+         (emagent-chat--begin-response (point))
+         (emagent-acp--on-notification
+          :state state
+          :emagent-acp-notification
+          (emagent-test--notification-chunk
+           "** 2026-07-17: 742 -> 777/815 (+35)\n"))
+         (let ((text (substring-no-properties (buffer-string))))
+           (should (string-match-p "^\\*\\*\\* 2026-07-17: 742" text))
+           (should-not (string-match-p "^\\*\\* 2026-07-17: 742" text))))))))
+
 (ert-deftest emagent-chat-integration-test-fail-assistant ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)

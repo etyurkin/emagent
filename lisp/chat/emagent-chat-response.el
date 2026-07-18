@@ -208,7 +208,7 @@ buffer shows formatted org while the response is still arriving."
               (emagent-chat--writable)
               (emagent-chat-close-thought)
               ;; Streaming markdown->org: feed chunk through the fence state
-              ;; machine, then apply inline conversions to the safe portion.
+              ;; machine, then apply prose conversions to the safe portion.
               (let* ((combined (if emagent-chat--response-fence-state
                                    (concat "```"
                                            (car emagent-chat--response-fence-state)
@@ -217,20 +217,24 @@ buffer shows formatted org while the response is still arriving."
                                            text)
                                  text))
                      (result (emagent-chat--split-fences combined))
-                     ;; Apply inline conversions only outside completed src
-                     ;; blocks: the safe portion may contain #+BEGIN_SRC blocks
-                     ;; whose interiors must not be rewritten (e.g. `x` or a**b).
-                     (safe (emagent-chat--map-outside-src-blocks
-                            (lambda (s)
-                              (let ((case-fold-search nil))
-                                (emagent-chat--convert-inline-code-spans
-                                 (replace-regexp-in-string
-                                  "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*"
-                                  (replace-regexp-in-string
-                                   "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
-                                   "[[\\2][\\1]]"
-                                   s)))))
-                            (car result)))
+                     ;; Apply prose conversions only outside completed src
+                     ;; blocks.  Demote headlines here (not only at finish):
+                     ;; a streamed `** score' line is org level-2 and would
+                     ;; otherwise become a sibling of `** Response' under the
+                     ;; user heading.
+                     (safe (emagent-chat--demote-response-headings
+                            (emagent-chat--map-outside-src-blocks
+                             (lambda (s)
+                               (let ((case-fold-search nil))
+                                 (emagent-chat--convert-markdown-headings
+                                  (emagent-chat--convert-inline-code-spans
+                                   (replace-regexp-in-string
+                                    "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*"
+                                    (replace-regexp-in-string
+                                     "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
+                                     "[[\\2][\\1]]"
+                                     s))))))
+                             (car result))))
                      (existing (emagent-chat--response-body-bounds))
                      (insert-at
                       (cond
@@ -246,8 +250,10 @@ buffer shows formatted org while the response is still arriving."
                 (when (and insert-at (not (string-empty-p safe)))
                   (save-excursion
                     (goto-char insert-at)
-                    (insert safe)
-                    (setq emagent-chat--assistant-marker (point-marker)))))
+                    (let ((beg (point)))
+                      (insert safe)
+                      (emagent-chat--demote-headlines-in-region beg (point))
+                      (setq emagent-chat--assistant-marker (point-marker))))))
               (emagent-chat--maybe-font-lock-flush))))))))
 
 (defun emagent-chat-fail-assistant (message)
@@ -290,12 +296,55 @@ buffer shows formatted org while the response is still arriving."
             (emagent-chat--maybe-align-org-tables-in-region start (point))))
         (setq emagent-chat--assistant-marker (point-marker))))))
 
+(defvar emagent-chat--finish-close t
+  "When non-nil, `emagent-chat-finish-assistant' resets markers and inserts a stub.
+
+ACP prompt rendering binds this to nil so late agent chunks that arrive
+while a debounced finish is in flight can still update the open response;
+the render loop closes the response only after assistant text is stable.")
+
+(defvar-local emagent-chat--pending-hide-reasoning nil
+  "Buffer position to fold after a deferred finish close, or nil.")
+
+(defun emagent-chat--close-finished-response ()
+  "Reset response markers and insert the next user heading stub.
+
+Called once the ACP finish render has settled (no newer assistant text)."
+  (when emagent-chat--pending-hide-reasoning
+    (emagent-chat--hide-reasoning-deferred
+     emagent-chat--pending-hide-reasoning)
+    (setq emagent-chat--pending-hide-reasoning nil))
+  (emagent-chat--reset-response-state)
+  (emagent-chat--sync-user-zone-marker)
+  (emagent-chat--insert-user-heading-stub))
+
+(defun emagent-chat--demote-headlines-in-region (beg end)
+  "Demote org headlines at level 1-2 between BEG and END to level 3.
+
+Used after streaming inserts so a `**' split across chunks cannot leave a
+level-2 sibling of `** Response' under the user heading."
+  (save-excursion
+    (goto-char beg)
+    (forward-line 0)
+    (while (< (point) end)
+      (when (looking-at "^\\*\\{1,2\\} ")
+        (let* ((star-beg (match-beginning 0))
+               (star-end (1- (match-end 0)))
+               (old-n (- star-end star-beg)))
+          (delete-region star-beg star-end)
+          (insert "***")
+          (setq end (+ end (- 3 old-n)))))
+      (forward-line 1))))
+
 (defun emagent-chat-finish-assistant (text &optional thought-text)
   "Finalize the latest emagent response with TEXT.
 
 Render the assistant answer under `** Response'.  When reasoning was streamed
 keep its `** Thinking' subsection; otherwise build one from THOUGHT-TEXT.
-A response without any reasoning has no `** Thinking' subsection at all."
+A response without any reasoning has no `** Thinking' subsection at all.
+
+When `emagent-chat--finish-close' is nil, leave the response open (no stub)
+so a subsequent finish can replace the body if more assistant text arrives."
   (emagent-chat--with-stable-view
     (lambda ()
       (with-current-buffer (current-buffer)
@@ -315,14 +364,18 @@ A response without any reasoning has no `** Thinking' subsection at all."
               (setq hide-at nil))
             (emagent-chat--finalize-streamed-assistant converted)
             (emagent-chat--finish-response-spacing)
-            (emagent-chat--reset-response-state)
-            (emagent-chat--sync-user-zone-marker)
             (emagent-chat--maybe-font-lock-flush)
-            (when hide-at
-              (emagent-chat--hide-reasoning-deferred hide-at)))))))
-  ;; Insert stub after stable view is restored, so point ends up at the
-  ;; user prompt heading rather than being restored to the entry position.
-  (emagent-chat--insert-user-heading-stub))
+            (if emagent-chat--finish-close
+                (progn
+                  (when hide-at
+                    (emagent-chat--hide-reasoning-deferred hide-at))
+                  (emagent-chat--reset-response-state)
+                  (emagent-chat--sync-user-zone-marker))
+              (setq emagent-chat--pending-hide-reasoning hide-at)))))))
+  (when emagent-chat--finish-close
+    ;; Insert stub after stable view is restored, so point ends up at the
+    ;; user prompt heading rather than being restored to the entry position.
+    (emagent-chat--insert-user-heading-stub)))
 
 (provide 'emagent-chat-response)
 ;;; emagent-chat-response.el ends here
