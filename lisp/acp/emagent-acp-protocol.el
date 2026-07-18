@@ -219,7 +219,9 @@ redisplay are not starved during heavy agent output."
                  (setq message-queue-busy nil)
                  (when (and message-queue (not drain-pending))
                    (setq drain-pending t)
-                   (run-with-timer 0 nil (lambda () (drain)))))))
+                   (run-with-timer
+                    (max 0 emagent-acp-message-drain-yield) nil
+                    (lambda () (drain)))))))
            (enqueue (json-line)
              (let ((cell (list json-line)))
                (if message-queue-tail

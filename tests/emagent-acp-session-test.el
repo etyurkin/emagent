@@ -530,15 +530,18 @@ agent's own allow-list, so the inferred decision is (Allow: Agent)."
         (should (null (emagent-acp-state-permission-queue state)))))))
 
 (ert-deftest emagent-acp-session-test-permission-auto-approve-deep-queue ()
-  "Auto-approve drains a long queue iteratively (no Lisp stack overflow).
+  "Auto-approve drains a long queue in batches (no Lisp stack overflow).
 
 Cursor MCP auth/tool prompts can enqueue dozens of
 `session/request_permission' messages.  Recursive on-complete drain used to
-SIGSEGV Emacs; keep max-lisp-eval-depth artificially low to catch regressions."
+SIGSEGV Emacs; keep max-lisp-eval-depth artificially low to catch regressions.
+Continuation uses `run-at-time'; pump those timers iteratively."
   (let* ((state (emagent-test--make-acp-state))
          (n 60)
          (responded 0)
+         (pending nil)
          (emagent-acp-auto-approve-permissions t)
+         (emagent-acp-permission-drain-batch-size 8)
          (max-lisp-eval-depth 40)
          (max-specpdl-size 600))
     (setf (emagent-acp-state-permission-queue state)
@@ -548,15 +551,50 @@ SIGSEGV Emacs; keep max-lisp-eval-depth artificially low to catch regressions."
                                         (options . [((optionId . "allow_once")
                                                      (kind . "allow_once"))]))))))
     (emagent-test--with-mocks
-        (((symbol-function 'emagent-acp-send-response)
+        (((symbol-function 'run-at-time)
+          (lambda (_time _repeat fn)
+            (setq pending (append pending (list fn)))
+            nil))
+         ((symbol-function 'emagent-acp-send-response)
           (lambda (&rest _) (cl-incf responded)))
          ((symbol-function 'emagent-acp--show-permission-decision)
           (lambda (&rest _) nil))
          ((symbol-function 'emagent-acp--refresh-mode-line)
           (lambda (&rest _) nil)))
       (emagent-acp--drain-permission-queue state)
+      (while pending
+        (funcall (pop pending)))
       (should (= responded n))
       (should (null (emagent-acp-state-permission-queue state))))))
+
+(ert-deftest emagent-acp-session-test-permission-auto-approve-batches ()
+  "One drain turn handles at most `emagent-acp-permission-drain-batch-size'."
+  (let* ((state (emagent-test--make-acp-state))
+         (responded 0)
+         (scheduled 0)
+         (emagent-acp-auto-approve-permissions t)
+         (emagent-acp-permission-drain-batch-size 2))
+    (setf (emagent-acp-state-permission-queue state)
+          (cl-loop for i from 1 to 5
+                   collect `((id . ,(format "req-%d" i))
+                             (params . ((title . "Allow MCP?")
+                                        (options . [((optionId . "allow_once")
+                                                     (kind . "allow_once"))]))))))
+    (emagent-test--with-mocks
+        (((symbol-function 'run-at-time)
+          (lambda (_time _repeat _fn)
+            (cl-incf scheduled)
+            nil))
+         ((symbol-function 'emagent-acp-send-response)
+          (lambda (&rest _) (cl-incf responded)))
+         ((symbol-function 'emagent-acp--show-permission-decision)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line)
+          (lambda (&rest _) nil)))
+      (emagent-acp--drain-permission-queue-now state)
+      (should (= responded 2))
+      (should (= scheduled 1))
+      (should (= (length (emagent-acp-state-permission-queue state)) 3)))))
 
 (ert-deftest emagent-acp-session-test-permission-drains-after-tool-resolve ()
   (let* ((state (emagent-test--make-acp-state))

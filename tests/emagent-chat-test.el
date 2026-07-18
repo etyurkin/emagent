@@ -312,6 +312,28 @@ session present (the UI no longer pulls from the ACP layer)."
          (emagent-chat--flush-deferred-font-lock)
          (should-not emagent-chat--font-lock-deferred-p))))))
 
+(ert-deftest emagent-chat-test-font-lock-deferred-while-turn-in-flight ()
+  "Visible buffers still defer org font-lock while the ACP turn is busy."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let* ((state (emagent-test--make-acp-state nil buffer))
+            (flushed 0))
+       (setq emagent-acp--session state)
+       (setf (emagent-acp-state-busy state) t)
+       (with-current-buffer buffer
+         (pop-to-buffer buffer)
+         (setq emagent-chat--font-lock-deferred-p nil)
+         (emagent-test--with-mocks
+             (((symbol-function 'emagent-chat--font-lock-response-tail)
+               (lambda () (cl-incf flushed))))
+           (emagent-chat--maybe-font-lock-flush)
+           (should emagent-chat--font-lock-deferred-p)
+           (should (= flushed 0))
+           (setf (emagent-acp-state-busy state) nil)
+           (emagent-chat--flush-deferred-font-lock)
+           (should-not emagent-chat--font-lock-deferred-p)
+           (should (= flushed 1))))))))
+
 (ert-deftest emagent-chat-test-inactive-bell-rings-when-background-update ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)

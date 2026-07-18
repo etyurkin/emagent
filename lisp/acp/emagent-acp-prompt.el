@@ -62,6 +62,8 @@
   "Append MESSAGE to `emagent-log-buffer-name'."
   (emagent-log "%s" message))
 
+(declare-function emagent-chat--flush-deferred-font-lock "emagent-chat")
+
 (defvar emagent-chat--finish-close)
 (declare-function emagent-chat--close-finished-response "emagent-chat-response")
 
@@ -194,6 +196,8 @@ the final text is stable."
               (emagent-acp--new-session :state state :compressed-context summary))
             (setf (emagent-acp-state-prompt-finishing state) nil)
             (setf (emagent-acp-state-prompt-finalized state) t)
+            (with-current-buffer buffer
+              (emagent-chat--flush-deferred-font-lock))
             (emagent-acp--refresh-mode-line state))
         (let ((token (emagent-acp-state-finish-token state))
               (assistant (emagent-acp-state-assistant-text state))
@@ -215,6 +219,8 @@ the final text is stable."
            (failed
             (setf (emagent-acp-state-prompt-finishing state) nil)
             (setf (emagent-acp-state-prompt-finalized state) t)
+            (with-current-buffer buffer
+              (emagent-chat--flush-deferred-font-lock))
             (emagent-acp--refresh-mode-line state))
            ((and (emagent-acp-state-prompt-finishing state)
                  (eq (emagent-acp-state-finish-token state) token)

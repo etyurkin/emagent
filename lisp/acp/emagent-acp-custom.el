@@ -146,6 +146,26 @@ prefer throughput and accept longer stretches without timer service."
   :type 'integer
   :group 'emagent)
 
+(defcustom emagent-acp-message-drain-yield 0.01
+  "Seconds to wait before draining the next ACP message batch.
+
+After each batch (`emagent-acp-message-drain-batch-size'), if more wire
+messages remain, the drain reschedules with this delay so redisplay and
+other timers can run during heavy Cursor/Claude output.  The first
+enqueued message still starts a drain immediately (delay 0)."
+  :type 'number
+  :group 'emagent)
+
+(defcustom emagent-acp-permission-drain-batch-size 16
+  "Auto-approve permission requests handled per drain turn before yielding.
+
+A flood of ACP `session/request_permission' messages (common with MCP tools)
+used to run a tight `while' on the Emacs command loop.  Process at most this
+many auto-approved requests, then reschedule so the UI can breathe.
+Interactive permission prompts still insert one dialog and return."
+  :type 'integer
+  :group 'emagent)
+
 (defcustom emagent-log-agent-stderr nil
   "When non-nil, log filtered cursor-agent stderr to `emagent-log-buffer-name'."
   :type 'boolean

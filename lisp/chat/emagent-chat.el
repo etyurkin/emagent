@@ -624,9 +624,13 @@ ignored so chat rendering never stalls on OS notifications."
 (declare-function emagent-chat--font-lock-response-tail "emagent-chat-markup")
 
 (defun emagent-chat--flush-deferred-font-lock ()
-  "Font-lock the response tail when a deferred flush was requested."
+  "Font-lock the response tail when a deferred flush was requested.
+
+Skipped while an ACP turn is still in flight so settle happens once."
   (when (and emagent-chat--font-lock-deferred-p
-             (emagent-chat--buffer-active-p))
+             (emagent-chat--buffer-active-p)
+             (not (and (fboundp 'emagent-acp-turn-in-flight-p)
+                       (emagent-acp-turn-in-flight-p))))
     (setq emagent-chat--font-lock-deferred-p nil)
     (emagent-chat--font-lock-response-tail)))
 
