@@ -231,13 +231,18 @@ up to (but not including) the next `* user>' heading."
     (looking-at (emagent-chat--user-heading-re))))
 
 (defun emagent-chat--insert-user-heading-stub ()
-  "Insert a user heading stub unless one already follows the user zone."
+  "Insert a user heading stub unless one already follows the user zone.
+
+Leave point after the `* user> ' prefix so the user can type immediately."
   (let ((inhibit-read-only t))
     (emagent-chat--writable)
     (goto-char (emagent-chat--user-zone-start))
     (unless (emagent-chat--user-heading-follows-p)
       (unless (bolp) (insert "\n"))
       (insert (emagent-chat--user-heading-prefix)))
+    ;; When a stub already exists, zone-start is its bol — move to the
+    ;; input position after the prefix rather than leaving point on `*'.
+    (goto-char (or (emagent-chat--user-prompt-input-pos) (point)))
     (point)))
 
 (defun emagent-chat--skip-header ()
