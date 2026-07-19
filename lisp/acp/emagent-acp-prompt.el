@@ -314,7 +314,51 @@ Arguments: STATE."
     (when (and response (map-elt response 'usage))
       (emagent-acp--save-usage-from-response state (map-elt response 'usage)))
     (emagent-acp--refresh-mode-line state)
-    (emagent-acp--schedule-prompt-render state))))
+    (emagent-acp--schedule-prompt-render state)
+    (emagent-acp--arm-wakeup state))))
+
+(declare-function emagent-chat--insert-user-heading-with-text "emagent-chat-actions")
+(declare-function emagent-chat--begin-response "emagent-chat-render")
+
+(defun emagent-acp--arm-wakeup (state)
+  "Start the ScheduleWakeup timer for STATE after this turn completes.
+Called when the turn completes: the agent has ended its reply and now
+waits to be re-invoked.  The wakeup prompt is sent as a regular user
+turn so the transcript records what re-started the agent."
+  (when-let ((request (and emagent-acp-honor-schedule-wakeup
+                           (emagent-acp-state-wakeup-request state))))
+    (emagent-acp--cancel-wakeup state)
+    (let ((delay (plist-get request :delay))
+          (text (or (plist-get request :prompt)
+                    (if-let ((reason (plist-get request :reason)))
+                        (format "Wake up: %s" reason)
+                      "Wake up: continue the scheduled task."))))
+      (emagent-acp--notify-user
+       state (format "emagent: wakeup armed in %ds%s" delay
+                     (if-let ((reason (plist-get request :reason)))
+                         (format " — %s" reason)
+                       "")))
+      (setf (emagent-acp-state-wakeup-timer state)
+            (run-with-timer delay nil #'emagent-acp--fire-wakeup state text)))))
+
+(defun emagent-acp--fire-wakeup (state text)
+  "Send TEXT as a new user turn for STATE's chat buffer.
+Skips silently when the buffer is gone or a prompt is already running
+\(a manual turn superseded the loop)."
+  (setf (emagent-acp-state-wakeup-timer state) nil)
+  (when-let ((buffer (emagent-acp--chat-buffer state)))
+    (with-current-buffer buffer
+      (cond
+       ((emagent-acp-state-busy state)
+        (emagent-log "wakeup: skipped — a prompt is already running"))
+       ((not (and (fboundp 'emagent-chat--insert-user-heading-with-text)
+                  emagent-chat--on-send))
+        (emagent-log "wakeup: skipped — chat send unavailable"))
+       (t
+        (emagent-log "wakeup: %s" (emagent-log-truncate-line text 80))
+        (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
+          (emagent-chat--begin-response response-pos))
+        (funcall emagent-chat--on-send text))))))
 
 (defun emagent-acp--log-thought-line (mode text)
   "Log one thought TEXT line according to MODE."
@@ -522,6 +566,8 @@ was still working."
         (force (and (not (emagent-acp-state-quiet-prompt state))
                     (emagent-acp--quota-error-p message))))
     (when (or in-flight force)
+      ;; Do not arm a ScheduleWakeup captured during a failed/aborted turn.
+      (emagent-acp--cancel-wakeup state)
       (when in-flight
         (emagent-acp--clear-prompt-watchdog state)
         (emagent-acp--cancel-prompt-render state)

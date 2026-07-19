@@ -93,6 +93,8 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
   (tool-resolve-attempts (make-hash-table :test 'equal))
   ;; Permission gate
   permission-queue permission-busy permission-drain-timer
+  ;; Agent-scheduled wakeup (ScheduleWakeup tool)
+  wakeup-request wakeup-timer
   ;; Callbacks (wired by the app; see emagent.el)
   cb-chunk cb-thought cb-finish cb-fail cb-slash-commands
   cb-tool-call cb-permission cb-status)
@@ -221,19 +223,30 @@ underlying representation for now."
        (let ((client (emagent-acp-state-client emagent-acp--session)))
          (and client (emagent-acp--client-started-p client)))))
 
+(defun emagent-acp--cancel-wakeup (state)
+  "Cancel a pending or armed agent wakeup (ScheduleWakeup) for STATE."
+  (when-let ((timer (emagent-acp-state-wakeup-timer state)))
+    (cancel-timer timer))
+  (setf (emagent-acp-state-wakeup-timer state) nil)
+  (setf (emagent-acp-state-wakeup-request state) nil))
+
 (defun emagent-acp--cancel-state-timers (state)
   "Cancel every timer stored in STATE and clear its slot.
 Prevents a reconnect or shutdown from leaving repeating/pending timers
-\(RSS poll, watchdog, finish, permission drain) pointed at dead state."
+\(RSS poll, watchdog, finish, permission drain, wakeup) pointed at dead
+state."
   (dolist (timer (list (emagent-acp-state-agent-rss-timer state)
                        (emagent-acp-state-prompt-watchdog-timer state)
                        (emagent-acp-state-finish-timer state)
-                       (emagent-acp-state-permission-drain-timer state)))
+                       (emagent-acp-state-permission-drain-timer state)
+                       (emagent-acp-state-wakeup-timer state)))
     (when (timerp timer) (cancel-timer timer)))
   (setf (emagent-acp-state-agent-rss-timer state) nil
         (emagent-acp-state-prompt-watchdog-timer state) nil
         (emagent-acp-state-finish-timer state) nil
-        (emagent-acp-state-permission-drain-timer state) nil))
+        (emagent-acp-state-permission-drain-timer state) nil
+        (emagent-acp-state-wakeup-timer state) nil
+        (emagent-acp-state-wakeup-request state) nil))
 
 (defun emagent-acp--teardown-stale-session ()
   "Shut down a dead or incomplete ACP session without clearing persisted ids."

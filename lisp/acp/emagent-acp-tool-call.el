@@ -38,6 +38,7 @@
 (require 'emagent-acp-state)
 (require 'map)
 (require 'emagent-log)
+(require 'emagent-acp-custom)
 (require 'emagent-acp-provider)
 
 (declare-function emagent-acp--permission-decision-label "emagent-acp-permit")
@@ -601,6 +602,42 @@ Arguments: STATE."
       (puthash id (map-elt merged 'rawInput) inputs))
     merged))
 
+(defun emagent-acp--wakeup-tool-p (title)
+  "Return non-nil when TITLE names the ScheduleWakeup harness tool."
+  (and (stringp title)
+       (string-match-p "\\(?:\\`\\|__\\)ScheduleWakeup\\'" (string-trim title))))
+
+(defun emagent-acp--capture-schedule-wakeup (state update)
+  "Record a ScheduleWakeup request from tool-call UPDATE in STATE.
+
+The agent ends its turn after calling ScheduleWakeup and expects the
+client to send the wakeup prompt after the delay.  Only recorded here;
+the timer is armed when the turn completes (`emagent-acp--arm-wakeup'),
+and a `stop' call cancels a pending wakeup immediately."
+  (when (and emagent-acp-honor-schedule-wakeup
+             (emagent-acp--wakeup-tool-p (map-elt update 'title)))
+    (when-let* ((raw (map-elt update 'rawInput))
+                (data (emagent-acp--tool-call-normalize-data raw)))
+      (let ((stop (emagent-acp--tool-call-data-get data 'stop))
+            (delay (emagent-acp--tool-call-data-get data 'delaySeconds))
+            (prompt (emagent-acp--tool-call-data-get data 'prompt))
+            (reason (emagent-acp--tool-call-data-get data 'reason)))
+        (when (stringp delay)
+          (setq delay (string-to-number delay)))
+        (cond
+         ((and stop (not (memq stop '(:false :json-false))))
+          (emagent-acp--cancel-wakeup state)
+          (emagent-log "wakeup: loop stopped by agent"))
+         ((and (numberp delay) (> delay 0))
+          (setf (emagent-acp-state-wakeup-request state)
+                (list :delay (max 10 (min (round delay) 3600))
+                      :prompt (and (stringp prompt)
+                                   (not (string-empty-p prompt))
+                                   prompt)
+                      :reason (and (stringp reason)
+                                   (not (string-empty-p reason))
+                                   reason)))))))))
+
 (defun emagent-acp--on-tool-call (state update)
   "Display or refresh a tool-call line from ACP UPDATE.
 
@@ -617,6 +654,7 @@ Arguments: STATE."
            (defer (emagent-acp--provider-defer-tool-call-p state merged))
            (show (and label (not (string-empty-p label)) (not defer)
                         (emagent-acp--tool-call-displayable-p state merged))))
+      (emagent-acp--capture-schedule-wakeup state merged)
       (when defer
         (puthash id merged pending-table)
         (emagent-acp--provider-enqueue-tool-resolve state id))
