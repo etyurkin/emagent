@@ -31,10 +31,8 @@
 
 ;;; Code:
 
-(declare-function split-string-shell-argument "subr")
 (declare-function emagent-log "emagent-log")
-(declare-function emagent-tool-compile "emagent-tools")
-
+(declare-function emagent-tool-compile "emagent-tools-shell")
 (defvar emagent-acp-prefer-emacs)
 
 (defgroup emagent-shell nil
@@ -61,12 +59,12 @@
   :type 'boolean
   :group 'emagent-shell)
 
-(declare-function emagent-tool-read-file "emagent-tools")
-(declare-function emagent-tool-grep "emagent-tools")
-(declare-function emagent-tool-find-files "emagent-tools")
-(declare-function emagent-tool-git-status "emagent-tools")
-(declare-function emagent-tool-git-diff "emagent-tools")
-(declare-function emagent-tool-git-log "emagent-tools")
+(declare-function emagent-tool-read-file "emagent-tools-file")
+(declare-function emagent-tool-grep "emagent-tools-shell")
+(declare-function emagent-tool-find-files "emagent-tools-shell")
+(declare-function emagent-tool-git-status "emagent-tools-shell")
+(declare-function emagent-tool-git-diff "emagent-tools-shell")
+(declare-function emagent-tool-git-log "emagent-tools-shell")
 (declare-function emagent-tools--root-directory "emagent-tools")
 
 (defun emagent-shell--prefer-emacs-p ()
@@ -181,9 +179,9 @@ Arguments: DIRECTORY."
 
 (defun emagent-shell--words (command)
   "Split COMMAND into words, respecting simple quotes."
-  (condition-case nil
+  (if (fboundp 'split-string-shell-argument)
       (split-string-shell-argument command)
-    (error (split-string command "[[:space:]]+" t))))
+    (split-string command "[[:space:]]+" t)))
 
 (defun emagent-shell--command-to-string (command)
   "Like `shell-command-to-string' for COMMAND, yielding to the event loop."

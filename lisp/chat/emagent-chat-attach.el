@@ -39,14 +39,15 @@
 (require 'emagent-context)
 (require 'emagent-session)
 
+
+(defvar emagent-chat--on-attach)
+
+;;;###autoload
 (declare-function flymake-diagnostics "flymake")
 (declare-function flymake-diagnostic-beg "flymake")
 (declare-function flymake-diagnostic-type "flymake")
 (declare-function flymake-diagnostic-text "flymake")
 
-(defvar emagent-chat--on-attach)
-
-;;;###autoload
 (defun emagent-chat-attach-buffer ()
   "Attach a buffer summary to the next prompt."
   (interactive)

@@ -38,8 +38,6 @@
 (require 'org)
 
 (declare-function emagent-tools--root-directory "emagent-tools")
-(declare-function imenu--make-index-alist "imenu")
-(declare-function imenu--subalist-p "imenu")
 
 (defconst emagent-tools--grep-max-results 50)
 
@@ -668,6 +666,12 @@ root (`emagent-tools--project-directory') are included."
                    (buffer-list)))
      "\n")))
 
+(defun emagent-tools--imenu-subalist-p (item)
+  "Return non-nil when ITEM is an imenu nested alist entry."
+  (and (consp (cdr item))
+       (listp (cadr item))
+       (not (numberp (cadr item)))))
+
 (defun emagent-tool-imenu-index (&optional file)
   "Return a structural outline (functions, classes, sections) for FILE.
 When FILE is omitted, uses the current buffer.  Works for any language
@@ -680,12 +684,14 @@ that has imenu support configured (Java, Python, Elisp, JS, org, etc.)."
                 (current-buffer))))
     (with-current-buffer buf
       (let* ((index (condition-case nil
-                        (imenu--make-index-alist t)
+                        (when (functionp imenu-create-index-function)
+                          (save-excursion
+                            (funcall imenu-create-index-function)))
                       (error nil)))
              (lines nil))
         (cl-labels ((flatten (alist prefix)
                       (dolist (entry alist)
-                        (if (imenu--subalist-p entry)
+                        (if (emagent-tools--imenu-subalist-p entry)
                             (flatten (cdr entry)
                                      (concat prefix (car entry) "/"))
                           (push (concat prefix (car entry)) lines)))))

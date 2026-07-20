@@ -43,7 +43,7 @@
 (defvar emagent-model-history nil
   "Minibuffer history for agent/model choices.")
 
-(declare-function emagent-acp--send-request "emagent-acp")
+(declare-function emagent-acp--send-request "emagent-acp-prompt")
 (require 'emagent-model)
 (declare-function emagent-acp--saved-model-id "emagent-acp-usage")
 
@@ -54,8 +54,8 @@ Arguments: STATE, MODELS."
   (or (and (emagent-acp--model-available-p "default[]" state models) "default[]")
       (and (emagent-acp--model-available-p emagent-acp-auto-model-id state models)
            emagent-acp-auto-model-id)))
-(declare-function emagent-acp--session-ready "emagent-acp")
-(declare-function emagent-acp--progress "emagent-acp")
+(declare-function emagent-acp--session-ready "emagent-acp-lifecycle")
+(declare-function emagent-acp--progress "emagent-acp-prompt")
 (declare-function emagent-acp-make-session-set-config-option-request "emagent-acp-protocol" t)
 
 (defun emagent-acp--normalize-config-option (emagent-acp-option)

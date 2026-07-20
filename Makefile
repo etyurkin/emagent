@@ -4,7 +4,7 @@ ELPACA_DIR ?= $(CURDIR)/.elpaca-vendor/elpaca
 LISP_SUBDIRS := $(wildcard lisp/*)
 ELFILES := emagent.el $(shell find lisp -name '*.el')
 
-.PHONY: all compile compile-strict checkdoc test ci elpaca-vendor clean
+.PHONY: all compile compile-strict checkdoc check-declare test ci elpaca-vendor clean
 
 all: compile
 
@@ -27,6 +27,10 @@ compile-strict:
 checkdoc:
 	$(EMACS) --batch -l ci/checkdoc.el -f emagent-checkdoc-batch
 
+# Fail if any declare-function points at the wrong file or a missing def.
+check-declare:
+	EMAGENT_ROOT="$(CURDIR)" $(EMACS) --batch -l ci/check-declare.el 		-f emagent-check-declare-batch
+
 # Byte-compile first (so tests run against compiled code), then always remove
 # the .elc afterward — pass or fail — so the source tree stays clean. The test
 # exit status is preserved so `make test` still fails when a test fails.
@@ -43,7 +47,7 @@ elpaca-vendor:
 		git clone --depth 1 https://github.com/progfolio/elpaca.git "$(ELPACA_DIR)"; \
 	fi
 
-ci: compile-strict checkdoc elpaca-vendor
+ci: compile-strict checkdoc check-declare elpaca-vendor
 	EMAGENT_ROOT="$(CURDIR)" ELPACA_DIR="$(ELPACA_DIR)" \
 	$(EMACS) --batch -l ci/build-and-test.el
 

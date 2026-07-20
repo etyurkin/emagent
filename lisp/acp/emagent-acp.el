@@ -111,11 +111,6 @@
 
 ;;;; Public session state accessors (for use by emagent-chat.el)
 
-
-
-
-
-
 (declare-function emagent-acp--read-labeled-choice "emagent-acp-model")
 (declare-function emagent-permissions-reset-global "emagent-permissions")
 (declare-function emagent-permissions-reset-session "emagent-permissions")

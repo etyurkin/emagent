@@ -43,15 +43,14 @@
   :group 'emagent)
 
 (declare-function emagent-session-project-directory "emagent-session")
-(declare-function emagent-chat--user-zone-start "emagent-chat")
-(declare-function emagent-chat--user-heading-re "emagent-chat")
+(declare-function emagent-chat--user-zone-start "emagent-chat-input")
+(declare-function emagent-chat--user-heading-re "emagent-chat-input")
 (declare-function emagent-chat-cycle-or-org-cycle "emagent-chat")
-(declare-function emagent-acp-ensure-connected "emagent-acp")
-(declare-function emagent-acp--session "emagent-acp")
-(declare-function emagent-acp--connected-p "emagent-acp")
+(declare-function emagent-acp-ensure-connected "emagent")
+(declare-function emagent-acp--session "emagent-acp-state")
+(declare-function emagent-acp--connected-p "emagent-acp-state")
 (declare-function emagent-acp--model-choices "emagent-acp-model")
 (declare-function emagent-chat--slash-mcp-apply "emagent-chat-mcp")
-(declare-function cl-find "cl-lib")
 
 (defconst emagent-chat--client-slash-commands
   '(((name . "model")
@@ -178,7 +177,6 @@ Arguments: DESCRIPTION, HINT."
           (emagent-chat--merge-slash-commands
            (emagent-cursor-slash-commands (emagent-session-project-directory))
            emagent-chat-slash-commands))))
-
 
 ;;;###autoload
 (defun emagent-chat-set-slash-commands (commands)

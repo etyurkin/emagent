@@ -102,7 +102,7 @@
          (when (file-exists-p file) (delete-file file)))))))
 
 (ert-deftest emagent-core-test-explicit-open-activates-immediately ()
-  "Explicit activation bypasses the display-deferral advice."
+  "Explicit activation bypasses display deferral in the mode entry wrapper."
   (emagent-test--with-temp-project
    (lambda (dir)
      (let* ((file (expand-file-name "session.org" dir))
@@ -120,6 +120,35 @@
                (let ((emagent--force-activation t))
                  (emagent-mode))
                (should (derived-mode-p 'emagent-mode))))
+         (when (buffer-live-p buf) (kill-buffer buf))
+         (when (file-exists-p file) (delete-file file)))))))
+
+
+(ert-deftest emagent-core-test-mode-toggle-off-does-not-defer ()
+  "Calling `emagent-mode' while already active must not mark the buffer pending."
+  (emagent-test--with-temp-project
+   (lambda (dir)
+     (let* ((file (expand-file-name "session.org" dir))
+            (emagent--pending-buffers nil)
+            (emagent-activate-on-display t)
+            buf)
+       (unwind-protect
+           (progn
+             (write-region
+              (format "# -*- mode: emagent -*-\n#+EMAGENT_PROJECT: %s\n" dir)
+              nil file)
+             (setq buf (find-file-noselect file))
+             (with-current-buffer buf
+               (let ((emagent--force-activation t))
+                 (emagent-mode))
+               (should (derived-mode-p 'emagent-mode))
+               (setq emagent--pending-buffers nil)
+               (kill-local-variable 'emagent--session-pending)
+               ;; Re-enter while already in emagent-mode; must not defer.
+               (emagent-mode)
+               (should (derived-mode-p 'emagent-mode))
+               (should-not emagent--session-pending)
+               (should-not (memq buf emagent--pending-buffers))))
          (when (buffer-live-p buf) (kill-buffer buf))
          (when (file-exists-p file) (delete-file file)))))))
 

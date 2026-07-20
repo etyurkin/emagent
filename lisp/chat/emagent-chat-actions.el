@@ -42,7 +42,7 @@
 (require 'emagent-chat-render)
 (require 'emagent-chat-mode-line)
 
-(declare-function emagent-acp-interrupt "emagent-acp")
+(declare-function emagent-acp-interrupt "emagent-acp-send")
 (declare-function emagent-acp--finalize-in-flight-prompt "emagent-acp-send")
 (declare-function emagent-acp-busy-p "emagent-acp-usage")
 (declare-function emagent-acp--clear-when-connected-queue "emagent-acp-state")

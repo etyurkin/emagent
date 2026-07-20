@@ -40,8 +40,7 @@
 (require 'emagent-acp-custom)
 (require 'emagent-acp-protocol)
 
-(declare-function emagent-acp--refresh-mode-line "emagent-acp")
-
+(declare-function emagent-acp--refresh-mode-line "emagent-acp-usage")
 (defvar-local emagent-acp--session nil
   "ACP session state for the current emagent buffer.")
 

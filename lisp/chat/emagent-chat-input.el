@@ -326,8 +326,5 @@ send; then fall through to org."
                (<= (line-beginning-position) (cdr block)))
       block)))
 
-
-
-
 (provide 'emagent-chat-input)
 ;;; emagent-chat-input.el ends here

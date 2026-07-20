@@ -74,11 +74,15 @@
 (defvaralias 'emagent-tools-eval-dangerous-symbols 'emagent-policy-elisp-dangerous-symbols)
 (defvar auto-insert)
 
-(declare-function magit-diff-buffer-file "magit-diff")
-(declare-function magit-toplevel "magit-git")
-(declare-function emagent-tools--with-stdout "emagent-tools-intro")
-(declare-function imenu--make-index-alist "imenu")
-(declare-function imenu--subalist-p "imenu")
+(declare-function magit-diff-buffer-file "ext:magit-diff")
+(declare-function magit-toplevel "ext:magit-git")
+
+(defun emagent-tools--with-stdout (thunk)
+  "Call THUNK after an introspection command and return `help-buffer' text.
+
+THUNK should populate *Help* (e.g. via `describe-function').  Returns
+whatever THUNK returns; call sites typically read `help-buffer'."
+  (funcall thunk))
 
 (defvar emagent-acp-elisp-guide)
 
@@ -166,7 +170,6 @@ of in the minibuffer.  Bound per MCP dispatch by `emagent-mcp--run-tool'.")
   "When non-nil, skip Emacs-side tool confirmation for this call.
 ACP chat sessions use `session/request_permission' instead; a second MCP
 prompt would not block the agent and is ignored.")
-
 
 (defun emagent-tools--apply-button-line-keymap (beg end keymap)
   "Attach KEYMAP to the button line spanning BEG through END (exclusive).
@@ -284,7 +287,6 @@ nil or dead, calling CALLBACK with the chosen value."
   "Return non-nil when TOOL-NAME is allowed without confirmation."
   (or (memq tool-name emagent-allowed-tools)
       (memq tool-name emagent-tools--session-allowed-tools)))
-
 
 (cl-defun emagent-tools--write-diff-string-async (callback resolved new-content)
   "Compare RESOLVED with NEW-CONTENT; call CALLBACK with (diff is-error)."

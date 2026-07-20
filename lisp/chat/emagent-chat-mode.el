@@ -48,7 +48,6 @@
 (declare-function org-appear-mode "ext:org-appear")
 (declare-function emagent-chat--cancel-scheduled-table-align "emagent-chat")
 
-
 (defun emagent-chat--ensure-org-startup ()
   "Ensure the buffer requests Org block folding on startup."
   (unless (save-excursion
@@ -160,7 +159,25 @@ Arguments: ORIG, LANG, START, END."
             font-lock-fontified t fontified t font-lock-multiline t))
          nil)))))
 
-;;;###autoload
+(declare-function emagent-chat-tab "emagent-chat-slash")
+(declare-function emagent-chat-beginning-of-line "emagent-chat-input")
+(declare-function emagent-chat-yank "emagent-chat-attach")
+(declare-function emagent-chat-history-previous-or-previous-line "emagent-chat-input")
+(declare-function emagent-chat-history-next-or-next-line "emagent-chat-input")
+
+(defvar emagent-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'emagent-chat-send-or-babel)
+    (define-key map (kbd "ESC ESC") #'emagent-chat-interrupt)
+    (define-key map (kbd "C-c ?") #'emagent-dispatch)
+    (define-key map (kbd "TAB") #'emagent-chat-tab)
+    (define-key map (kbd "C-a") #'emagent-chat-beginning-of-line)
+    (define-key map (kbd "C-y") #'emagent-chat-yank)
+    (define-key map (kbd "C-p") #'emagent-chat-history-previous-or-previous-line)
+    (define-key map (kbd "C-n") #'emagent-chat-history-next-or-next-line)
+    map)
+  "Keymap for `emagent-mode'.")
+
 (define-derived-mode emagent-mode org-mode "Emagent"
   "Major mode for emagent chat scratch buffers.
 
@@ -217,22 +234,22 @@ Run \\[emagent-mode] to reconnect a saved session."
   (emagent-chat--mode-line-recompute)
   (run-with-idle-timer 0 nil #'emagent-chat--setup-faces-deferred))
 
-(defun emagent-mode--safe-org-init (orig-fn &rest args)
-  "Run ORIG-FN with Org init vars that misbehave on huge sessions disabled.
+(setq emagent--mode-function (symbol-function 'emagent-mode))
 
-`emagent-mode' derives from `org-mode'.  `define-derived-mode' calls the
-parent before the derived body runs, so any `setq-local' inside
-`emagent-mode' lands too late to influence `org-mode' initialization.
-`org-mode' calls `org-display-inline-images' when
-`org-startup-with-inline-images' is non-nil; on large chat buffers that
-parse can trip an \"Invalid search bound (wrong side of point)\" error
-inside `org-element-context'.  It also warms `org-element--cache' before
-the derived body disables it.  Bind both to nil for the whole init.
+(defvar emagent--mode-function nil
+  "Saved function cell for the `emagent-mode' derived-mode implementation.")
 
-Arguments: ARGS."
+(defun emagent--mode-activate (&optional _arg)
+  "Run the derived `emagent-mode' with Org init vars bound safely.
+
+_ARG is ignored; `define-derived-mode' generates a zero-argument
+entry point.  Binding `org-startup-with-inline-images' and
+`org-element-use-cache' here keeps large session buffers from
+tripping Org parser errors during parent `org-mode' init."
   (let ((org-startup-with-inline-images nil)
         (org-element-use-cache nil))
-    (apply orig-fn args)))
+    (funcall emagent--mode-function)))
+
 
 (defun emagent-chat--session-buffer-p ()
   "Return non-nil when current buffer resembles an emagent session file."
@@ -258,10 +275,6 @@ Arguments: ORIG-FN, ARGS."
       nil
     (apply orig-fn args)))
 
-(advice-remove 'emagent-mode #'emagent-mode--safe-org-init)
-
-(advice-add 'emagent-mode :around #'emagent-mode--safe-org-init)
-
 (cl-defun emagent-chat-open (&key project-dir)
   "Open or create an emagent buffer for PROJECT-DIR.
 
@@ -284,8 +297,6 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
                                         (emagent-chat--read-session-property)))
       (emagent-session-set-project-directory dir))
     buffer))
-
-(advice-remove 'emagent-mode #'emagent-mode--safe-org-init)
 
 ;;;; Context-sensitive C-c C-c
 

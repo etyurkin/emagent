@@ -41,9 +41,8 @@
 (defvar emagent-tools-show-written-buffer)
 
 (declare-function emagent-tools--root-directory "emagent-tools")
-(declare-function emagent-tools--buffer-mode "emagent-tools")
 (declare-function emagent-struct-write-required-p "emagent-struct")
-(declare-function magit-toplevel "magit-git")
+(declare-function magit-toplevel "ext:magit-git")
 (declare-function emagent-tools--run-async-sync "emagent-tools-shell")
 (declare-function emagent-tools--run-process-async "emagent-tools-shell")
 

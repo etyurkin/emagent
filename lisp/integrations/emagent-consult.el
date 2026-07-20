@@ -34,7 +34,7 @@
 
 ;;; Code:
 
-(declare-function consult--buffer-state "consult")
+(declare-function consult--buffer-state "ext:consult")
 (defvar consult-buffer-sources)
 
 (defvar emagent-consult--source

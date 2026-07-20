@@ -42,9 +42,6 @@
 (declare-function flymake-diagnostics "flymake")
 (declare-function flymake-diagnostic-text "flymake")
 (declare-function flymake-diagnostic-type "flymake")
-(declare-function treesit-node-at "treesit")
-(declare-function treesit-node-type "treesit")
-(declare-function treesit-available-p "treesit")
 
 (defun emagent-context--point-info ()
   "Return point line and column as an alist."

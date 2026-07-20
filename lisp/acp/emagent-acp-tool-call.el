@@ -47,7 +47,6 @@
 (declare-function emagent-acp--human-tool-detail-p "emagent-acp-request")
 (declare-function emagent-acp--drain-permission-queue "emagent-acp-request")
 
-
 (defun emagent-acp--tool-call-emagent-tool-p (update)
   "Return non-nil when UPDATE names a tool from emagent's own MCP server.
 
@@ -466,7 +465,6 @@ command is complete."
                      (emagent-acp--cli-command-args data order))))
       (when args
         (string-join (cons cli args) " ")))))
-
 
 (defun emagent-acp--tool-call-block-spec (update)
   "Return (LANG . CODE) when UPDATE should render as an Org src block, else nil.
