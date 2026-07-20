@@ -108,6 +108,41 @@ agent is thinking."
   :type 'number
   :group 'emagent-chat)
 
+(defvar-local emagent-chat--response-pending ""
+  "Assistant chunks not yet inserted into the open Response block.")
+
+(defvar-local emagent-chat--response-flush-timer nil
+  "Timer that batches assistant stream inserts into the chat buffer.")
+
+(defcustom emagent-chat-response-stream-delay 0.05
+  "Seconds to batch assistant stream inserts before updating the buffer.
+
+Lower values feel more live; higher values reduce markdown conversion and
+org font-lock work while the agent is answering.  Use 0 to flush every
+chunk synchronously (also the effective value in `noninteractive' tests)."
+  :type 'number
+  :group 'emagent-chat)
+
+(defvar emagent-chat--live-buffers (make-hash-table :weakness 'key :test 'eq)
+  "Weak set of live `emagent-mode' buffers.
+
+Used by focus/spinner refresh paths instead of scanning `buffer-list'.")
+
+(defun emagent-chat--register-live-buffer (&optional buffer)
+  "Register BUFFER (default current) as a live emagent chat buffer."
+  (puthash (or buffer (current-buffer)) t emagent-chat--live-buffers))
+
+(defun emagent-chat--unregister-live-buffer (&optional buffer)
+  "Unregister BUFFER (default current) from the live emagent set."
+  (remhash (or buffer (current-buffer)) emagent-chat--live-buffers))
+
+(defun emagent-chat--map-live-buffers (fn)
+  "Call FN with each live registered emagent buffer."
+  (maphash (lambda (buf _)
+             (when (buffer-live-p buf)
+               (funcall fn buf)))
+           emagent-chat--live-buffers))
+
 (defvar-local emagent-chat--tool-call-lines nil
   "Map ACP toolCallId to (START . END) markers for displayed tool-call lines.
 Created per buffer in `emagent-mode'; must not use a shared mutable default,
@@ -663,12 +698,11 @@ after focus moves elsewhere."
 
 (defun emagent-chat--window-configuration-change (&optional _frames)
   "Flush deferred font-lock and refresh mode lines on focus change."
-  (dolist (buf (buffer-list))
-    (when (buffer-live-p buf)
-      (with-current-buffer buf
-        (when (derived-mode-p 'emagent-mode)
-          (emagent-chat--flush-deferred-font-lock)
-          (emagent-chat--refresh-mode-line-on-focus)))))
+  (emagent-chat--map-live-buffers
+   (lambda (buf)
+     (with-current-buffer buf
+       (emagent-chat--flush-deferred-font-lock)
+       (emagent-chat--refresh-mode-line-on-focus))))
   (emagent-chat--spinner-ensure-running))
 
 (add-hook 'window-configuration-change-hook

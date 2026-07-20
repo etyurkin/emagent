@@ -110,10 +110,17 @@ Thinking block."
   (unless (save-excursion (forward-line -1) (looking-at-p "[ \t]*$"))
     (insert "\n")))
 
+(defun emagent-chat--cancel-response-flush ()
+  "Cancel the assistant flush timer and drop pending text without inserting."
+  (when emagent-chat--response-flush-timer
+    (cancel-timer emagent-chat--response-flush-timer)
+    (setq emagent-chat--response-flush-timer nil))
+  (setq emagent-chat--response-pending ""))
+
 (defun emagent-chat--reset-response-state ()
-  
-  "Internal helper."
+  "Clear response markers and cancel pending stream flushes."
   (emagent-chat--cancel-thought-flush)
+  (emagent-chat--cancel-response-flush)
   (setq emagent-chat--assistant-marker nil
         emagent-chat--response-body-start nil
         emagent-chat--response-content-marker nil
@@ -126,6 +133,7 @@ Thinking block."
         emagent-chat--reasoning-streamed-p nil
         emagent-chat--fence-state nil
         emagent-chat--response-fence-state nil
+        emagent-chat--response-pending ""
         emagent-chat--permission-pending nil)
   (if emagent-chat--tool-call-lines
       (clrhash emagent-chat--tool-call-lines)
@@ -193,73 +201,91 @@ the headline exists; otherwise the headline is located by search and cached."
             (setq emagent-chat--response-content-marker (copy-marker (point) nil))
             (point))))))
 
+(defun emagent-chat--schedule-response-flush ()
+  "Debounce assistant insertion using `emagent-chat-response-stream-delay'."
+  (when emagent-chat--response-flush-timer
+    (cancel-timer emagent-chat--response-flush-timer))
+  (setq emagent-chat--response-flush-timer
+        (run-with-timer emagent-chat-response-stream-delay nil
+                        (lambda ()
+                          (setq emagent-chat--response-flush-timer nil)
+                          (emagent-chat--flush-response-pending)))))
+
+(defun emagent-chat--insert-assistant-now (text)
+  "Insert assistant TEXT into the open Response block after fence conversion."
+  (emagent-chat--end-send-pending-if-active)
+  (emagent-chat--with-stable-view
+    (lambda ()
+      (with-current-buffer (current-buffer)
+        (when (emagent-chat--open-response-p)
+          (let ((inhibit-read-only t))
+            (emagent-chat--writable)
+            (emagent-chat-close-thought)
+            (let* ((result (emagent-chat--feed-fences
+                            text emagent-chat--response-fence-state))
+                   (safe (emagent-chat--demote-response-headings
+                          (emagent-chat--map-outside-src-blocks
+                           (lambda (s)
+                             (let ((case-fold-search nil))
+                               (emagent-chat--convert-markdown-headings
+                                (emagent-chat--convert-inline-code-spans
+                                 (replace-regexp-in-string
+                                  "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*"
+                                  (replace-regexp-in-string
+                                   "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
+                                   "[[\\2][\\1]]"
+                                   s))))))
+                           (car result))))
+                   (existing (emagent-chat--response-body-bounds))
+                   (insert-at
+                    (cond
+                     ((and existing
+                           emagent-chat--assistant-marker
+                           (marker-position emagent-chat--assistant-marker)
+                           (>= (marker-position emagent-chat--assistant-marker)
+                               (car existing)))
+                      (marker-position emagent-chat--assistant-marker))
+                     (existing (cdr existing))
+                     (t (emagent-chat--ensure-response-headline)))))
+              (setq emagent-chat--response-fence-state (cdr result))
+              (when (and insert-at (not (string-empty-p safe)))
+                (save-excursion
+                  (goto-char insert-at)
+                  (let ((beg (point)))
+                    (insert safe)
+                    (emagent-chat--demote-headlines-in-region beg (point))
+                    (setq emagent-chat--assistant-marker (point-marker))))))
+            (emagent-chat--maybe-font-lock-flush)))))))
+
+(defun emagent-chat--flush-response-pending (&optional _final)
+  "Insert any batched assistant text into the open Response block.
+With FINAL non-nil, emit everything buffered (used before finish/fail)."
+  (when emagent-chat--response-flush-timer
+    (cancel-timer emagent-chat--response-flush-timer)
+    (setq emagent-chat--response-flush-timer nil))
+  (let ((text emagent-chat--response-pending))
+    (setq emagent-chat--response-pending "")
+    (when (not (string-empty-p text))
+      (emagent-chat--insert-assistant-now text))))
+
 (defun emagent-chat-append-assistant (text)
   "Append streamed assistant TEXT under the `** Response' subsection.
 Each chunk is passed through the streaming markdown->org converter so the
-buffer shows formatted org while the response is still arriving."
+buffer shows formatted org while the response is still arriving.  Chunks
+are batched using `emagent-chat-response-stream-delay'."
   ;; Normalize line endings so CRLF/CR output does not leave stray ^M in the
   ;; buffer or defeat the LF-based fence/src-block segmentation below.
   (setq text (replace-regexp-in-string "\r\n?" "\n" text))
   (when (not (string-empty-p text))
-    (emagent-chat--end-send-pending-if-active)
-    (emagent-chat--with-stable-view
-      (lambda ()
-        (with-current-buffer (current-buffer)
-          (when (emagent-chat--open-response-p)
-            (let ((inhibit-read-only t))
-              (emagent-chat--writable)
-              (emagent-chat-close-thought)
-              ;; Streaming markdown->org: feed chunk through the fence state
-              ;; machine, then apply prose conversions to the safe portion.
-              (let* ((combined (if emagent-chat--response-fence-state
-                                   (concat "```"
-                                           (car emagent-chat--response-fence-state)
-                                           "\n"
-                                           (cdr emagent-chat--response-fence-state)
-                                           text)
-                                 text))
-                     (result (emagent-chat--split-fences combined))
-                     ;; Apply prose conversions only outside completed src
-                     ;; blocks.  Demote headlines here (not only at finish):
-                     ;; a streamed `** score' line is org level-2 and would
-                     ;; otherwise become a sibling of `** Response' under the
-                     ;; user heading.
-                     (safe (emagent-chat--demote-response-headings
-                            (emagent-chat--map-outside-src-blocks
-                             (lambda (s)
-                               (let ((case-fold-search nil))
-                                 (emagent-chat--convert-markdown-headings
-                                  (emagent-chat--convert-inline-code-spans
-                                   (replace-regexp-in-string
-                                    "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*"
-                                    (replace-regexp-in-string
-                                     "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
-                                     "[[\\2][\\1]]"
-                                     s))))))
-                             (car result))))
-                     (existing (emagent-chat--response-body-bounds))
-                     (insert-at
-                      (cond
-                       ((and existing
-                             emagent-chat--assistant-marker
-                             (marker-position emagent-chat--assistant-marker)
-                             (>= (marker-position emagent-chat--assistant-marker)
-                                 (car existing)))
-                        (marker-position emagent-chat--assistant-marker))
-                       (existing (cdr existing))
-                       (t (emagent-chat--ensure-response-headline)))))
-                (setq emagent-chat--response-fence-state (cdr result))
-                (when (and insert-at (not (string-empty-p safe)))
-                  (save-excursion
-                    (goto-char insert-at)
-                    (let ((beg (point)))
-                      (insert safe)
-                      (emagent-chat--demote-headlines-in-region beg (point))
-                      (setq emagent-chat--assistant-marker (point-marker))))))
-              (emagent-chat--maybe-font-lock-flush))))))))
+    (setq emagent-chat--response-pending
+          (concat emagent-chat--response-pending text))
+    (if (or noninteractive (<= emagent-chat-response-stream-delay 0))
+        (emagent-chat--flush-response-pending)
+      (emagent-chat--schedule-response-flush))))
 
 (defun emagent-chat-fail-assistant (message)
   "Close the in-flight emagent response with error MESSAGE under `** Response'."
+  (emagent-chat--flush-response-pending t)
   (when (fboundp 'emagent-chat--send-pending-end)
     (emagent-chat--send-pending-end))
   (emagent-chat--with-stable-view
@@ -313,6 +339,7 @@ the render loop closes the response only after assistant text is stable.")
   "Reset response markers and insert the next user heading stub.
 
 Called once the ACP finish render has settled (no newer assistant text)."
+  (emagent-chat--flush-response-pending t)
   (when emagent-chat--pending-hide-reasoning
     (emagent-chat--hide-reasoning-deferred
      emagent-chat--pending-hide-reasoning)
@@ -351,6 +378,7 @@ A response without any reasoning has no `** Thinking' subsection at all.
 
 When `emagent-chat--finish-close' is nil, leave the response open (no stub)
 so a subsequent finish can replace the body if more assistant text arrives."
+  (emagent-chat--flush-response-pending t)
   (emagent-chat--with-stable-view
     (lambda ()
       (with-current-buffer (current-buffer)

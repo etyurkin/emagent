@@ -211,6 +211,41 @@ are closed, or (lang . body-so-far) for the last unclosed fence."
       (push (substring text pos) parts))
     (cons (apply #'concat (nreverse parts)) incomplete)))
 
+
+(defun emagent-chat--feed-fences (text state)
+  "Continue fence conversion for TEXT from prior STATE.
+
+STATE is nil or (LANG . BODY) as returned by `emagent-chat--split-fences'.
+When BODY is empty, fall back to reconstructing an open fence (handles an
+incomplete language tag cheaply).  When BODY is non-empty, append TEXT and
+search for a closing fence from a 2-character overlap so open code blocks
+stay O(chunk) rather than re-scanning the full buffered body each time."
+  (let ((fence (make-string 3 ?`)))
+    (cond
+     ((null state)
+      (emagent-chat--split-fences text))
+     ((zerop (length (cdr state)))
+      (emagent-chat--split-fences
+       (concat fence (car state) "\n" (cdr state) text)))
+     (t
+      (let* ((lang (car state))
+             (body (cdr state))
+             (overlap (min 2 (length body)))
+             (combined (concat body text))
+             (close (cl-search fence combined :start2
+                               (max 0 (- (length body) overlap)))))
+        (if (not close)
+            (cons "" (cons lang combined))
+          (let* ((complete (string-trim-right (substring combined 0 close)))
+                 (rest (substring combined (+ close 3)))
+                 (block (if (string-empty-p lang)
+                            complete
+                          (format "#+BEGIN_SRC %s\n%s\n#+END_SRC"
+                                  (emagent-chat--lang-from-src-tag lang)
+                                  (emagent-chat--escape-src-body complete))))
+                 (after (emagent-chat--split-fences rest)))
+            (cons (concat block (car after)) (cdr after)))))))))
+
 (defun emagent-chat--count-substring (needle s end)
   "Return the count of non-overlapping NEEDLE occurrences in S before END."
   (let ((n 0) (pos 0) (len (length needle)) hit)
@@ -300,12 +335,7 @@ close or an interrupting tool call) everything buffered is emitted as-is."
   (let ((text emagent-chat--thought-pending))
     (setq emagent-chat--thought-pending "")
     (when (not (string-empty-p text))
-      ;; Prepend any previously buffered fence content before processing
-      (let* ((fence emagent-chat--fence-state)
-             (combined (if fence
-                           (concat "```" (car fence) "\n" (cdr fence) text)
-                         text))
-             (result (emagent-chat--split-fences combined))
+      (let* ((result (emagent-chat--feed-fences text emagent-chat--fence-state))
              (to-insert (car result))
              (new-fence (cdr result)))
         (setq emagent-chat--fence-state new-fence)

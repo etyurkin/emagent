@@ -44,6 +44,8 @@
 (require 'emagent-chat-attach)
 (require 'emagent-chat-slash)
 
+(declare-function emagent-chat--register-live-buffer "emagent-chat")
+(declare-function emagent-chat--unregister-live-buffer "emagent-chat")
 (declare-function emagent-mode-force "emagent")
 
 (declare-function org-appear-mode "ext:org-appear")
@@ -245,6 +247,8 @@ Run \\[emagent-mode] to reconnect a saved session."
   (setq-local bookmark-make-record-function #'emagent-chat--bookmark-make-record)
   (emagent-chat--setup-faces)
   (emagent-chat--mode-line-recompute)
+  (emagent-chat--register-live-buffer)
+  (add-hook 'kill-buffer-hook #'emagent-chat--unregister-live-buffer nil t)
   (run-with-idle-timer 0 nil #'emagent-chat--setup-faces-deferred))
 
 (defalias 'emagent--derived-mode (symbol-function 'emagent-mode)

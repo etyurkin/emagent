@@ -37,6 +37,7 @@
 (require 'map)
 (require 'emagent-chat-markup)
 
+(declare-function emagent-chat--map-live-buffers "emagent-chat")
 (declare-function emagent-chat--open-response-p "emagent-chat")
 (declare-function emagent-chat-model-display "emagent-chat")
 (declare-function doom-modeline-set-modeline "ext:doom-modeline")
@@ -61,12 +62,15 @@
     (cancel-timer emagent-chat--spinner-timer)
     (setq emagent-chat--spinner-timer
           (run-with-timer 0 val #'emagent-chat--spinner-tick)))
-  (dolist (buf (buffer-list))
-    (when (buffer-live-p buf)
-      (with-current-buffer buf
-        (when (derived-mode-p 'emagent-mode)
-          (emagent-chat--mode-line-recompute)
-          (emagent-chat--maybe-force-mode-line-update)))))
+  ;; `defcustom' :set runs while this file loads, before `emagent-chat' defines
+  ;; the live-buffer registry — skip refresh until then.
+  (when (fboundp 'emagent-chat--map-live-buffers)
+    (emagent-chat--map-live-buffers
+     (lambda (buf)
+       (with-current-buffer buf
+         (emagent-chat--mode-line-recompute)
+         (when (fboundp 'emagent-chat--maybe-force-mode-line-update)
+           (emagent-chat--maybe-force-mode-line-update))))))
   nil)
 
 (defcustom emagent-chat-spinner-interval 0.4
@@ -203,11 +207,14 @@ buffer."
 
 (defun emagent-chat--any-spinner-active-p ()
   "Return non-nil when any active emagent buffer needs spinner animation."
-  (cl-loop for buf in (buffer-list)
-           thereis (and (buffer-live-p buf)
-                        (with-current-buffer buf
-                          (and (derived-mode-p 'emagent-mode)
-                               (emagent-chat--spinner-animate-p buf))))))
+  (when (fboundp 'emagent-chat--map-live-buffers)
+    (catch 'found
+      (emagent-chat--map-live-buffers
+       (lambda (buf)
+         (when (with-current-buffer buf
+                 (emagent-chat--spinner-animate-p buf))
+           (throw 'found t))))
+      nil)))
 
 (declare-function emagent-chat--maybe-force-mode-line-update "emagent-chat")
 
@@ -385,15 +392,16 @@ the mode line pulling session state back out of the ACP layer."
 Uses `force-mode-line-update' only — never `redisplay'.  A forced redisplay
 from this timer re-entered `window-configuration-change-hook' and could run
 deferred org table alignment on the chat buffer until Emacs pegged CPU."
-  (let (active-refreshed)
-    (dolist (buf (buffer-list))
-      (when (buffer-live-p buf)
-        (with-current-buffer buf
-          (when (emagent-chat--spinner-refresh-buffer buf)
-            (setq active-refreshed t)))))
-    (when active-refreshed
-      (force-mode-line-update t))
-    (emagent-chat--spinner-ensure-running)))
+  (when (fboundp 'emagent-chat--map-live-buffers)
+    (let (active-refreshed)
+      (emagent-chat--map-live-buffers
+       (lambda (buf)
+         (with-current-buffer buf
+           (when (emagent-chat--spinner-refresh-buffer buf)
+             (setq active-refreshed t)))))
+      (when active-refreshed
+        (force-mode-line-update t))
+      (emagent-chat--spinner-ensure-running))))
 
 (defun emagent-chat--spinner-tick ()
   "Refresh visible busy mode lines for the current spinner frame."
