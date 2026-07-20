@@ -209,8 +209,8 @@ buffer."
                           (and (derived-mode-p 'emagent-mode)
                                (emagent-chat--spinner-animate-p buf))))))
 
-(declare-function emagent-chat--buffer-active-p "emagent-chat")
-(declare-function emagent-chat--buffer-displayed-p "emagent-chat")
+(declare-function emagent-chat--buffer-active-p "emagent-chat-markup")
+(declare-function emagent-chat--buffer-displayed-p "emagent-chat-markup")
 (declare-function emagent-chat--maybe-force-mode-line-update "emagent-chat")
 
 (defun emagent-chat--spinner-stop ()
@@ -228,7 +228,6 @@ buffer."
               emagent-chat--spinner-frame 0)
         (emagent-chat--spinner-restart-timer))
     (emagent-chat--spinner-stop)))
-
 
 ;;; -------------------------------------------------------------------------
 ;;; Mode-line cache and refresh

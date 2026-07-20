@@ -41,8 +41,8 @@
 (require 'emagent-acp-protocol)
 (require 'emagent-session)
 
-(declare-function emagent-acp--prepare-interactive-context "emagent-acp")
-(declare-function emagent-acp--notify-user "emagent-acp")
+(declare-function emagent-acp--prepare-interactive-context "emagent-acp-prompt")
+(declare-function emagent-acp--notify-user "emagent-acp-prompt")
 (declare-function emagent-acp--chat-buffer "emagent-acp-usage")
 
 (defvar emagent-tools--root-boundary)

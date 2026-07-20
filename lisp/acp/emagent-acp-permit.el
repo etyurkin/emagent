@@ -52,7 +52,6 @@
 (declare-function emagent-acp--drain-permission-queue-now "emagent-acp-request")
 (declare-function emagent-acp--tool-call-detail-from-tool-call "emagent-acp-request")
 
-
 (defun emagent-acp--hydrate-session-permissions (state session-id)
   "Load ~/.emagent session permissions for SESSION-ID into STATE."
   (when (and session-id (not (string-empty-p session-id)))
@@ -61,9 +60,7 @@
     (when (emagent-permissions-session-auto-approve-p session-id)
       (setf (emagent-acp-state-session-auto-approve state) t))))
 
-(declare-function emagent-acp--send-request "emagent-acp")
-(declare-function emagent-acp--emit-tool-call-display "emagent-acp")
-(declare-function emagent-acp--provider-symbol "emagent-acp-provider")
+(declare-function emagent-acp--send-request "emagent-acp-prompt")
 (declare-function emagent-cursor-enrich-tool-call-update "emagent-cursor")
 (declare-function emagent-chat--open-response-p "emagent-chat")
 
@@ -756,7 +753,6 @@ Arguments: TOOL-CALL."
 Arguments: STATE."
   (and (not (emagent-acp-state-session-auto-approve state))
        (not (eq emagent-acp-auto-approve-permissions t))))
-
 
 (defun emagent-acp--schedule-permission-drain (state)
   "Run `emagent-acp--drain-permission-queue-now' outside the ACP process filter.

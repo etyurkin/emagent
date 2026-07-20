@@ -728,7 +728,7 @@ cursor back to the end on every thought chunk."
   "Shell `$()' wrapping a heredoc still uses lang `sh' (keep highlighting).
 
 `sh-mode' font-lock can signal `end-of-buffer' on that pattern; emagent
-swallows it via `emagent-chat--safe-src-fontify' instead of demoting lang."
+swallows it via buffer-local safe src fontify instead of demoting lang."
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
      (emagent-test--with-busy-session

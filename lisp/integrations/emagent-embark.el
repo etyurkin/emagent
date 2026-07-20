@@ -36,10 +36,6 @@
 
 ;;; Code:
 
-(declare-function org-in-src-block-p "org")
-(declare-function org-element-at-point "org-element")
-(declare-function org-element-property "org-element")
-
 (defvar embark-target-finders)
 (defvar embark-keymap-alist)
 

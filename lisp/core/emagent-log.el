@@ -180,6 +180,7 @@ Arguments: FORMAT-STRING, ARGS."
 
 (define-derived-mode emagent-log-mode special-mode "Emagent-Log"
   "Major mode for the emagent status log."
+  :keymap emagent-log--mode-map
   (setq buffer-read-only t)
   (setq truncate-lines t)
   (setq-local revert-buffer-function #'emagent-log-refresh)

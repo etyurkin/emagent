@@ -38,30 +38,6 @@
 (require 'org-element)
 (require 'emagent-struct)
 
-(declare-function emagent-struct-write-required-p "emagent-struct")
-(declare-function emagent-struct-tree "emagent-struct")
-(declare-function emagent-struct-find-errors "emagent-struct")
-(declare-function emagent-struct-context "emagent-struct")
-(declare-function emagent-struct-complete "emagent-struct")
-(declare-function emagent-struct-format-file "emagent-struct")
-(declare-function emagent-struct-rename-file "emagent-struct")
-(declare-function emagent-struct-wrap-file "emagent-struct")
-(declare-function emagent-struct-remove-file "emagent-struct")
-(declare-function emagent-struct-move-file "emagent-struct")
-(declare-function emagent-struct-substitute-file "emagent-struct")
-(declare-function emagent-struct-extract-file "emagent-struct")
-(declare-function emagent-struct-callers-file "emagent-struct")
-(declare-function emagent-struct-instrument-file "emagent-struct")
-(declare-function emagent-struct-flatten-file "emagent-struct")
-(declare-function emagent-struct-convert-let-file "emagent-struct")
-(declare-function emagent-struct-splice-file "emagent-struct")
-(declare-function emagent-struct-raise-file "emagent-struct")
-(declare-function emagent-tools--run-async-sync "emagent-tools-shell")
-(declare-function emagent-tools--run-process-async "emagent-tools-shell")
-(declare-function emagent-struct--call-async "emagent-struct")
-(declare-function emagent-struct--call-path-async "emagent-struct")
-(declare-function emagent-struct--lang-for "emagent-struct")
-(declare-function emagent-struct-available-p "emagent-struct")
 (require 'emagent-elisp)
 (require 'emagent-tools-file)
 (require 'emagent-tools-intro)
@@ -74,11 +50,15 @@
 (defvaralias 'emagent-tools-eval-dangerous-symbols 'emagent-policy-elisp-dangerous-symbols)
 (defvar auto-insert)
 
-(declare-function magit-diff-buffer-file "magit-diff")
-(declare-function magit-toplevel "magit-git")
-(declare-function emagent-tools--with-stdout "emagent-tools-intro")
-(declare-function imenu--make-index-alist "imenu")
-(declare-function imenu--subalist-p "imenu")
+(declare-function magit-diff-buffer-file "ext:magit-diff")
+(declare-function magit-toplevel "ext:magit-git")
+
+(defun emagent-tools--with-stdout (thunk)
+  "Call THUNK after an introspection command and return `help-buffer' text.
+
+THUNK should populate *Help* (e.g. via `describe-function').  Returns
+whatever THUNK returns; call sites typically read `help-buffer'."
+  (funcall thunk))
 
 (defvar emagent-acp-elisp-guide)
 
@@ -105,8 +85,6 @@ behaviour for non-MCP call sites).")
   "Set project DIRECTORY used by emagent-tool-* when PATH is omitted."
   (setq emagent-tools--project-directory
         (and directory (expand-file-name directory))))
-
-(declare-function emagent-tools--protected-truename-p "emagent-tools-file")
 
 (defun emagent-tools--within-boundary-p (resolved)
   "Return non-nil when RESOLVED is inside `emagent-tools--root-boundary'.
@@ -166,7 +144,6 @@ of in the minibuffer.  Bound per MCP dispatch by `emagent-mcp--run-tool'.")
   "When non-nil, skip Emacs-side tool confirmation for this call.
 ACP chat sessions use `session/request_permission' instead; a second MCP
 prompt would not block the agent and is ignored.")
-
 
 (defun emagent-tools--apply-button-line-keymap (beg end keymap)
   "Attach KEYMAP to the button line spanning BEG through END (exclusive).
@@ -284,7 +261,6 @@ nil or dead, calling CALLBACK with the chosen value."
   "Return non-nil when TOOL-NAME is allowed without confirmation."
   (or (memq tool-name emagent-allowed-tools)
       (memq tool-name emagent-tools--session-allowed-tools)))
-
 
 (cl-defun emagent-tools--write-diff-string-async (callback resolved new-content)
   "Compare RESOLVED with NEW-CONTENT; call CALLBACK with (diff is-error)."

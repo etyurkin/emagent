@@ -57,11 +57,7 @@
 (require 'emagent-chat-actions)
 (require 'emagent-chat-mode)
 (require 'emagent-permissions)
-
-(declare-function emagent-chat--refresh-mode-line "emagent-chat-mode-line")
-(declare-function emagent-chat--mode-line-recompute "emagent-chat-mode-line")
-(declare-function emagent-chat--spinner-ensure-running "emagent-chat-mode-line")
-(declare-function emagent-chat--refresh-mode-line-on-focus "emagent-chat-mode-line")
+(require 'project)
 
 (declare-function emagent-set-model "emagent-acp")
 (declare-function emagent-reset-permissions "emagent-acp")
@@ -69,37 +65,6 @@
 (declare-function emagent-trust-workspace "emagent" (&optional arg))
 (declare-function emagent-trust-claude-reconnect "emagent" ())
 (declare-function emagent-acp-ensure-connected "emagent")
-(declare-function project-current "project")
-(declare-function project-root "project")
-(declare-function flymake-diagnostic-beg "flymake")
-(declare-function flymake-diagnostic-type "flymake")
-(declare-function flymake-diagnostic-text "flymake")
-
-(declare-function cl-find "cl-lib")
-(declare-function cl-some "cl-lib")
-
-
-;; emagent-mode-map was created by `define-derived-mode' in
-;; emagent-chat-mode.el (inheriting from org-mode-map).  Add
-;; emagent-specific bindings here.  Per Emacs conventions `C-c <letter>'
-;; is reserved for users, so emagent commands live under the `C-c C-e'
-;; prefix map.
-;; Direct keys are kept minimal: send, interrupt, the palette, and a few
-;; input-aware overrides that fall through to their org/default behavior outside
-;; the prompt zone (TAB completes /slash commands then org-cycles; C-a, C-n/C-p,
-;; C-y; C-c C-c runs babel in src blocks, sends only on or inside a `* user>'
-;; prompt, and falls through to `org-ctrl-c-ctrl-c' everywhere else).  Every
-;; other command lives in the `C-c ?' palette (`emagent-dispatch').  The one
-;; org binding knowingly shadowed is `C-c ?' itself (org-table-field-info).
-(define-key emagent-mode-map (kbd "C-c C-c") #'emagent-chat-send-or-babel)
-(define-key emagent-mode-map (kbd "ESC ESC") #'emagent-chat-interrupt)
-(define-key emagent-mode-map (kbd "C-c ?")   #'emagent-dispatch)
-(define-key emagent-mode-map (kbd "TAB")     #'emagent-chat-tab)
-(define-key emagent-mode-map (kbd "C-a")     #'emagent-chat-beginning-of-line)
-(define-key emagent-mode-map (kbd "C-y")     #'emagent-chat-yank)
-(define-key emagent-mode-map (kbd "C-p")     #'emagent-chat-history-previous-or-previous-line)
-(define-key emagent-mode-map (kbd "C-n")     #'emagent-chat-history-next-or-next-line)
-
 (defvar-local emagent-chat--assistant-marker nil
   "Insert position for the in-flight emagent response.")
 
@@ -535,8 +500,6 @@ saved #+EMAGENT_MODEL."
               (t (emagent-session-model)))))
     (when id (emagent-session-model-display id))))
 
-
-
 (defun emagent-chat-set-model (model)
   "Store ACP MODEL id in the current buffer and refresh the mode line."
   (emagent-session-set-model model)
@@ -553,7 +516,6 @@ read, and every thought chunk would jump the cursor back to EOB."
        (eq (window-buffer window) (current-buffer))
        (= (window-point window) (point-max))))
 
-
 (defvar-local emagent-chat--table-align-start nil
   "Marker for the start of a pending idle org-table align region, or nil.")
 
@@ -562,8 +524,6 @@ read, and every thought chunk would jump the cursor back to EOB."
 
 (defvar-local emagent-chat--table-align-timer nil
   "Idle timer that aligns `emagent-chat--table-align-start'..end, or nil.")
-
-(declare-function emagent-chat--align-org-tables-in-region "emagent-chat-markup")
 
 (defun emagent-chat--cancel-scheduled-table-align ()
   "Cancel any pending idle org-table alignment for this buffer."
@@ -617,7 +577,6 @@ large chats via `org-element' parses."
                  (with-current-buffer buf
                    (emagent-chat--run-scheduled-table-align)))))))))
 
-
 (defvar emagent-chat--emacs-focused-p t
   "Non-nil when Emacs currently has OS-level input focus.")
 
@@ -627,7 +586,6 @@ large chats via `org-element' parses."
         (if (fboundp 'frame-focus-state)
             (frame-focus-state)
           t)))
-
 
 (condition-case nil
     (progn
@@ -684,9 +642,6 @@ ignored so chat rendering never stalls on OS notifications."
                 (ding t))
               (emagent-chat--notify-macos-inactive-update))
           (error nil))))))
-
-
-(declare-function emagent-chat--font-lock-response-tail "emagent-chat-markup")
 
 (defun emagent-chat--flush-deferred-font-lock ()
   "Font-lock the response tail when a deferred flush was requested.

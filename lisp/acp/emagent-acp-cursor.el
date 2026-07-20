@@ -39,6 +39,7 @@
 (require 'map)
 (require 'emagent-acp-provider)
 (require 'emagent-acp-gate)
+(require 'emagent-acp-tool-call)
 
 (declare-function emagent-cursor-enrich-tool-call-update "emagent-cursor")
 (declare-function emagent-cursor--apply-store-entry "emagent-cursor")
@@ -46,11 +47,6 @@
 (declare-function emagent-cursor-tool-call-from-store-async "emagent-cursor")
 (declare-function emagent-cursor--generic-acp-title-p "emagent-cursor")
 (declare-function emagent-cursor-normalize-slash-prompt "emagent-cursor")
-(declare-function emagent-acp--merged-tool-call-update "emagent-acp-tool-call")
-(declare-function emagent-acp--tool-call-label "emagent-acp-tool-call")
-(declare-function emagent-acp--tool-call-meaningful-detail-p "emagent-acp-tool-call")
-(declare-function emagent-acp--tool-call-displayable-p "emagent-acp-tool-call")
-(declare-function emagent-acp--emit-tool-call-display "emagent-acp-tool-call")
 (declare-function emagent-acp--drain-permission-queue "emagent-acp-request")
 (declare-function emagent-acp--maybe-complete-deferred-prompt "emagent-acp-prompt")
 

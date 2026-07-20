@@ -39,12 +39,9 @@
 (require 'map)
 (require 'subr-x)
 
-(declare-function flymake-diagnostics "flymake")
-(declare-function flymake-diagnostic-text "flymake")
-(declare-function flymake-diagnostic-type "flymake")
-(declare-function treesit-node-at "treesit")
-(declare-function treesit-node-type "treesit")
-(declare-function treesit-available-p "treesit")
+(eval-when-compile
+  (require 'flymake)
+  (require 'which-func))
 
 (defun emagent-context--point-info ()
   "Return point line and column as an alist."
@@ -72,8 +69,6 @@ files is slow and the chat structure is not a normal org document."
                 (cons :level (org-element-property :level element))
                 (cons :tags (org-element-property :tags element))))))))
 
-(declare-function which-function "which-func")
-
 (defun emagent-context--which-function ()
   "Return the enclosing function/method name at point, or nil."
   (when (fboundp 'which-function)
@@ -90,7 +85,9 @@ files is slow and the chat structure is not a normal org document."
 
 (defun emagent-context--flymake-diagnostics ()
   "Return flymake diagnostics at point as a list of (TYPE . TEXT) pairs."
-  (when (and (fboundp 'flymake-diagnostics) (bound-and-true-p flymake-mode))
+  (when (and (bound-and-true-p flymake-mode)
+             (require 'flymake nil t)
+             (fboundp 'flymake-diagnostics))
     (ignore-errors
       (mapcar (lambda (d)
                 (cons (format "%s" (flymake-diagnostic-type d))

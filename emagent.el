@@ -7,7 +7,7 @@
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; URL: https://github.com/etyurkin/emagent
-;; Version: 1.2.5
+;; Version: 1.2.6
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: comm tools
 
@@ -91,25 +91,10 @@ target BUFFER (hence the two-argument signature)."
 (require 'emagent-cursor)
 (require 'emagent-claude)
 (require 'emagent-trust)
+(require 'project)
 
-(declare-function project-current "project")
-(declare-function project-root "project")
-(declare-function emagent-chat--display-project-directory "emagent-chat-header")
-(declare-function emagent-chat-append-thought "emagent-chat")
-(declare-function emagent-chat-append-assistant "emagent-chat")
-(declare-function emagent-chat-finish-assistant "emagent-chat")
-(declare-function emagent-chat-fail-assistant "emagent-chat-response")
-(declare-function emagent-chat-set-slash-commands "emagent-chat")
-(declare-function emagent-chat--buffer-displayed-p "emagent-chat")
-(declare-function emagent-chat--disable-incompatible-org-minor-modes "emagent-chat-mode")
-(declare-function emagent-chat--send-pending-end "emagent-chat")
-(declare-function emagent-chat--send-active-p "emagent-chat")
-(declare-function emagent-acp-current-model-id "emagent-acp")
-(declare-function emagent-acp--match-model-id "emagent-acp-model")
-(declare-function emagent-acp-send-prompt "emagent-acp-send")
-(declare-function emagent-acp--progress "emagent-acp-prompt")
-(declare-function emagent-acp--retriable-prompt-error-p "emagent-acp-prompt")
-(declare-function emagent-acp--model-entries-from-response "emagent-acp-model")
+(declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
+(declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
 
 ;; Optional integrations — loaded only when the dependency is present.
 (require 'emagent-consult nil t)
@@ -257,8 +242,6 @@ send; the buffer model is restored when the turn ends (see
                         (emagent--send-prompt-safe buf user-text)))))
                (emagent--send-prompt-safe buf user-text)))))))))
 
-(declare-function emagent-tools--buttons-prompt "emagent-tools")
-
 (defun emagent--restore-turn-model ()
   "Restore the session model overridden by `/model' and clear the override.
 Called on a successful turn: switches back to the captured base model and clears
@@ -295,7 +278,6 @@ overflow restore the buffer model immediately."
         emagent-chat--on-quit #'emagent-acp-shutdown-buffer
         emagent-chat-provider (or (emagent-session-agent) emagent-default-provider)))
 
-(declare-function emagent-chat-seed-cursor-slash-commands "emagent-chat-slash")
 
 (defun emagent--on-mode-enable ()
   "Wire callbacks when enabling `emagent-mode'.
@@ -337,11 +319,6 @@ When nil, session files activate `emagent-mode' immediately on open."
   :type 'boolean
   :group 'emagent)
 
-(defvar emagent--force-activation nil
-  "Non-nil to fully activate `emagent-mode' even for an undisplayed buffer.
-Bound around explicit, user-initiated activation so the deferral advice does
-not intercept it.")
-
 (defvar emagent--pending-buffers nil
   "Session buffers awaiting first-display activation of `emagent-mode'.")
 
@@ -351,13 +328,15 @@ not intercept it.")
 (defun emagent--mark-session-pending ()
   "Leave the current buffer in `org-mode' and queue activation on first display."
   (unless (derived-mode-p 'org-mode)
-    (org-mode))
+    (let ((org-startup-with-inline-images nil))
+      (org-mode)))
   ;; Deferred sessions stay in plain `org-mode' until first display.  Apply the
   ;; same org-appear / org-element safeguards as `emagent-mode' so desktop
   ;; restore and find-file do not trip \"Invalid search bound\" on large logs.
   (emagent-chat--disable-incompatible-org-minor-modes)
-  (setq-local emagent--session-pending t
-              emagent-chat--safe-src-fontify-p t)
+  (emagent-chat--ensure-mode-cookie)
+  (emagent-chat--enable-safe-src-fontify)
+  (setq-local emagent--session-pending t)
   (cl-pushnew (current-buffer) emagent--pending-buffers)
   (emagent-log "session deferred until displayed: %s" (buffer-name)))
 
@@ -366,31 +345,66 @@ not intercept it.")
   (setq emagent--pending-buffers (delq (current-buffer) emagent--pending-buffers))
   (kill-local-variable 'emagent--session-pending)
   (unless (derived-mode-p 'emagent-mode)
-    (let ((emagent--force-activation t))
-      (condition-case err
-          (emagent-mode)
-        (error
-         (emagent-log "could not enable emagent-mode in %s: %s"
-                      (or (buffer-name) "<dead-buffer>")
-                      (error-message-string err)))))))
+    (condition-case err
+        (emagent-mode-force)
+      (error
+       (emagent-log "could not enable emagent-mode in %s: %s"
+                    (or (buffer-name) "<dead-buffer>")
+                    (error-message-string err))))))
 
-(defun emagent-mode--maybe-defer (orig-fn &rest args)
-  "Defer ORIG-FN (`emagent-mode') for undisplayed session files on load.
+(defun emagent-mode--defer-p (&optional force)
+  "Return non-nil when `emagent-mode' should defer activation until display.
 
-ARGS are forwarded to ORIG-FN when activation is not deferred.
-When `emagent-activate-on-display' is on and `emagent-mode' is triggered for a
-file-visiting buffer that is not yet displayed (e.g. the `mode: emagent' cookie
-during `find-file' or desktop restore), keep the buffer in `org-mode' and mark
-it pending instead.  Explicit activation (`emagent--force-activation') and
-already-displayed buffers run normally."
-  (if (and emagent-activate-on-display
-           (not emagent--force-activation)
-           buffer-file-name
-           (not (emagent-chat--buffer-displayed-p)))
-      (emagent--mark-session-pending)
-    (apply orig-fn args)))
+Defers for undisplayed file-visiting buffers when
+`emagent-activate-on-display' is on and FORCE is nil.  Does not defer
+when already in `emagent-mode' so toggle-off works."
+  (and emagent-activate-on-display
+       (not force)
+       (not (eq major-mode 'emagent-mode))
+       buffer-file-name
+       (not (emagent-chat--buffer-displayed-p))))
 
-(advice-add 'emagent-mode :around #'emagent-mode--maybe-defer)
+(defun emagent-mode-entry (&optional arg)
+  "Public entry for `emagent-mode' with display deferral.
+
+ARG is accepted for major-mode compatibility.  Pass `force' (or non-nil
+interactively via `emagent-mode-force') to bypass display deferral.
+See `emagent-mode' for the user-facing docstring."
+  (interactive "P")
+  (let ((force (memq arg '(force t))))
+    (if (emagent-mode--defer-p force)
+        (emagent--mark-session-pending)
+      (emagent--run-derived-mode))))
+
+(defun emagent-mode-force ()
+  "Activate `emagent-mode', bypassing display deferral.
+
+Use for explicit opens (`emagent-chat-open') and first-display
+activation of deferred session buffers."
+  (interactive)
+  (emagent-mode-entry 'force))
+
+;;;###autoload
+(defun emagent-mode (&optional arg)
+  "Major mode for emagent chat scratch buffers.
+
+ARG is accepted for major-mode compatibility; pass `force' (or use
+`emagent-mode-force') to bypass display deferral.
+
+Derived from `org-mode'.  Type after the `* user>' stub, then
+\\[emagent-chat-send] to send the prompt at point (its heading line
+plus any body lines).
+On a slash-command line (plugin skills such as /workflow:dev),
+\\[emagent-chat-tab] completes available commands.  Agent responses are
+inserted between `** Thinking' / `** Response' subsections (TAB folds
+them as Org headlines).
+
+When `emagent-activate-on-display' is non-nil, opening an undisplayed
+session file defers full activation until first display.
+
+Run \\[emagent-mode] to reconnect a saved session."
+  (interactive "P")
+  (emagent-mode-entry arg))
 
 (defun emagent--maybe-register-session ()
   "On opening a session file, mark it pending or activate it now.
@@ -613,15 +627,6 @@ otherwise the project.el root, otherwise ~/."
    (read-directory-name "Emagent project directory: "
                         (emagent--project-directory-initial)
                         nil t)))
-
-(declare-function emagent-trust--ensure-provider-features "emagent-trust")
-(declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
-(declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
-(declare-function emagent-acp--connected-p "emagent-acp")
-(declare-function emagent-acp--connecting-p "emagent-acp-state")
-(declare-function emagent-acp--run-when-connected-queue "emagent-acp-state")
-(declare-function emagent-claude-relocate-session "emagent-claude" (session-id old-dir new-dir))
-(declare-function emagent-cursor-relocate-session "emagent-cursor" (session-id old-dir new-dir))
 
 ;;;###autoload
 (defun emagent-trust-workspace (&optional both-agents)

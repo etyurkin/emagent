@@ -39,6 +39,12 @@
 (require 'emagent-acp-custom)
 (require 'emagent-acp-state)
 (require 'emagent-acp-protocol)
+(require 'emagent-acp-usage)
+(require 'emagent-acp-gate)
+(require 'emagent-acp-model)
+(require 'emagent-acp-tool-call)
+(require 'emagent-acp-prompt)
+(require 'emagent-acp-request)
 
 (defun emagent-acp--trace-update (update-type emagent-acp-notification)
   "Log UPDATE-TYPE and a short payload summary when tracing.
@@ -165,20 +171,3 @@ Arguments: EMAGENT-ACP-NOTIFICATION."
 
 (provide 'emagent-acp-notify)
 ;;; emagent-acp-notify.el ends here
-(declare-function emagent-acp--trace "emagent-acp-prompt")
-(declare-function emagent-acp--detect-external-refusal-in-text "emagent-acp-gate")
-(declare-function emagent-acp--schedule-prompt-render "emagent-acp-prompt")
-(declare-function emagent-acp--stream-to-buffer-p "emagent-acp-prompt")
-(declare-function emagent-acp--chat-buffer "emagent-acp-usage")
-(declare-function emagent-acp--thought-chunk "emagent-acp-prompt")
-(declare-function emagent-acp--on-tool-call "emagent-acp-tool-call")
-(declare-function emagent-acp--save-config-options "emagent-acp-model")
-(declare-function emagent-acp--current-model-id "emagent-acp-model")
-(declare-function emagent-acp--persist-model-id "emagent-acp-usage")
-(declare-function emagent-acp--update-usage-from-notification "emagent-acp-usage")
-(declare-function emagent-acp--fatal-agent-error-p "emagent-acp-prompt")
-(declare-function emagent-acp--quota-error-p "emagent-acp-prompt")
-(declare-function emagent-acp--prompt-retry-pending-p "emagent-acp-prompt")
-(declare-function emagent-acp--abort-prompt "emagent-acp-prompt")
-(declare-function emagent-acp--notify-user "emagent-acp-prompt")
-(declare-function emagent-acp--on-request "emagent-acp-request")

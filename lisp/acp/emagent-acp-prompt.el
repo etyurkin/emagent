@@ -43,16 +43,10 @@
 (require 'emagent-acp-state)
 (require 'emagent-acp-usage)
 (require 'emagent-acp-permit)
+(require 'emagent-acp-model)
+(require 'emagent-acp-gate)
 
-(declare-function emagent-acp-send-prompt "emagent-acp-send")
 (declare-function emagent-acp--on-tool-call "emagent-acp-tool-call")
-(declare-function emagent-acp--abort-compress-empty "emagent-acp-send")
-(declare-function emagent-acp--save-config-options "emagent-acp-model")
-(declare-function emagent-acp--current-model-id "emagent-acp-model")
-(declare-function emagent-acp--persist-model-id "emagent-acp-usage")
-(declare-function emagent-acp--update-usage-from-notification "emagent-acp-usage")
-(declare-function emagent-acp--detect-external-refusal-in-text "emagent-acp-gate")
-(declare-function emagent-acp--chat-buffer "emagent-acp-usage")
 (declare-function emagent-chat-set-slash-commands "emagent-chat-slash")
 (declare-function emagent-chat--refresh-mode-line "emagent-chat-mode-line")
 (declare-function emagent-chat--spinner-start "emagent-chat-mode-line")
@@ -62,11 +56,8 @@
   "Append MESSAGE to `emagent-log-buffer-name'."
   (emagent-log "%s" message))
 
-(declare-function emagent-chat--flush-deferred-font-lock "emagent-chat")
-
 (defvar emagent-chat--finish-close)
 (declare-function emagent-chat--close-finished-response "emagent-chat-response")
-
 
 (defun emagent-acp--trace (format-string &rest args)
   "Append a trace line when `emagent-acp-trace' is non-nil.
@@ -318,8 +309,9 @@ Arguments: STATE."
     (emagent-acp--arm-wakeup state))))
 
 (declare-function emagent-chat--insert-user-heading-with-text "emagent-chat-actions")
-(declare-function emagent-chat--begin-response "emagent-chat-render")
-
+(declare-function emagent-chat--begin-response "emagent-chat-response")
+(declare-function emagent-acp-send-prompt "emagent-acp-send")
+(declare-function emagent-acp--abort-compress-empty "emagent-acp-send")
 (defun emagent-acp--arm-wakeup (state)
   "Start the ScheduleWakeup timer for STATE after this turn completes.
 Called when the turn completes: the agent has ended its reply and now

@@ -31,11 +31,44 @@
 ;; buffers appear in their own group alongside files, recentf, etc.
 ;;
 ;; Activated automatically when consult is loaded; no configuration needed.
+;; Uses public `:action' and `:state' source fields only (no consult
+;; private APIs).
 
 ;;; Code:
 
-(declare-function consult--buffer-state "consult")
 (defvar consult-buffer-sources)
+
+(defun emagent-consult--buffer-action (cand)
+  "Switch to emagent buffer candidate CAND."
+  (when-let ((buf (and cand (get-buffer cand))))
+    (switch-to-buffer buf)))
+
+(defun emagent-consult--buffer-state ()
+  "Return a consult `:state' function for emagent buffer preview.
+
+Implements the public consult multi-source state contract without
+calling consult private helpers such as `consult--buffer-state'."
+  (let* ((orig-win (selected-window))
+         (orig-buf (window-buffer orig-win)))
+    (lambda (action cand)
+      (pcase action
+        ('preview
+         (when-let ((buf (and cand (get-buffer cand))))
+           (when (and (window-live-p orig-win) (buffer-live-p buf))
+             (with-selected-window orig-win
+               (switch-to-buffer buf 'norecord)))))
+        ((or 'exit 'return)
+         (when (and (window-live-p orig-win) (buffer-live-p orig-buf))
+           (with-selected-window orig-win
+             (switch-to-buffer orig-buf 'norecord))))))))
+
+(defun emagent-consult--items ()
+  "Return names of live emagent session buffers."
+  (mapcar #'buffer-name
+          (seq-filter (lambda (b)
+                        (eq (buffer-local-value 'major-mode b)
+                            'emagent-mode))
+                      (buffer-list))))
 
 (defvar emagent-consult--source
   (list :name "Emagent"
@@ -43,14 +76,10 @@
         :category 'buffer
         :face 'consult-buffer
         :history 'buffer-name-history
-        :state (lambda () (consult--buffer-state))
+        :action #'emagent-consult--buffer-action
+        :state #'emagent-consult--buffer-state
         :default t
-        :items (lambda ()
-                 (mapcar #'buffer-name
-                         (seq-filter (lambda (b)
-                                       (eq (buffer-local-value 'major-mode b)
-                                           'emagent-mode))
-                                     (buffer-list)))))
+        :items #'emagent-consult--items)
   "Consult source listing active emagent session buffers.")
 
 (defun emagent-consult--maybe-register ()

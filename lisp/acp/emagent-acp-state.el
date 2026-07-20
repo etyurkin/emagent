@@ -40,8 +40,7 @@
 (require 'emagent-acp-custom)
 (require 'emagent-acp-protocol)
 
-(declare-function emagent-acp--refresh-mode-line "emagent-acp")
-
+(declare-function emagent-acp--refresh-mode-line "emagent-acp-usage")
 (defvar-local emagent-acp--session nil
   "ACP session state for the current emagent buffer.")
 
@@ -187,8 +186,6 @@ underlying representation for now."
    ((emagent-acp-state-prompt-finishing state)
     (if (emagent-acp-state-prompt-finalized state) 'done 'finalizing))
    (t 'idle)))
-
-(declare-function emagent-acp--client-started-p "emagent-acp-protocol")
 
 (defun emagent-acp--connecting-p ()
   "Return non-nil when an ACP session is starting but not yet ready."

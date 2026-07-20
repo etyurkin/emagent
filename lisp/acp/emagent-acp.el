@@ -74,9 +74,6 @@
 (require 'emagent-acp-send)
 (require 'emagent-prompts)
 
-(declare-function emagent-prompts--prefer-emacs-prompt "emagent-prompts")
-(declare-function emagent-prompts--structural-policy "emagent-prompts")
-
 (defun emagent-acp--system-prompt ()
   "Return the system prompt for new ACP sessions."
   (concat emagent-acp-system-prompt
@@ -101,7 +98,6 @@
 (declare-function emagent-chat--compress-command-p "emagent-chat-compress")
 (declare-function emagent-chat--conversation-history-text "emagent-chat-compress")
 (declare-function emagent-chat--compress-prompt-text "emagent-chat-compress")
-(declare-function emagent-chat--open-response-p "emagent-chat")
 (declare-function emagent-chat--refresh-mode-line-soon "emagent-chat-mode-line")
 (declare-function emagent-chat--spinner-start "emagent-chat-mode-line")
 
@@ -111,12 +107,6 @@
 
 ;;;; Public session state accessors (for use by emagent-chat.el)
 
-
-
-
-
-
-(declare-function emagent-acp--read-labeled-choice "emagent-acp-model")
 (declare-function emagent-permissions-reset-global "emagent-permissions")
 (declare-function emagent-permissions-reset-session "emagent-permissions")
 (declare-function emagent-permissions-reset-project "emagent-permissions")

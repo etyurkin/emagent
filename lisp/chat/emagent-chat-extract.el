@@ -45,8 +45,7 @@
 (declare-function emagent-session-project-directory "emagent-session")
 (declare-function emagent-session-set-agent "emagent-session")
 (declare-function emagent-session-set-id "emagent-session")
-(declare-function emagent-chat-open "emagent-chat")
-
+(declare-function emagent-chat-open "emagent-chat-mode")
 (defvar emagent-chat-provider)
 (defvar emagent-chat--response-headline-re)
 

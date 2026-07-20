@@ -43,11 +43,10 @@
 (require 'emagent-chat-mode-line)
 (require 'emagent-chat-actions)
 
-(defvar emagent--force-activation)
+(declare-function emagent-mode-force "emagent")
 
 (declare-function org-appear-mode "ext:org-appear")
 (declare-function emagent-chat--cancel-scheduled-table-align "emagent-chat")
-
 
 (defun emagent-chat--ensure-org-startup ()
   "Ensure the buffer requests Org block folding on startup."
@@ -88,16 +87,20 @@ Runs late on `org-mode-hook' so it overrides user hooks (e.g. org-modern
       (org-phscroll-mode 1))))
 
 (defvar-local emagent-chat--safe-src-fontify-p nil
-  "Non-nil when this buffer should use `emagent-chat--safe-src-fontify'.
-Set for emagent sessions (including deferred plain-org restores) so the
-global advice can avoid calling `emagent-chat--session-buffer-p' on every
-src fontification.")
+  "Non-nil when this buffer uses buffer-local safe src fontification.")
+
+(defvar-local emagent-chat--safe-fontify-installed nil
+  "Non-nil when `emagent-chat--safe-fontify-region' is installed locally.")
+
+(defconst emagent-chat--org-src-fontify-fn
+  (symbol-function 'org-src-font-lock-fontify-block)
+  "Original `org-src-font-lock-fontify-block' function cell.")
 
 (defun emagent-chat--setup-faces ()
   "Configure org highlighting, line wrap, and block folding for emagent buffers."
   (emagent-chat--disable-incompatible-org-minor-modes)
-  (setq-local emagent-chat--safe-src-fontify-p t
-              org-src-fontify-natively t
+  (emagent-chat--enable-safe-src-fontify)
+  (setq-local org-src-fontify-natively t
               org-ellipsis "…"
               org-fontify-quote-and-verse-blocks t
               org-cycle-hide-block-startup t
@@ -131,36 +134,68 @@ Arguments: LANG, START, END."
            (and (search-forward "$(" end t)
                 (search-forward "<<" end t))))))
 
-(defun emagent-chat--safe-src-fontify (orig lang start end)
-  "Around advice for `org-src-font-lock-fontify-block'.
+(defun emagent-chat--plain-src-block-face (start end)
+  "Mark START..END as a plain `org-block' without native lang fontify."
+  (add-text-properties
+   start end
+   '(face org-block src-block t
+     font-lock-fontified t fontified t font-lock-multiline t)))
 
-`sh-mode' font-lock signals `end-of-buffer' on command substitutions that
-wrap heredocs (`$(cat <<'EOF'...)'), which Org reports as \"Org mode
-fontification error\".  In emagent session buffers, skip native fontification
-for that pattern (plain org-block face) and catch any other LANG font-lock
-errors the same way so opening/streaming large sessions stays quiet.
+(defun emagent-chat--safe-src-fontify-block (lang start end)
+  "Safe `org-src-font-lock-fontify-block' for emagent session buffers.
 
-Arguments: ORIG, LANG, START, END."
-  (if (not (or (derived-mode-p 'emagent-mode)
-               (bound-and-true-p emagent--session-pending)
-               (bound-and-true-p emagent-chat--safe-src-fontify-p)
-               (emagent-chat--session-buffer-p)))
-      (funcall orig lang start end)
-    (if (emagent-chat--fragile-shell-src-p lang start end)
-        (add-text-properties
-         start end
-         '(face org-block src-block t
-           font-lock-fontified t fontified t font-lock-multiline t))
-      (condition-case nil
-          (funcall orig lang start end)
-        (error
-         (add-text-properties
-          start end
-          '(face org-block src-block t
-            font-lock-fontified t fontified t font-lock-multiline t))
-         nil)))))
+Skip native fontification for fragile shell heredoc patterns and catch
+other lang font-lock errors so large session buffers stay quiet.
 
-;;;###autoload
+Arguments: LANG, START, END."
+  (if (emagent-chat--fragile-shell-src-p lang start end)
+      (emagent-chat--plain-src-block-face start end)
+    (condition-case nil
+        (funcall emagent-chat--org-src-fontify-fn lang start end)
+      (error
+       (emagent-chat--plain-src-block-face start end)
+       nil))))
+
+(defun emagent-chat--safe-fontify-region (orig beg end &optional verbose)
+  "Around buffer-local `font-lock-fontify-region-function' for sessions.
+
+Rebinds `org-src-font-lock-fontify-block' only while fontifying this
+buffer — no global `advice-add' on Org.
+
+Arguments: ORIG, BEG, END, VERBOSE."
+  (if (not emagent-chat--safe-src-fontify-p)
+      (funcall orig beg end verbose)
+    (cl-letf (((symbol-function 'org-src-font-lock-fontify-block)
+               #'emagent-chat--safe-src-fontify-block))
+      (funcall orig beg end verbose))))
+
+(defun emagent-chat--enable-safe-src-fontify ()
+  "Install buffer-local safe src fontification for the current buffer."
+  (setq-local emagent-chat--safe-src-fontify-p t)
+  (unless emagent-chat--safe-fontify-installed
+    (add-function :around (local 'font-lock-fontify-region-function)
+                  #'emagent-chat--safe-fontify-region)
+    (setq-local emagent-chat--safe-fontify-installed t)))
+
+(declare-function emagent-chat-tab "emagent-chat-slash")
+(declare-function emagent-chat-beginning-of-line "emagent-chat-input")
+(declare-function emagent-chat-yank "emagent-chat-attach")
+(declare-function emagent-chat-history-previous-or-previous-line "emagent-chat-input")
+(declare-function emagent-chat-history-next-or-next-line "emagent-chat-input")
+
+(defvar emagent-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'emagent-chat-send-or-babel)
+    (define-key map (kbd "ESC ESC") #'emagent-chat-interrupt)
+    (define-key map (kbd "C-c ?") #'emagent-dispatch)
+    (define-key map (kbd "TAB") #'emagent-chat-tab)
+    (define-key map (kbd "C-a") #'emagent-chat-beginning-of-line)
+    (define-key map (kbd "C-y") #'emagent-chat-yank)
+    (define-key map (kbd "C-p") #'emagent-chat-history-previous-or-previous-line)
+    (define-key map (kbd "C-n") #'emagent-chat-history-next-or-next-line)
+    map)
+  "Keymap for `emagent-mode'.")
+
 (define-derived-mode emagent-mode org-mode "Emagent"
   "Major mode for emagent chat scratch buffers.
 
@@ -217,22 +252,37 @@ Run \\[emagent-mode] to reconnect a saved session."
   (emagent-chat--mode-line-recompute)
   (run-with-idle-timer 0 nil #'emagent-chat--setup-faces-deferred))
 
-(defun emagent-mode--safe-org-init (orig-fn &rest args)
-  "Run ORIG-FN with Org init vars that misbehave on huge sessions disabled.
+(defalias 'emagent--derived-mode (symbol-function 'emagent-mode)
+  "Bare `define-derived-mode' implementation of `emagent-mode'.
 
-`emagent-mode' derives from `org-mode'.  `define-derived-mode' calls the
-parent before the derived body runs, so any `setq-local' inside
-`emagent-mode' lands too late to influence `org-mode' initialization.
-`org-mode' calls `org-display-inline-images' when
-`org-startup-with-inline-images' is non-nil; on large chat buffers that
-parse can trip an \"Invalid search bound (wrong side of point)\" error
-inside `org-element-context'.  It also warms `org-element--cache' before
-the derived body disables it.  Bind both to nil for the whole init.
+Captured immediately after `define-derived-mode' so the public
+`emagent-mode' entry can wrap display deferral without `advice-add'.
+Reloading this file re-captures and reinstalls the public entry.")
 
-Arguments: ARGS."
-  (let ((org-startup-with-inline-images nil)
-        (org-element-use-cache nil))
-    (apply orig-fn args)))
+(defun emagent--install-mode-entry ()
+  "Reinstall public `emagent-mode' after reloading this file.
+
+`define-derived-mode' overwrites `emagent-mode'; restore the entry
+wrapper when it is already defined in emagent.el.
+
+Copy the function cell rather than creating a symbol alias.
+Emacs 29's `provided-mode-derived-p' follows symbol aliases and would
+then look for `derived-mode-parent' on `emagent-mode-entry' (nil),
+breaking `derived-mode-p'."
+  (when (fboundp 'emagent-mode-entry)
+    (defalias 'emagent-mode (symbol-function 'emagent-mode-entry))))
+
+(emagent--install-mode-entry)
+
+(defun emagent--run-derived-mode ()
+  "Run derived `emagent-mode' with Org startup inline images disabled.
+
+Only bind `org-startup-with-inline-images' here.  Do not let-bind
+`org-element-use-cache': the mode body and
+`emagent-chat--disable-incompatible-org-minor-modes' set it buffer-local,
+and let-binding it makes `setq-local' fail on Emacs 29."
+  (let ((org-startup-with-inline-images nil))
+    (emagent--derived-mode)))
 
 (defun emagent-chat--session-buffer-p ()
   "Return non-nil when current buffer resembles an emagent session file."
@@ -247,20 +297,19 @@ Arguments: ARGS."
                   "^#\\+EMAGENT_SESSION:[ \t]*\\S-"
                   limit t)))))))
 
-(defun emagent-chat--suppress-inline-images-in-session-buffers (orig-fn &rest args)
-  "Skip Org startup inline image rendering for emagent session files.
+(defun emagent-chat--ensure-mode-cookie ()
+  "Insert `# -*- mode: emagent -*-' at point-min when missing.
 
-This avoids Org parser errors during desktop restore of large emagent session
-buffers when `org-startup-with-inline-images' is enabled globally.
-
-Arguments: ORIG-FN, ARGS."
-  (if (emagent-chat--session-buffer-p)
-      nil
-    (apply orig-fn args)))
-
-(advice-remove 'emagent-mode #'emagent-mode--safe-org-init)
-
-(advice-add 'emagent-mode :around #'emagent-mode--safe-org-init)
+Session files always carry the cookie so `set-auto-mode' routes through
+`emagent-mode' (and its safe Org init bindings) instead of bare
+`org-mode'."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (unless (looking-at-p "[ \t]*# -*- mode: emagent -*-")
+        (let ((inhibit-read-only t))
+          (insert "# -*- mode: emagent -*-\n"))))))
 
 (cl-defun emagent-chat-open (&key project-dir)
   "Open or create an emagent buffer for PROJECT-DIR.
@@ -276,16 +325,13 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
          (buffer (get-buffer-create buffer-name)))
     (with-current-buffer buffer
       (unless (eq major-mode 'emagent-mode)
-        (let ((emagent--force-activation t))
-          (emagent-mode)))
+        (emagent-mode-force))
       (rename-buffer buffer-name t)
       (setq emagent-chat-slug slug
             emagent-chat-session-id (or emagent-chat-session-id
                                         (emagent-chat--read-session-property)))
       (emagent-session-set-project-directory dir))
     buffer))
-
-(advice-remove 'emagent-mode #'emagent-mode--safe-org-init)
 
 ;;;; Context-sensitive C-c C-c
 
@@ -349,16 +395,6 @@ working inside session buffers."
          t)
         (call-interactively 'emagent--transient-menu))
     (message "emagent: SPC=send, c=connect, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
-
-(unless (advice-member-p #'emagent-chat--suppress-inline-images-in-session-buffers
-                          'org-display-inline-images)
-  (advice-add 'org-display-inline-images :around
-              #'emagent-chat--suppress-inline-images-in-session-buffers))
-
-(unless (advice-member-p #'emagent-chat--safe-src-fontify
-                          'org-src-font-lock-fontify-block)
-  (advice-add 'org-src-font-lock-fontify-block :around
-              #'emagent-chat--safe-src-fontify))
 
 (add-hook 'org-mode-hook #'emagent-chat--setup-buffer-display 110 t)
 (add-hook 'emagent-mode-hook #'emagent-chat--setup-faces 100 t)

@@ -470,6 +470,5 @@ request continues in the background but its result is ignored."
       (emagent-acp-shutdown :client client))
     (setq emagent-acp--session nil)))
 
-
 (provide 'emagent-acp-send)
 ;;; emagent-acp-send.el ends here
