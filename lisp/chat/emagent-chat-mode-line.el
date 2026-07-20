@@ -383,7 +383,11 @@ the mode line pulling session state back out of the ACP layer."
 ;;; -------------------------------------------------------------------------
 
 (defun emagent-chat--spinner-refresh-idle ()
-  "Apply the current spinner frame to the active busy emagent buffer."
+  "Apply the current spinner frame to the active busy emagent buffer.
+
+Uses `force-mode-line-update' only — never `redisplay'.  A forced redisplay
+from this timer re-entered `window-configuration-change-hook' and could run
+deferred org table alignment on the chat buffer until Emacs pegged CPU."
   (let (active-refreshed)
     (dolist (buf (buffer-list))
       (when (buffer-live-p buf)
@@ -391,7 +395,7 @@ the mode line pulling session state back out of the ACP layer."
           (when (emagent-chat--spinner-refresh-buffer buf)
             (setq active-refreshed t)))))
     (when active-refreshed
-      (redisplay t))
+      (force-mode-line-update t))
     (emagent-chat--spinner-ensure-running)))
 
 (defun emagent-chat--spinner-tick ()
@@ -412,9 +416,7 @@ the mode line pulling session state back out of the ACP layer."
   (emagent-chat--spinner-ensure-running)
   (when (derived-mode-p 'emagent-mode)
     (emagent-chat--mode-line-recompute)
-    (emagent-chat--maybe-force-mode-line-update)
-    (when (emagent-chat--buffer-displayed-p)
-      (redisplay t))))
+    (emagent-chat--maybe-force-mode-line-update)))
 
 (defun emagent-chat--mode-line-context-usage ()
   "Return a propertized context fill string, or nil.

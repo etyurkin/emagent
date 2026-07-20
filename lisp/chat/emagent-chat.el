@@ -549,8 +549,68 @@ saved #+EMAGENT_MODEL."
          (pos-visible-in-window-p (point-max) nil t))))
 
 
-(defvar-local emagent-chat--table-align-deferred-p nil
-  "When non-nil, defer org table alignment until the emagent buffer is active.")
+(defvar-local emagent-chat--table-align-start nil
+  "Marker for the start of a pending idle org-table align region, or nil.")
+
+(defvar-local emagent-chat--table-align-end nil
+  "Marker for the end of a pending idle org-table align region, or nil.")
+
+(defvar-local emagent-chat--table-align-timer nil
+  "Idle timer that aligns `emagent-chat--table-align-start'..end, or nil.")
+
+(declare-function emagent-chat--align-org-tables-in-region "emagent-chat-markup")
+
+(defun emagent-chat--cancel-scheduled-table-align ()
+  "Cancel any pending idle org-table alignment for this buffer."
+  (when emagent-chat--table-align-timer
+    (cancel-timer emagent-chat--table-align-timer)
+    (setq emagent-chat--table-align-timer nil))
+  (when (markerp emagent-chat--table-align-start)
+    (set-marker emagent-chat--table-align-start nil))
+  (when (markerp emagent-chat--table-align-end)
+    (set-marker emagent-chat--table-align-end nil))
+  (setq emagent-chat--table-align-start nil
+        emagent-chat--table-align-end nil))
+
+(defun emagent-chat--run-scheduled-table-align ()
+  "Align the pending org-table region, if any, without dirtying the buffer."
+  (setq emagent-chat--table-align-timer nil)
+  (when-let* ((start emagent-chat--table-align-start)
+              (end emagent-chat--table-align-end)
+              (s (marker-position start))
+              (e (marker-position end))
+              ((< s e)))
+    (setq emagent-chat--table-align-start nil
+          emagent-chat--table-align-end nil)
+    (set-marker start nil)
+    (set-marker end nil)
+    (let ((was-modified (buffer-modified-p)))
+      (unwind-protect
+          (save-excursion
+            (emagent-chat--align-org-tables-in-region s e))
+        (set-buffer-modified-p was-modified)))))
+
+(defun emagent-chat--schedule-align-org-tables (start end)
+  "Schedule one idle alignment of org tables between START and END.
+
+Replaces any previous pending region for this buffer.  Never runs from
+redisplay/`window-configuration-change-hook' — that path hung Emacs on
+large chats via `org-element' parses."
+  (when (and (integer-or-marker-p start)
+             (integer-or-marker-p end)
+             (< (if (markerp start) (marker-position start) start)
+                (if (markerp end) (marker-position end) end)))
+    (emagent-chat--cancel-scheduled-table-align)
+    (setq emagent-chat--table-align-start (copy-marker start t)
+          emagent-chat--table-align-end (copy-marker end nil))
+    (let ((buf (current-buffer)))
+      (setq emagent-chat--table-align-timer
+            (run-with-idle-timer
+             0 nil
+             (lambda ()
+               (when (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (emagent-chat--run-scheduled-table-align)))))))))
 
 
 (defvar emagent-chat--emacs-focused-p t
@@ -634,25 +694,6 @@ Skipped while an ACP turn is still in flight so settle happens once."
     (setq emagent-chat--font-lock-deferred-p nil)
     (emagent-chat--font-lock-response-tail)))
 
-(declare-function emagent-chat--align-org-tables-in-region "emagent-chat-markup")
-
-(defun emagent-chat--maybe-align-org-tables-in-region (start end)
-  "Align org tables in START..END when active; defer otherwise."
-  (if (emagent-chat--buffer-active-p)
-      (emagent-chat--align-org-tables-in-region start end)
-    (setq emagent-chat--table-align-deferred-p t)))
-
-(defun emagent-chat--flush-deferred-table-align ()
-  "Align deferred org tables when the buffer becomes active."
-  (when (and emagent-chat--table-align-deferred-p
-             (emagent-chat--buffer-active-p))
-    (setq emagent-chat--table-align-deferred-p nil)
-    (let ((was-modified (buffer-modified-p)))
-      (unwind-protect
-          (save-excursion
-            (emagent-chat--align-org-tables-in-region (point-min) (point-max)))
-        (set-buffer-modified-p was-modified)))))
-
 (defun emagent-chat--maybe-force-mode-line-update ()
   "Refresh this buffer's mode line in every window that displays it.
 
@@ -663,13 +704,12 @@ after focus moves elsewhere."
     (force-mode-line-update)))
 
 (defun emagent-chat--window-configuration-change (&optional _frames)
-  "Flush deferred UI work and refresh mode lines on focus change."
+  "Flush deferred font-lock and refresh mode lines on focus change."
   (dolist (buf (buffer-list))
     (when (buffer-live-p buf)
       (with-current-buffer buf
         (when (derived-mode-p 'emagent-mode)
           (emagent-chat--flush-deferred-font-lock)
-          (emagent-chat--flush-deferred-table-align)
           (emagent-chat--refresh-mode-line-on-focus)))))
   (emagent-chat--spinner-ensure-running))
 

@@ -84,6 +84,7 @@ Thinking block."
           emagent-chat--reasoning-streamed-p nil)))
 
 (declare-function emagent-chat--flush-deferred-font-lock "emagent-chat")
+(declare-function emagent-chat--schedule-align-org-tables "emagent-chat")
 
 (defun emagent-chat-insert-system (message)
   "Append system MESSAGE to `emagent-log-buffer-name'."
@@ -296,7 +297,7 @@ buffer shows formatted org while the response is still arriving."
         (insert converted)
         (when (string-match-p "|" converted)
           (ignore-errors
-            (emagent-chat--maybe-align-org-tables-in-region start (point))))
+            (emagent-chat--schedule-align-org-tables start (point))))
         (setq emagent-chat--assistant-marker (point-marker))))))
 
 (defvar emagent-chat--finish-close t

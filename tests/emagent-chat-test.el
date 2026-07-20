@@ -334,6 +334,60 @@ session present (the UI no longer pulls from the ACP layer)."
            (should-not emagent-chat--font-lock-deferred-p)
            (should (= flushed 1))))))))
 
+(ert-deftest emagent-chat-test-schedule-align-org-tables-region-only ()
+  "Schedule one idle align of the response region; never full-buffer from hooks.
+
+Regression: spinner `redisplay' + window-configuration-change-hook scanned
+the whole buffer with `org-at-table-p'/`org-element-at-point' and pegged CPU."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let* ((aligned-bounds nil)
+            (idle-fns nil))
+       (with-current-buffer buffer
+         (insert "| a | b |\n|---+---|\n| 1 | 2 |\n")
+         (let ((start (point-min))
+               (end (point-max)))
+           (emagent-test--with-mocks
+               (((symbol-function 'emagent-chat--align-org-tables-in-region)
+                 (lambda (s e &rest _)
+                   (push (cons s e) aligned-bounds)))
+                ((symbol-function 'run-with-idle-timer)
+                 (lambda (_secs _repeat fn &rest _args)
+                   (push fn idle-fns)
+                   'fake-timer)))
+             (emagent-chat--schedule-align-org-tables start end)
+             (should (markerp emagent-chat--table-align-start))
+             (should (markerp emagent-chat--table-align-end))
+             (should (= (marker-position emagent-chat--table-align-start) start))
+             (should (= (marker-position emagent-chat--table-align-end) end))
+             (should (= (length idle-fns) 1))
+             (should-not aligned-bounds)
+             (funcall (car idle-fns))
+             (should-not emagent-chat--table-align-start)
+             (should-not emagent-chat--table-align-end)
+             (should (= (length aligned-bounds) 1))
+             (should (equal (car aligned-bounds) (cons start end))))))))))
+
+(ert-deftest emagent-chat-test-spinner-refresh-does-not-redisplay ()
+  "Spinner ticks must not call `redisplay' (re-enters window-config hooks)."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (setq emagent-acp--session (emagent-acp--make-state))
+     (setf (emagent-acp-state-busy emagent-acp--session) t)
+     (let ((redisplays 0)
+           (mode-line-updates 0))
+       (with-current-buffer buffer
+         (pop-to-buffer buffer)
+         (emagent-test--sync-status)
+         (emagent-test--with-mocks
+             (((symbol-function 'redisplay)
+               (lambda (&rest _) (cl-incf redisplays)))
+              ((symbol-function 'force-mode-line-update)
+               (lambda (&optional _all) (cl-incf mode-line-updates))))
+           (emagent-chat--spinner-refresh-idle)
+           (should (= redisplays 0))
+           (should (>= mode-line-updates 1))))))))
+
 (ert-deftest emagent-chat-test-inactive-bell-rings-when-background-update ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
@@ -482,9 +536,12 @@ session present (the UI no longer pulls from the ACP layer)."
      (setf (emagent-acp-state-busy emagent-acp--session) t)
      (with-current-buffer buffer
        (emagent-test--sync-status)
+       ;; Nil start-time so `emagent-chat--spinner-sync-frame' does not
+       ;; overwrite the frame index we set explicitly below.
        (setq emagent-chat--mode-line-head nil
              emagent-chat--mode-line-tail nil
              emagent-chat--mode-line-cache nil
+             emagent-chat--spinner-start-time nil
              emagent-chat--spinner-frame 0)
        (pop-to-buffer buffer)
        (should (emagent-chat--spinner-refresh-buffer buffer))
