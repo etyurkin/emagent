@@ -578,6 +578,41 @@ the whole buffer with `org-at-table-p'/`org-element-at-point' and pegged CPU."
       (should (= saved-point (point)))
       (should (= 1 (window-start win))))))
 
+(ert-deftest emagent-chat-test-window-at-bottom-requires-point-at-eob ()
+  "Follow only when window-point is at EOB, not merely when EOB is visible.
+
+Short chats fit in the window, so visibility alone used to keep yanking the
+cursor back to the end on every thought chunk."
+  (with-temp-buffer
+    (insert "line1\nline2\n")
+    (let ((win (selected-window)))
+      (set-window-buffer win (current-buffer))
+      (goto-char (point-max))
+      (should (emagent-chat--window-at-bottom-p win))
+      (goto-char (point-min))
+      (should-not (emagent-chat--window-at-bottom-p win)))))
+
+(ert-deftest emagent-chat-test-streaming-view-keeps-point-when-not-at-eob ()
+  "Thought streaming must not yank point when the user left EOB."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "first")
+          (goto-char (point-min))
+          (let ((pinned (point)))
+            (emagent-chat--with-streaming-view
+             (lambda ()
+               (save-excursion
+                 (goto-char (point-max))
+                 (insert "\nmore thinking"))))
+            (should (= pinned (point)))
+            (should (= pinned (window-point (selected-window)))))))))))
+
 (ert-deftest emagent-chat-test-show-tool-call-no-open-response ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
