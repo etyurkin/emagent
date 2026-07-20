@@ -543,10 +543,15 @@ saved #+EMAGENT_MODEL."
   (emagent-chat--refresh-mode-line))
 
 (defun emagent-chat--window-at-bottom-p (window)
-  "Return non-nil when WINDOW displays the end of the current buffer."
+  "Return non-nil when WINDOW's point is at the end of the current buffer.
+
+Used to decide whether streaming inserts should follow.  Checking only whether
+`point-max' is visible is wrong for short chats: the whole buffer fits in the
+window, so the end stays visible even after the user moves point earlier to
+read, and every thought chunk would jump the cursor back to EOB."
   (and window (window-live-p window)
-       (with-selected-window window
-         (pos-visible-in-window-p (point-max) nil t))))
+       (eq (window-buffer window) (current-buffer))
+       (= (window-point window) (point-max))))
 
 
 (defvar-local emagent-chat--table-align-start nil
