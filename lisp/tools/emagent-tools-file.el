@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -36,16 +35,14 @@
 (require 'cl-lib)
 (require 'emagent-log)
 (require 'emagent-elisp)
+(require 'emagent-struct)
+(require 'emagent-tools-shell)
 
 (defvar auto-insert)
 (defvar emagent-tools-show-written-buffer)
 
 (declare-function emagent-tools--root-directory "emagent-tools")
-(declare-function emagent-struct-write-required-p "emagent-struct")
 (declare-function magit-toplevel "ext:magit-git")
-(declare-function emagent-tools--run-async-sync "emagent-tools-shell")
-(declare-function emagent-tools--run-process-async "emagent-tools-shell")
-
 (defconst emagent-tools--icloud-dir
   (expand-file-name "~/Library/Mobile Documents/"))
 

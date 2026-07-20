@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -42,7 +41,6 @@
 (require 'emagent-acp-provider)
 (require 'emagent-session)
 
-(declare-function emagent-chat--session-directory "emagent-chat-header")
 (declare-function emagent-acp--permission-pending-p "emagent-acp-prompt")
 (declare-function emagent-acp--maybe-complete-deferred-prompt "emagent-acp-prompt")
 (declare-function emagent-acp--drain-permission-queue "emagent-acp-request")

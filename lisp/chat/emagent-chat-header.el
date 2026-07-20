@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -38,8 +37,7 @@
 (require 'cl-lib)
 (require 'map)
 (require 'emagent-model)
-
-(declare-function project-root "project")
+(require 'project)
 
 (defun emagent-chat--read-top-property (name)
   "Return the value of #+NAME at the top of the buffer."

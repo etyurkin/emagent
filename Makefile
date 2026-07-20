@@ -4,7 +4,7 @@ ELPACA_DIR ?= $(CURDIR)/.elpaca-vendor/elpaca
 LISP_SUBDIRS := $(wildcard lisp/*)
 ELFILES := emagent.el $(shell find lisp -name '*.el')
 
-.PHONY: all compile compile-strict checkdoc check-declare test ci elpaca-vendor clean
+.PHONY: all compile compile-strict checkdoc check-declare package-lint test ci elpaca-vendor clean
 
 all: compile
 
@@ -30,6 +30,11 @@ checkdoc:
 # Fail if any declare-function points at the wrong file or a missing def.
 check-declare:
 	EMAGENT_ROOT="$(CURDIR)" $(EMACS) --batch -l ci/check-declare.el 		-f emagent-check-declare-batch
+
+# Lint main package file metadata/conventions (installs package-lint if needed).
+package-lint:
+	EMAGENT_ROOT="$(CURDIR)" $(EMACS) --batch -l ci/package-lint.el \
+		-f emagent-package-lint-batch
 
 # Byte-compile first (so tests run against compiled code), then always remove
 # the .elc afterward — pass or fail — so the source tree stays clean. The test

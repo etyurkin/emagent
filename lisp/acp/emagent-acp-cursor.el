@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -40,15 +39,9 @@
 (require 'emagent-acp-provider)
 (require 'emagent-acp-gate)
 (require 'emagent-acp-tool-call)
-
-(declare-function emagent-cursor-enrich-tool-call-update "emagent-cursor")
-(declare-function emagent-cursor--apply-store-entry "emagent-cursor")
-(declare-function emagent-cursor-tool-call-from-store "emagent-cursor")
-(declare-function emagent-cursor-tool-call-from-store-async "emagent-cursor")
-(declare-function emagent-cursor--generic-acp-title-p "emagent-cursor")
-(declare-function emagent-cursor-normalize-slash-prompt "emagent-cursor")
-(declare-function emagent-acp--drain-permission-queue "emagent-acp-request")
-(declare-function emagent-acp--maybe-complete-deferred-prompt "emagent-acp-prompt")
+(require 'emagent-acp-prompt)
+(require 'emagent-acp-request)
+(require 'emagent-cursor)
 
 (defconst emagent-acp-cursor--tool-resolve-max-attempts 8
   "Maximum store.db lookups while waiting for Cursor tool-call args.")

@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -42,20 +41,17 @@
 (require 'emagent-acp-protocol)
 (require 'emagent-chat-compress)
 (require 'emagent-chat-mcp)
+(require 'emagent-acp-usage)
+(require 'emagent-chat)
+(require 'emagent-chat-reasoning)
+(require 'emagent-chat-thought)
 
 ;; Defined in emagent-acp-prompt.el, which declares this file's functions the
 ;; same way; declaring here avoids a require cycle between the two modules.
 (declare-function emagent-acp--cancel-outstanding-permissions "emagent-acp-request")
-(declare-function emagent-acp--refresh-mode-line "emagent-acp-usage")
 (declare-function emagent-acp--agent-error-only-response-p "emagent-acp-prompt")
 (declare-function emagent-acp--turn-hit-transient-error-p "emagent-acp-prompt")
 (declare-function emagent-acp--turn-did-no-work-p "emagent-acp-prompt")
-(declare-function emagent-chat-begin-thought "emagent-chat-thought")
-(declare-function emagent-chat--open-response-p "emagent-chat")
-(declare-function emagent-chat--send-pending-end "emagent-chat")
-(declare-function emagent-chat--promote-transient-to-thinking "emagent-chat-reasoning")
-(declare-function emagent-acp--chat-buffer "emagent-acp-usage")
-
 (defun emagent-acp-attach-context (text)
   "Attach TEXT to the next prompt in the current buffer."
   (let ((state (emagent-acp--session)))

@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -37,19 +36,17 @@
 (require 'cl-lib)
 (require 'map)
 (require 'emagent-log)
+(require 'emagent-acp-model)
+(require 'emagent-acp-state)
+(require 'emagent-chat-input)
+(require 'emagent-session)
 
 (defgroup emagent-chat nil
   "Emagent chat UI."
   :group 'emagent)
 
-(declare-function emagent-session-project-directory "emagent-session")
-(declare-function emagent-chat--user-zone-start "emagent-chat-input")
-(declare-function emagent-chat--user-heading-re "emagent-chat-input")
 (declare-function emagent-chat-cycle-or-org-cycle "emagent-chat")
 (declare-function emagent-acp-ensure-connected "emagent")
-(declare-function emagent-acp--session "emagent-acp-state")
-(declare-function emagent-acp--connected-p "emagent-acp-state")
-(declare-function emagent-acp--model-choices "emagent-acp-model")
 (declare-function emagent-chat--slash-mcp-apply "emagent-chat-mcp")
 
 (defconst emagent-chat--client-slash-commands

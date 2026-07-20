@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -46,8 +45,9 @@
 (require 'emagent-policy)
 (require 'emagent-permissions)
 (require 'emagent-session)
-
-(declare-function emagent-acp--chat-buffer "emagent-acp-usage")
+(require 'emagent-acp-usage)
+(require 'emagent-chat)
+(require 'emagent-cursor)
 
 (declare-function emagent-acp--drain-permission-queue-now "emagent-acp-request")
 (declare-function emagent-acp--tool-call-detail-from-tool-call "emagent-acp-request")
@@ -61,9 +61,6 @@
       (setf (emagent-acp-state-session-auto-approve state) t))))
 
 (declare-function emagent-acp--send-request "emagent-acp-prompt")
-(declare-function emagent-cursor-enrich-tool-call-update "emagent-cursor")
-(declare-function emagent-chat--open-response-p "emagent-chat")
-
 (defun emagent-acp--permission-option-deny-p (opt)
   "Return non-nil when OPT is a deny-type ACP permission option."
   (let ((kind (downcase (or (map-elt opt 'kind) "")))

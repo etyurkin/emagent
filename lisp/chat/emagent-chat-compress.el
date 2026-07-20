@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -37,16 +36,12 @@
 
 (require 'cl-lib)
 (require 'map)
+(require 'emagent-chat-header)
+(require 'emagent-chat-input)
+(require 'emagent-chat-response)
 
 (declare-function emagent-chat--with-stable-view "emagent-chat")
-(declare-function emagent-chat--writable "emagent-chat-input")
-(declare-function emagent-chat--metadata-end "emagent-chat-header")
-(declare-function emagent-chat--user-heading-prefix "emagent-chat-input")
-(declare-function emagent-chat--reset-response-state "emagent-chat-response")
-(declare-function emagent-chat--sync-user-zone-marker "emagent-chat-input")
 (declare-function emagent-chat--find-open-response-begin "emagent-chat")
-(declare-function emagent-chat--user-heading-re "emagent-chat-input")
-
 (defun emagent-chat--bare-slash-command-p (text)
   "Return non-nil when TEXT is a single-line slash command."
   (let ((trimmed (string-trim text)))

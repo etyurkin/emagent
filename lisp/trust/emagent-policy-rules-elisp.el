@@ -5,7 +5,6 @@
 ;; SPDX-License-Identifier: MIT
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; This file is part of emagent.
 ;;

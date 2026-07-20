@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -45,8 +44,7 @@
 
 (declare-function emagent-acp--send-request "emagent-acp-prompt")
 (require 'emagent-model)
-(declare-function emagent-acp--saved-model-id "emagent-acp-usage")
-
+(require 'emagent-acp-usage)
 (defun emagent-acp--auto-model-candidate (state models)
   "Return the agent's auto/default model id when advertised.
 
@@ -56,8 +54,6 @@ Arguments: STATE, MODELS."
            emagent-acp-auto-model-id)))
 (declare-function emagent-acp--session-ready "emagent-acp-lifecycle")
 (declare-function emagent-acp--progress "emagent-acp-prompt")
-(declare-function emagent-acp-make-session-set-config-option-request "emagent-acp-protocol" t)
-
 (defun emagent-acp--normalize-config-option (emagent-acp-option)
   "Internal helper for EMAGENT-ACP-OPTION."
   `((:id . ,(map-elt emagent-acp-option 'id))

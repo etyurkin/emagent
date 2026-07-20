@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -42,6 +41,8 @@
 (require 'emagent-context)
 (require 'emagent-chat-mode-line)
 (require 'emagent-chat-actions)
+(require 'emagent-chat-attach)
+(require 'emagent-chat-slash)
 
 (declare-function emagent-mode-force "emagent")
 
@@ -176,12 +177,6 @@ Arguments: ORIG, BEG, END, VERBOSE."
     (add-function :around (local 'font-lock-fontify-region-function)
                   #'emagent-chat--safe-fontify-region)
     (setq-local emagent-chat--safe-fontify-installed t)))
-
-(declare-function emagent-chat-tab "emagent-chat-slash")
-(declare-function emagent-chat-beginning-of-line "emagent-chat-input")
-(declare-function emagent-chat-yank "emagent-chat-attach")
-(declare-function emagent-chat-history-previous-or-previous-line "emagent-chat-input")
-(declare-function emagent-chat-history-next-or-next-line "emagent-chat-input")
 
 (defvar emagent-mode-map
   (let ((map (make-sparse-keymap)))
@@ -334,8 +329,6 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
     buffer))
 
 ;;;; Context-sensitive C-c C-c
-
-(declare-function emagent-chat--send-bounds "emagent-chat-input")
 
 (defun emagent-chat-send-or-babel ()
   "Execute the src block at point, send the prompt, or defer to org.

@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -36,6 +35,7 @@
 
 (require 'cl-lib)
 (require 'map)
+(require 'emagent-chat-markup)
 
 (declare-function emagent-chat--open-response-p "emagent-chat")
 (declare-function emagent-chat-model-display "emagent-chat")
@@ -209,8 +209,6 @@ buffer."
                           (and (derived-mode-p 'emagent-mode)
                                (emagent-chat--spinner-animate-p buf))))))
 
-(declare-function emagent-chat--buffer-active-p "emagent-chat-markup")
-(declare-function emagent-chat--buffer-displayed-p "emagent-chat-markup")
 (declare-function emagent-chat--maybe-force-mode-line-update "emagent-chat")
 
 (defun emagent-chat--spinner-stop ()

@@ -1,10 +1,8 @@
 ;;; emagent-acp.el --- ACP wire-up for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; SPDX-License-Identifier: MIT
-;; Version: 1.2.5
-
+;; Version: 1.2.6
 ;; This file is part of emagent.
 ;;
 ;; Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -92,24 +90,11 @@
               (format "\n\n[Compressed prior conversation context]\n%s"
                       summary)))))
 
-(declare-function emagent-chat-clear-slash-commands "emagent-chat-slash")
-(declare-function emagent-chat-seed-cursor-slash-commands "emagent-chat-slash")
-(declare-function emagent-chat--bare-slash-command-p "emagent-chat-compress")
-(declare-function emagent-chat--compress-command-p "emagent-chat-compress")
-(declare-function emagent-chat--conversation-history-text "emagent-chat-compress")
-(declare-function emagent-chat--compress-prompt-text "emagent-chat-compress")
-(declare-function emagent-chat--refresh-mode-line-soon "emagent-chat-mode-line")
-(declare-function emagent-chat--spinner-start "emagent-chat-mode-line")
-
 (defun emagent-acp-prefer-emacs-p ()
   "Return non-nil when emagent instructs the agent to prefer Emacs tools."
   emagent-acp-prefer-emacs)
 
 ;;;; Public session state accessors (for use by emagent-chat.el)
-
-(declare-function emagent-permissions-reset-global "emagent-permissions")
-(declare-function emagent-permissions-reset-session "emagent-permissions")
-(declare-function emagent-permissions-reset-project "emagent-permissions")
 
 (defun emagent-reset-permissions ()
   "Reset stored emagent permissions via a minibuffer menu.

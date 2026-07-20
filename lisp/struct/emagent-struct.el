@@ -1,10 +1,8 @@
 ;;; emagent-struct.el --- Structural file editing via lisp-sitter CLI -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; SPDX-License-Identifier: MIT
-;; Version: 1.2.5
-
+;; Version: 1.2.6
 ;; This file is part of emagent.
 ;;
 ;; Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -39,6 +37,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'emagent-tools-shell)
 
 (defgroup emagent-struct nil
   "Structural file editing via lisp-sitter CLI."
@@ -85,10 +84,6 @@ Agents must use structural_* MCP tools for .el, .lisp, .cl, and .scm files."
         "\\.\\(el\\|lisp\\|cl\\|scm\\|ss\\|sld\\)\\'" path)))
 
 ;; ── CLI invocation ────────────────────────────────────────────────
-
-(declare-function emagent-tools--run-async-sync "emagent-tools-shell")
-(declare-function emagent-tools--run-process-async "emagent-tools-shell")
-(declare-function emagent-tools--run-process-input-async "emagent-tools-shell")
 
 (defun emagent-struct--lisp-sitter-error (output)
   "Format non-zero lisp-sitter OUTPUT as an error string."

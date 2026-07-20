@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -45,11 +44,8 @@
 (require 'emagent-acp-permit)
 (require 'emagent-acp-model)
 (require 'emagent-acp-gate)
+(require 'emagent-acp-send)
 
-(declare-function emagent-acp--on-tool-call "emagent-acp-tool-call")
-(declare-function emagent-chat-set-slash-commands "emagent-chat-slash")
-(declare-function emagent-chat--refresh-mode-line "emagent-chat-mode-line")
-(declare-function emagent-chat--spinner-start "emagent-chat-mode-line")
 (declare-function emagent-acp--new-session "emagent-acp-lifecycle")
 
 (defun emagent-acp--notify-user (_state message)
@@ -57,8 +53,6 @@
   (emagent-log "%s" message))
 
 (defvar emagent-chat--finish-close)
-(declare-function emagent-chat--close-finished-response "emagent-chat-response")
-
 (defun emagent-acp--trace (format-string &rest args)
   "Append a trace line when `emagent-acp-trace' is non-nil.
 
@@ -308,10 +302,6 @@ Arguments: STATE."
     (emagent-acp--schedule-prompt-render state)
     (emagent-acp--arm-wakeup state))))
 
-(declare-function emagent-chat--insert-user-heading-with-text "emagent-chat-actions")
-(declare-function emagent-chat--begin-response "emagent-chat-response")
-(declare-function emagent-acp-send-prompt "emagent-acp-send")
-(declare-function emagent-acp--abort-compress-empty "emagent-acp-send")
 (defun emagent-acp--arm-wakeup (state)
   "Start the ScheduleWakeup timer for STATE after this turn completes.
 Called when the turn completes: the agent has ended its reply and now

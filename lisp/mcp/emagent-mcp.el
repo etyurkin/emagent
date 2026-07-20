@@ -1,10 +1,8 @@
 ;;; emagent-mcp.el --- In-Emacs MCP server for emagent tools -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; SPDX-License-Identifier: MIT
-;; Version: 1.2.5
-
+;; Version: 1.2.6
 ;; This file is part of emagent.
 ;;
 ;; Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -57,8 +55,6 @@
 
 ;; Defined in emagent-acp.el; declared here to avoid a circular require.
 (defvar emagent-acp-prefer-emacs)
-
-(declare-function emagent-log "emagent-log")
 
 (require 'emagent-mcp-server)
 (require 'emagent-mcp-session)

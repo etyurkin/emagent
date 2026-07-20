@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:gpt-5.3-codex
 
 ;; SPDX-License-Identifier: MIT
 
@@ -42,9 +41,9 @@
 (require 'map)
 (require 'emagent-log)
 (require 'emagent-session)
+(require 'emagent-chat-slash)
+(require 'emagent-mcp-server)
 
-(declare-function emagent-chat--slash-token-bounds "emagent-chat-slash")
-(declare-function emagent-cursor-write-mcp-approvals "emagent-mcp-server")
 (declare-function emagent-cursor-check-command "emagent-cursor")
 (declare-function emagent-cursor-command "emagent-cursor")
 

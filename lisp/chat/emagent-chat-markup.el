@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -36,6 +35,7 @@
 
 (require 'cl-lib)
 (require 'org)
+(require 'emagent-acp-usage)
 
 (defun emagent-chat--lang-from-filename (file)
   "Return an org babel language tag for FILE, or nil when unknown."
@@ -465,8 +465,6 @@ Arguments: TEXT."
 
 (defvar-local emagent-chat--font-lock-deferred-p nil
   "When non-nil, defer org font-lock until the emagent buffer is active.")
-
-(declare-function emagent-acp-turn-in-flight-p "emagent-acp-usage")
 
 (defun emagent-chat--buffer-active-p (&optional buffer)
   "Return non-nil when BUFFER is displayed in the selected window."

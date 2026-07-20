@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -39,13 +38,10 @@
 (require 'map)
 (require 'bookmark)
 (require 'emagent-log)
+(require 'emagent-chat-mode)
+(require 'emagent-session)
 
-(declare-function emagent-session-model "emagent-session")
 (declare-function emagent-chat-set-model "emagent-chat")
-(declare-function emagent-session-project-directory "emagent-session")
-(declare-function emagent-session-set-agent "emagent-session")
-(declare-function emagent-session-set-id "emagent-session")
-(declare-function emagent-chat-open "emagent-chat-mode")
 (defvar emagent-chat-provider)
 (defvar emagent-chat--response-headline-re)
 

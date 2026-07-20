@@ -5,7 +5,6 @@
 ;; SPDX-License-Identifier: MIT
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; URL: https://github.com/etyurkin/emagent
 ;; Version: 1.2.6
 ;; Package-Requires: ((emacs "29.1"))
