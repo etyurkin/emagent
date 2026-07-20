@@ -87,16 +87,20 @@ Runs late on `org-mode-hook' so it overrides user hooks (e.g. org-modern
       (org-phscroll-mode 1))))
 
 (defvar-local emagent-chat--safe-src-fontify-p nil
-  "Non-nil when this buffer should use `emagent-chat--safe-src-fontify'.
-Set for emagent sessions (including deferred plain-org restores) so the
-global advice can avoid calling `emagent-chat--session-buffer-p' on every
-src fontification.")
+  "Non-nil when this buffer uses buffer-local safe src fontification.")
+
+(defvar-local emagent-chat--safe-fontify-installed nil
+  "Non-nil when `emagent-chat--safe-fontify-region' is installed locally.")
+
+(defconst emagent-chat--org-src-fontify-fn
+  (symbol-function 'org-src-font-lock-fontify-block)
+  "Original `org-src-font-lock-fontify-block' function cell.")
 
 (defun emagent-chat--setup-faces ()
   "Configure org highlighting, line wrap, and block folding for emagent buffers."
   (emagent-chat--disable-incompatible-org-minor-modes)
-  (setq-local emagent-chat--safe-src-fontify-p t
-              org-src-fontify-natively t
+  (emagent-chat--enable-safe-src-fontify)
+  (setq-local org-src-fontify-natively t
               org-ellipsis "…"
               org-fontify-quote-and-verse-blocks t
               org-cycle-hide-block-startup t
@@ -130,34 +134,48 @@ Arguments: LANG, START, END."
            (and (search-forward "$(" end t)
                 (search-forward "<<" end t))))))
 
-(defun emagent-chat--safe-src-fontify (orig lang start end)
-  "Around advice for `org-src-font-lock-fontify-block'.
+(defun emagent-chat--plain-src-block-face (start end)
+  "Mark START..END as a plain `org-block' without native lang fontify."
+  (add-text-properties
+   start end
+   '(face org-block src-block t
+     font-lock-fontified t fontified t font-lock-multiline t)))
 
-`sh-mode' font-lock signals `end-of-buffer' on command substitutions that
-wrap heredocs (`$(cat <<'EOF'...)'), which Org reports as \"Org mode
-fontification error\".  In emagent session buffers, skip native fontification
-for that pattern (plain org-block face) and catch any other LANG font-lock
-errors the same way so opening/streaming large sessions stays quiet.
+(defun emagent-chat--safe-src-fontify-block (lang start end)
+  "Safe `org-src-font-lock-fontify-block' for emagent session buffers.
 
-Arguments: ORIG, LANG, START, END."
-  (if (not (or (derived-mode-p 'emagent-mode)
-               (bound-and-true-p emagent--session-pending)
-               (bound-and-true-p emagent-chat--safe-src-fontify-p)
-               (emagent-chat--session-buffer-p)))
-      (funcall orig lang start end)
-    (if (emagent-chat--fragile-shell-src-p lang start end)
-        (add-text-properties
-         start end
-         '(face org-block src-block t
-           font-lock-fontified t fontified t font-lock-multiline t))
-      (condition-case nil
-          (funcall orig lang start end)
-        (error
-         (add-text-properties
-          start end
-          '(face org-block src-block t
-            font-lock-fontified t fontified t font-lock-multiline t))
-         nil)))))
+Skip native fontification for fragile shell heredoc patterns and catch
+other lang font-lock errors so large session buffers stay quiet.
+
+Arguments: LANG, START, END."
+  (if (emagent-chat--fragile-shell-src-p lang start end)
+      (emagent-chat--plain-src-block-face start end)
+    (condition-case nil
+        (funcall emagent-chat--org-src-fontify-fn lang start end)
+      (error
+       (emagent-chat--plain-src-block-face start end)
+       nil))))
+
+(defun emagent-chat--safe-fontify-region (orig beg end &optional verbose)
+  "Around buffer-local `font-lock-fontify-region-function' for sessions.
+
+Rebinds `org-src-font-lock-fontify-block' only while fontifying this
+buffer — no global `advice-add' on Org.
+
+Arguments: ORIG, BEG, END, VERBOSE."
+  (if (not emagent-chat--safe-src-fontify-p)
+      (funcall orig beg end verbose)
+    (cl-letf (((symbol-function 'org-src-font-lock-fontify-block)
+               #'emagent-chat--safe-src-fontify-block))
+      (funcall orig beg end verbose))))
+
+(defun emagent-chat--enable-safe-src-fontify ()
+  "Install buffer-local safe src fontification for the current buffer."
+  (setq-local emagent-chat--safe-src-fontify-p t)
+  (unless emagent-chat--safe-fontify-installed
+    (add-function :around (local 'font-lock-fontify-region-function)
+                  #'emagent-chat--safe-fontify-region)
+    (setq-local emagent-chat--safe-fontify-installed t)))
 
 (declare-function emagent-chat-tab "emagent-chat-slash")
 (declare-function emagent-chat-beginning-of-line "emagent-chat-input")
@@ -377,11 +395,6 @@ working inside session buffers."
          t)
         (call-interactively 'emagent--transient-menu))
     (message "emagent: SPC=send, c=connect, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
-
-(unless (advice-member-p #'emagent-chat--safe-src-fontify
-                          'org-src-font-lock-fontify-block)
-  (advice-add 'org-src-font-lock-fontify-block :around
-              #'emagent-chat--safe-src-fontify))
 
 (add-hook 'org-mode-hook #'emagent-chat--setup-buffer-display 110 t)
 (add-hook 'emagent-mode-hook #'emagent-chat--setup-faces 100 t)

@@ -7,7 +7,7 @@
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; URL: https://github.com/etyurkin/emagent
-;; Version: 1.2.5
+;; Version: 1.2.6
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: comm tools
 
@@ -93,19 +93,9 @@ target BUFFER (hence the two-argument signature)."
 (require 'emagent-trust)
 (require 'project)
 
-(declare-function emagent-chat--display-project-directory "emagent-chat-header")
-(declare-function emagent-chat-append-thought "emagent-chat-thought")
-(declare-function emagent-chat-append-assistant "emagent-chat-response")
-(declare-function emagent-chat-finish-assistant "emagent-chat-response")
-(declare-function emagent-chat-fail-assistant "emagent-chat-response")
-(declare-function emagent-chat-set-slash-commands "emagent-chat-slash")
-(declare-function emagent-chat--buffer-displayed-p "emagent-chat-markup")
-(declare-function emagent-chat--disable-incompatible-org-minor-modes "emagent-chat-mode")
-(declare-function emagent--run-derived-mode "emagent-chat-mode")
-(declare-function emagent-chat--ensure-mode-cookie "emagent-chat-mode")
-(declare-function emagent-acp-send-prompt "emagent-acp-send")
-(declare-function emagent-acp--progress "emagent-acp-prompt")
-(declare-function emagent-acp--retriable-prompt-error-p "emagent-acp-prompt")
+(declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
+(declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
+
 ;; Optional integrations — loaded only when the dependency is present.
 (require 'emagent-consult nil t)
 (require 'emagent-embark nil t)
@@ -288,7 +278,6 @@ overflow restore the buffer model immediately."
         emagent-chat--on-quit #'emagent-acp-shutdown-buffer
         emagent-chat-provider (or (emagent-session-agent) emagent-default-provider)))
 
-(declare-function emagent-chat-seed-cursor-slash-commands "emagent-chat-slash")
 
 (defun emagent--on-mode-enable ()
   "Wire callbacks when enabling `emagent-mode'.
@@ -346,8 +335,8 @@ When nil, session files activate `emagent-mode' immediately on open."
   ;; restore and find-file do not trip \"Invalid search bound\" on large logs.
   (emagent-chat--disable-incompatible-org-minor-modes)
   (emagent-chat--ensure-mode-cookie)
-  (setq-local emagent--session-pending t
-              emagent-chat--safe-src-fontify-p t)
+  (emagent-chat--enable-safe-src-fontify)
+  (setq-local emagent--session-pending t)
   (cl-pushnew (current-buffer) emagent--pending-buffers)
   (emagent-log "session deferred until displayed: %s" (buffer-name)))
 
@@ -639,11 +628,6 @@ otherwise the project.el root, otherwise ~/."
                         (emagent--project-directory-initial)
                         nil t)))
 
-(declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
-(declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
-(declare-function emagent-acp--connected-p "emagent-acp-state")
-(declare-function emagent-acp--connecting-p "emagent-acp-state")
-(declare-function emagent-acp--run-when-connected-queue "emagent-acp-state")
 ;;;###autoload
 (defun emagent-trust-workspace (&optional both-agents)
   "Write on-disk workspace trust for Claude and/or Cursor.
