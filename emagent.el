@@ -399,6 +399,9 @@ activation of deferred session buffers."
 (defun emagent-mode (&optional arg)
   "Major mode for emagent chat scratch buffers.
 
+ARG is accepted for major-mode compatibility; pass `force' (or use
+`emagent-mode-force') to bypass display deferral.
+
 Derived from `org-mode'.  Type after the `* user>' stub, then
 \\[emagent-chat-send] to send the prompt at point (its heading line
 plus any body lines).
