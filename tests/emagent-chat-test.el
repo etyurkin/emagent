@@ -334,6 +334,63 @@ session present (the UI no longer pulls from the ACP layer)."
            (should-not emagent-chat--font-lock-deferred-p)
            (should (= flushed 1))))))))
 
+(ert-deftest emagent-chat-test-table-align-deferred-while-turn-in-flight ()
+  "Do not flush full-buffer table align while the ACP turn is busy.
+
+Regression: spinner `redisplay' + window-configuration-change-hook ran
+`org-at-table-p'/`org-element-at-point' over the chat buffer and pegged CPU."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let* ((state (emagent-test--make-acp-state nil buffer))
+            (aligned 0)
+            (idle-fns nil))
+       (setq emagent-acp--session state)
+       (setf (emagent-acp-state-busy state) t)
+       (with-current-buffer buffer
+         (pop-to-buffer buffer)
+         (insert "| a | b |\n|---+---|\n| 1 | 2 |\n")
+         (setq emagent-chat--table-align-deferred-p nil)
+         (emagent-test--with-mocks
+             (((symbol-function 'emagent-chat--align-org-tables-in-region)
+               (lambda (&rest _) (cl-incf aligned)))
+              ((symbol-function 'run-with-idle-timer)
+               (lambda (_secs _repeat fn &rest _args)
+                 (push fn idle-fns)
+                 nil)))
+           (emagent-chat--maybe-align-org-tables-in-region (point-min) (point-max))
+           (should emagent-chat--table-align-deferred-p)
+           (should (= aligned 0))
+           (emagent-chat--flush-deferred-table-align)
+           (should emagent-chat--table-align-deferred-p)
+           (should (= aligned 0))
+           (should-not idle-fns)
+           (setf (emagent-acp-state-busy state) nil)
+           (emagent-chat--flush-deferred-table-align)
+           (should-not emagent-chat--table-align-deferred-p)
+           (should (= (length idle-fns) 1))
+           (funcall (car idle-fns))
+           (should (= aligned 1))))))))
+
+(ert-deftest emagent-chat-test-spinner-refresh-does-not-redisplay ()
+  "Spinner ticks must not call `redisplay' (re-enters window-config hooks)."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (setq emagent-acp--session (emagent-acp--make-state))
+     (setf (emagent-acp-state-busy emagent-acp--session) t)
+     (let ((redisplays 0)
+           (mode-line-updates 0))
+       (with-current-buffer buffer
+         (pop-to-buffer buffer)
+         (emagent-test--sync-status)
+         (emagent-test--with-mocks
+             (((symbol-function 'redisplay)
+               (lambda (&rest _) (cl-incf redisplays)))
+              ((symbol-function 'force-mode-line-update)
+               (lambda (&optional _all) (cl-incf mode-line-updates))))
+           (emagent-chat--spinner-refresh-idle)
+           (should (= redisplays 0))
+           (should (>= mode-line-updates 1))))))))
+
 (ert-deftest emagent-chat-test-inactive-bell-rings-when-background-update ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)

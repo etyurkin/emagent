@@ -113,16 +113,25 @@ Arguments: LINE."
     (append (list (car normalized) hline) (cdr normalized))))
 
 (defun emagent-chat--align-org-tables-in-region (start end)
-  "Align every org table between START and END."
+  "Align every org table between START and END.
+
+Uses a line-shape check instead of `org-at-table-p' so we never invoke
+`org-element-at-point' on every `|' match (that pegged Emacs at 100% CPU
+when deferred align ran from redisplay hooks on large chat buffers)."
   (save-excursion
     (save-restriction
       (narrow-to-region start end)
       (goto-char (point-min))
-      (while (re-search-forward "^|" end t)
+      (while (re-search-forward "^|" nil t)
         (beginning-of-line)
-        (when (org-at-table-p)
-          (org-table-align)
-          (goto-char (or (org-table-end nil) (point-max))))))))
+        ;; Cheap shape check — never `org-at-table-p' (org-element).
+        (if (looking-at-p "^|.*|")
+            (condition-case nil
+                (progn
+                  (org-table-align)
+                  (goto-char (or (org-table-end nil) (point-max))))
+              (error (forward-line 1)))
+          (forward-line 1))))))
 
 (defun emagent-chat--convert-markdown-tables (text)
   "Convert markdown-style pipe tables into org tables.

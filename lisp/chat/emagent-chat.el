@@ -637,21 +637,39 @@ Skipped while an ACP turn is still in flight so settle happens once."
 (declare-function emagent-chat--align-org-tables-in-region "emagent-chat-markup")
 
 (defun emagent-chat--maybe-align-org-tables-in-region (start end)
-  "Align org tables in START..END when active; defer otherwise."
-  (if (emagent-chat--buffer-active-p)
+  "Align org tables in START..END when active and idle; defer otherwise.
+
+Defers while an ACP turn is in flight: aligning during streaming/redisplay
+hooks can peg CPU via `org-element' parses on large chat buffers."
+  (if (and (emagent-chat--buffer-active-p)
+           (not (and (fboundp 'emagent-acp-turn-in-flight-p)
+                     (emagent-acp-turn-in-flight-p))))
       (emagent-chat--align-org-tables-in-region start end)
     (setq emagent-chat--table-align-deferred-p t)))
 
 (defun emagent-chat--flush-deferred-table-align ()
-  "Align deferred org tables when the buffer becomes active."
+  "Align deferred org tables when the buffer becomes active.
+
+Skipped while an ACP turn is in flight (same rule as deferred font-lock).
+Runs on an idle timer so `window-configuration-change-hook' / spinner
+`redisplay' cannot synchronously scan the whole buffer with org parsers."
   (when (and emagent-chat--table-align-deferred-p
-             (emagent-chat--buffer-active-p))
+             (emagent-chat--buffer-active-p)
+             (not (and (fboundp 'emagent-acp-turn-in-flight-p)
+                       (emagent-acp-turn-in-flight-p))))
     (setq emagent-chat--table-align-deferred-p nil)
-    (let ((was-modified (buffer-modified-p)))
-      (unwind-protect
-          (save-excursion
-            (emagent-chat--align-org-tables-in-region (point-min) (point-max)))
-        (set-buffer-modified-p was-modified)))))
+    (let ((buf (current-buffer)))
+      (run-with-idle-timer
+       0 nil
+       (lambda ()
+         (when (buffer-live-p buf)
+           (with-current-buffer buf
+             (let ((was-modified (buffer-modified-p)))
+               (unwind-protect
+                   (save-excursion
+                     (emagent-chat--align-org-tables-in-region
+                      (point-min) (point-max)))
+                 (set-buffer-modified-p was-modified))))))))))
 
 (defun emagent-chat--maybe-force-mode-line-update ()
   "Refresh this buffer's mode line in every window that displays it.
