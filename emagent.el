@@ -102,7 +102,6 @@ target BUFFER (hence the two-argument signature)."
 (declare-function emagent-chat--buffer-displayed-p "emagent-chat-markup")
 (declare-function emagent-chat--disable-incompatible-org-minor-modes "emagent-chat-mode")
 (declare-function emagent--run-derived-mode "emagent-chat-mode")
-(declare-function emagent--install-mode-entry "emagent-chat-mode")
 (declare-function emagent-chat--ensure-mode-cookie "emagent-chat-mode")
 (declare-function emagent-acp-send-prompt "emagent-acp-send")
 (declare-function emagent-acp--progress "emagent-acp-prompt")
@@ -397,7 +396,7 @@ activation of deferred session buffers."
   (emagent-mode-entry 'force))
 
 ;;;###autoload
-(defalias 'emagent-mode #'emagent-mode-entry
+(defun emagent-mode (&optional arg)
   "Major mode for emagent chat scratch buffers.
 
 Derived from `org-mode'.  Type after the `* user>' stub, then
@@ -411,9 +410,9 @@ them as Org headlines).
 When `emagent-activate-on-display' is non-nil, opening an undisplayed
 session file defers full activation until first display.
 
-Run \\[emagent-mode] to reconnect a saved session.")
-
-(emagent--install-mode-entry)
+Run \\[emagent-mode] to reconnect a saved session."
+  (interactive "P")
+  (emagent-mode-entry arg))
 
 (defun emagent--maybe-register-session ()
   "On opening a session file, mark it pending or activate it now.

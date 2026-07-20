@@ -245,9 +245,14 @@ Reloading this file re-captures and reinstalls the public entry.")
   "Reinstall public `emagent-mode' after reloading this file.
 
 `define-derived-mode' overwrites `emagent-mode'; restore the entry
-wrapper when it is already defined in emagent.el."
+wrapper when it is already defined in emagent.el.
+
+Copy the function cell rather than creating a symbol alias.
+Emacs 29's `provided-mode-derived-p' follows symbol aliases and would
+then look for `derived-mode-parent' on `emagent-mode-entry' (nil),
+breaking `derived-mode-p'."
   (when (fboundp 'emagent-mode-entry)
-    (defalias 'emagent-mode #'emagent-mode-entry)))
+    (defalias 'emagent-mode (symbol-function 'emagent-mode-entry))))
 
 (emagent--install-mode-entry)
 
