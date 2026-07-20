@@ -43,7 +43,7 @@
 (require 'emagent-chat-mode-line)
 (require 'emagent-chat-actions)
 
-(defvar emagent--force-activation)
+(declare-function emagent-mode-force "emagent")
 
 (declare-function org-appear-mode "ext:org-appear")
 (declare-function emagent-chat--cancel-scheduled-table-align "emagent-chat")
@@ -234,39 +234,32 @@ Run \\[emagent-mode] to reconnect a saved session."
   (emagent-chat--mode-line-recompute)
   (run-with-idle-timer 0 nil #'emagent-chat--setup-faces-deferred))
 
-(defvar emagent--derived-mode-fn nil
-  "Function cell for the `define-derived-mode' body of `emagent-mode'.
+(defalias 'emagent--derived-mode (symbol-function 'emagent-mode)
+  "Bare `define-derived-mode' implementation of `emagent-mode'.
 
 Captured immediately after `define-derived-mode' so the public
-`emagent-mode' entry in emagent.el can wrap deferral and Org-safe
-init without `advice-add'.  Reloading this file re-captures and
-reinstalls the public entry when it is already defined.")
+`emagent-mode' entry can wrap display deferral without `advice-add'.
+Reloading this file re-captures and reinstalls the public entry.")
 
-(defun emagent--capture-derived-mode ()
-  "Save the derived-mode function; reinstall public entry if present.
+(defun emagent--install-mode-entry ()
+  "Reinstall public `emagent-mode' after reloading this file.
 
-Only capture when `emagent-mode' still names the derived-mode
-implementation.  After `emagent-mode-entry' is installed, skip capture
-so a later call cannot replace the saved body with the wrapper."
-  (let ((fn (symbol-function 'emagent-mode)))
-    (unless (and (fboundp 'emagent-mode-entry)
-                 (eq (indirect-function fn)
-                     (indirect-function 'emagent-mode-entry)))
-      (setq emagent--derived-mode-fn fn)))
+`define-derived-mode' overwrites `emagent-mode'; restore the entry
+wrapper when it is already defined in emagent.el."
   (when (fboundp 'emagent-mode-entry)
     (defalias 'emagent-mode #'emagent-mode-entry)))
 
-(emagent--capture-derived-mode)
+(emagent--install-mode-entry)
 
-(defun emagent--mode-activate ()
-  "Run the derived `emagent-mode' with Org init vars bound safely.
+(defun emagent--run-derived-mode ()
+  "Run derived `emagent-mode' with Org startup inline images disabled.
 
-Binding `org-startup-with-inline-images' and `org-element-use-cache'
-here keeps large session buffers from tripping Org parser errors
-during parent `org-mode' init."
-  (let ((org-startup-with-inline-images nil)
-        (org-element-use-cache nil))
-    (funcall emagent--derived-mode-fn)))
+Only bind `org-startup-with-inline-images' here.  Do not let-bind
+`org-element-use-cache': the mode body and
+`emagent-chat--disable-incompatible-org-minor-modes' set it buffer-local,
+and let-binding it makes `setq-local' fail on Emacs 29."
+  (let ((org-startup-with-inline-images nil))
+    (emagent--derived-mode)))
 
 (defun emagent-chat--session-buffer-p ()
   "Return non-nil when current buffer resembles an emagent session file."
@@ -281,16 +274,19 @@ during parent `org-mode' init."
                   "^#\\+EMAGENT_SESSION:[ \t]*\\S-"
                   limit t)))))))
 
-(defun emagent-chat--suppress-inline-images-in-session-buffers (orig-fn &rest args)
-  "Skip Org startup inline image rendering for emagent session files.
+(defun emagent-chat--ensure-mode-cookie ()
+  "Insert `# -*- mode: emagent -*-' at point-min when missing.
 
-This avoids Org parser errors during desktop restore of large emagent session
-buffers when `org-startup-with-inline-images' is enabled globally.
-
-Arguments: ORIG-FN, ARGS."
-  (if (emagent-chat--session-buffer-p)
-      nil
-    (apply orig-fn args)))
+Session files always carry the cookie so `set-auto-mode' routes through
+`emagent-mode' (and its safe Org init bindings) instead of bare
+`org-mode'."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (unless (looking-at-p "[ \t]*# -*- mode: emagent -*-")
+        (let ((inhibit-read-only t))
+          (insert "# -*- mode: emagent -*-\n"))))))
 
 (cl-defun emagent-chat-open (&key project-dir)
   "Open or create an emagent buffer for PROJECT-DIR.
@@ -306,8 +302,7 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
          (buffer (get-buffer-create buffer-name)))
     (with-current-buffer buffer
       (unless (eq major-mode 'emagent-mode)
-        (let ((emagent--force-activation t))
-          (emagent-mode)))
+        (emagent-mode-force))
       (rename-buffer buffer-name t)
       (setq emagent-chat-slug slug
             emagent-chat-session-id (or emagent-chat-session-id
@@ -377,11 +372,6 @@ working inside session buffers."
          t)
         (call-interactively 'emagent--transient-menu))
     (message "emagent: SPC=send, c=connect, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
-
-(unless (advice-member-p #'emagent-chat--suppress-inline-images-in-session-buffers
-                          'org-display-inline-images)
-  (advice-add 'org-display-inline-images :around
-              #'emagent-chat--suppress-inline-images-in-session-buffers))
 
 (unless (advice-member-p #'emagent-chat--safe-src-fontify
                           'org-src-font-lock-fontify-block)

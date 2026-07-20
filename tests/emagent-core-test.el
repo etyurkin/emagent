@@ -117,8 +117,7 @@
              (setq buf (find-file-noselect file))
              (with-current-buffer buf
                (should emagent--session-pending)
-               (let ((emagent--force-activation t))
-                 (emagent-mode))
+               (emagent-mode-force)
                (should (derived-mode-p 'emagent-mode))))
          (when (buffer-live-p buf) (kill-buffer buf))
          (when (file-exists-p file) (delete-file file)))))))
@@ -139,8 +138,7 @@
               nil file)
              (setq buf (find-file-noselect file))
              (with-current-buffer buf
-               (let ((emagent--force-activation t))
-                 (emagent-mode))
+               (emagent-mode-force)
                (should (derived-mode-p 'emagent-mode))
                (setq emagent--pending-buffers nil)
                (kill-local-variable 'emagent--session-pending)

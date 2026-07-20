@@ -31,7 +31,12 @@
 
 ;;; Code:
 
-(declare-function emagent-tool-compile "emagent-tools-shell")
+(require 'emagent-log)
+(require 'emagent-policy)
+(require 'emagent-tools)
+(require 'emagent-tools-file)
+(require 'emagent-tools-shell)
+
 (defvar emagent-acp-prefer-emacs)
 
 (defgroup emagent-shell nil
@@ -58,13 +63,6 @@
   :type 'boolean
   :group 'emagent-shell)
 
-(declare-function emagent-tool-read-file "emagent-tools-file")
-(declare-function emagent-tool-grep "emagent-tools-shell")
-(declare-function emagent-tool-find-files "emagent-tools-shell")
-(declare-function emagent-tool-git-status "emagent-tools-shell")
-(declare-function emagent-tool-git-diff "emagent-tools-shell")
-(declare-function emagent-tool-git-log "emagent-tools-shell")
-(declare-function emagent-tools--root-directory "emagent-tools")
 
 (defun emagent-shell--prefer-emacs-p ()
   "Return non-nil when Emacs-native routing is active."
@@ -102,16 +100,6 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
   "Return non-nil when WORDS names a build/test/compile executable."
   (member (car words) emagent-shell--build-executables))
 
-(declare-function emagent-tools--run-git-async "emagent-tools-shell")
-(declare-function emagent-tools--run-shell-async "emagent-tools-shell")
-(declare-function emagent-tool-compile-async "emagent-tools-shell")
-(declare-function emagent-tool-git-status-async "emagent-tools-shell")
-(declare-function emagent-tool-git-diff-async "emagent-tools-shell")
-(declare-function emagent-tool-git-log-async "emagent-tools-shell")
-(declare-function emagent-tool-grep-async "emagent-tools-shell")
-(declare-function emagent-tools--run-git "emagent-tools-shell")
-(declare-function emagent-tools--clamp-timeout "emagent-tools-shell")
-(declare-function emagent-log "emagent-log")
 
 (defvar emagent-tools--timeout-override)
 (defvar emagent-tools--shell-output-limit)

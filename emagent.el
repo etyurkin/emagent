@@ -101,8 +101,9 @@ target BUFFER (hence the two-argument signature)."
 (declare-function emagent-chat-set-slash-commands "emagent-chat-slash")
 (declare-function emagent-chat--buffer-displayed-p "emagent-chat-markup")
 (declare-function emagent-chat--disable-incompatible-org-minor-modes "emagent-chat-mode")
-(declare-function emagent--mode-activate "emagent-chat-mode")
-(declare-function emagent--capture-derived-mode "emagent-chat-mode")
+(declare-function emagent--run-derived-mode "emagent-chat-mode")
+(declare-function emagent--install-mode-entry "emagent-chat-mode")
+(declare-function emagent-chat--ensure-mode-cookie "emagent-chat-mode")
 (declare-function emagent-acp-send-prompt "emagent-acp-send")
 (declare-function emagent-acp--progress "emagent-acp-prompt")
 (declare-function emagent-acp--retriable-prompt-error-p "emagent-acp-prompt")
@@ -330,11 +331,6 @@ When nil, session files activate `emagent-mode' immediately on open."
   :type 'boolean
   :group 'emagent)
 
-(defvar emagent--force-activation nil
-  "Non-nil to fully activate `emagent-mode' even for an undisplayed buffer.
-Bound around explicit, user-initiated activation so display deferral does
-not intercept it.")
-
 (defvar emagent--pending-buffers nil
   "Session buffers awaiting first-display activation of `emagent-mode'.")
 
@@ -344,13 +340,13 @@ not intercept it.")
 (defun emagent--mark-session-pending ()
   "Leave the current buffer in `org-mode' and queue activation on first display."
   (unless (derived-mode-p 'org-mode)
-    (let ((org-startup-with-inline-images nil)
-          (org-element-use-cache nil))
+    (let ((org-startup-with-inline-images nil))
       (org-mode)))
   ;; Deferred sessions stay in plain `org-mode' until first display.  Apply the
   ;; same org-appear / org-element safeguards as `emagent-mode' so desktop
   ;; restore and find-file do not trip \"Invalid search bound\" on large logs.
   (emagent-chat--disable-incompatible-org-minor-modes)
+  (emagent-chat--ensure-mode-cookie)
   (setq-local emagent--session-pending t
               emagent-chat--safe-src-fontify-p t)
   (cl-pushnew (current-buffer) emagent--pending-buffers)
@@ -361,23 +357,21 @@ not intercept it.")
   (setq emagent--pending-buffers (delq (current-buffer) emagent--pending-buffers))
   (kill-local-variable 'emagent--session-pending)
   (unless (derived-mode-p 'emagent-mode)
-    (let ((emagent--force-activation t))
-      (condition-case err
-          (emagent-mode)
-        (error
-         (emagent-log "could not enable emagent-mode in %s: %s"
-                      (or (buffer-name) "<dead-buffer>")
-                      (error-message-string err)))))))
+    (condition-case err
+        (emagent-mode-force)
+      (error
+       (emagent-log "could not enable emagent-mode in %s: %s"
+                    (or (buffer-name) "<dead-buffer>")
+                    (error-message-string err))))))
 
-(defun emagent-mode--defer-p ()
+(defun emagent-mode--defer-p (&optional force)
   "Return non-nil when `emagent-mode' should defer activation until display.
 
 Defers for undisplayed file-visiting buffers when
-`emagent-activate-on-display' is on and `emagent--force-activation' is
-nil.  Does not defer when already in `emagent-mode' so toggle-off
-works."
+`emagent-activate-on-display' is on and FORCE is nil.  Does not defer
+when already in `emagent-mode' so toggle-off works."
   (and emagent-activate-on-display
-       (not emagent--force-activation)
+       (not force)
        (not (eq major-mode 'emagent-mode))
        buffer-file-name
        (not (emagent-chat--buffer-displayed-p))))
@@ -385,14 +379,22 @@ works."
 (defun emagent-mode-entry (&optional arg)
   "Public entry for `emagent-mode' with display deferral.
 
-ARG is accepted for major-mode compatibility and ignored by the
-derived-mode implementation.  See `emagent-mode' for the user-facing
-docstring."
+ARG is accepted for major-mode compatibility.  Pass `force' (or non-nil
+interactively via `emagent-mode-force') to bypass display deferral.
+See `emagent-mode' for the user-facing docstring."
   (interactive "P")
-  (ignore arg)
-  (if (emagent-mode--defer-p)
-      (emagent--mark-session-pending)
-    (emagent--mode-activate)))
+  (let ((force (memq arg '(force t))))
+    (if (emagent-mode--defer-p force)
+        (emagent--mark-session-pending)
+      (emagent--run-derived-mode))))
+
+(defun emagent-mode-force ()
+  "Activate `emagent-mode', bypassing display deferral.
+
+Use for explicit opens (`emagent-chat-open') and first-display
+activation of deferred session buffers."
+  (interactive)
+  (emagent-mode-entry 'force))
 
 ;;;###autoload
 (defalias 'emagent-mode #'emagent-mode-entry
@@ -411,7 +413,7 @@ session file defers full activation until first display.
 
 Run \\[emagent-mode] to reconnect a saved session.")
 
-(emagent--capture-derived-mode)
+(emagent--install-mode-entry)
 
 (defun emagent--maybe-register-session ()
   "On opening a session file, mark it pending or activate it now.
