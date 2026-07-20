@@ -31,11 +31,24 @@
 ;; buffers appear in their own group alongside files, recentf, etc.
 ;;
 ;; Activated automatically when consult is loaded; no configuration needed.
+;; Uses the public `:action' source field only (no consult private APIs).
 
 ;;; Code:
 
-(declare-function consult--buffer-state "ext:consult")
 (defvar consult-buffer-sources)
+
+(defun emagent-consult--buffer-action (cand)
+  "Switch to emagent buffer candidate CAND."
+  (when-let ((buf (and cand (get-buffer cand))))
+    (switch-to-buffer buf)))
+
+(defun emagent-consult--items ()
+  "Return names of live emagent session buffers."
+  (mapcar #'buffer-name
+          (seq-filter (lambda (b)
+                        (eq (buffer-local-value 'major-mode b)
+                            'emagent-mode))
+                      (buffer-list))))
 
 (defvar emagent-consult--source
   (list :name "Emagent"
@@ -43,14 +56,9 @@
         :category 'buffer
         :face 'consult-buffer
         :history 'buffer-name-history
-        :state (lambda () (consult--buffer-state))
+        :action #'emagent-consult--buffer-action
         :default t
-        :items (lambda ()
-                 (mapcar #'buffer-name
-                         (seq-filter (lambda (b)
-                                       (eq (buffer-local-value 'major-mode b)
-                                           'emagent-mode))
-                                     (buffer-list)))))
+        :items #'emagent-consult--items)
   "Consult source listing active emagent session buffers.")
 
 (defun emagent-consult--maybe-register ()

@@ -57,11 +57,7 @@
 (require 'emagent-chat-actions)
 (require 'emagent-chat-mode)
 (require 'emagent-permissions)
-
-(declare-function emagent-chat--refresh-mode-line "emagent-chat-mode-line")
-(declare-function emagent-chat--mode-line-recompute "emagent-chat-mode-line")
-(declare-function emagent-chat--spinner-ensure-running "emagent-chat-mode-line")
-(declare-function emagent-chat--refresh-mode-line-on-focus "emagent-chat-mode-line")
+(require 'project)
 
 (declare-function emagent-set-model "emagent-acp")
 (declare-function emagent-reset-permissions "emagent-acp")
@@ -69,9 +65,6 @@
 (declare-function emagent-trust-workspace "emagent" (&optional arg))
 (declare-function emagent-trust-claude-reconnect "emagent" ())
 (declare-function emagent-acp-ensure-connected "emagent")
-(declare-function project-current "project")
-(declare-function project-root "project")
-
 (defvar-local emagent-chat--assistant-marker nil
   "Insert position for the in-flight emagent response.")
 
@@ -532,8 +525,6 @@ read, and every thought chunk would jump the cursor back to EOB."
 (defvar-local emagent-chat--table-align-timer nil
   "Idle timer that aligns `emagent-chat--table-align-start'..end, or nil.")
 
-(declare-function emagent-chat--align-org-tables-in-region "emagent-chat-markup")
-
 (defun emagent-chat--cancel-scheduled-table-align ()
   "Cancel any pending idle org-table alignment for this buffer."
   (when emagent-chat--table-align-timer
@@ -651,8 +642,6 @@ ignored so chat rendering never stalls on OS notifications."
                 (ding t))
               (emagent-chat--notify-macos-inactive-update))
           (error nil))))))
-
-(declare-function emagent-chat--font-lock-response-tail "emagent-chat-markup")
 
 (defun emagent-chat--flush-deferred-font-lock ()
   "Font-lock the response tail when a deferred flush was requested.

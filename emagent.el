@@ -91,9 +91,8 @@ target BUFFER (hence the two-argument signature)."
 (require 'emagent-cursor)
 (require 'emagent-claude)
 (require 'emagent-trust)
+(require 'project)
 
-(declare-function project-current "project")
-(declare-function project-root "project")
 (declare-function emagent-chat--display-project-directory "emagent-chat-header")
 (declare-function emagent-chat-append-thought "emagent-chat-thought")
 (declare-function emagent-chat-append-assistant "emagent-chat-response")
@@ -103,15 +102,10 @@ target BUFFER (hence the two-argument signature)."
 (declare-function emagent-chat--buffer-displayed-p "emagent-chat-markup")
 (declare-function emagent-chat--disable-incompatible-org-minor-modes "emagent-chat-mode")
 (declare-function emagent--mode-activate "emagent-chat-mode")
-(declare-function emagent-chat--send-pending-end "emagent-chat")
-(declare-function emagent-chat--send-active-p "emagent-chat")
-(declare-function emagent-acp-current-model-id "emagent-acp")
-(declare-function emagent-acp--match-model-id "emagent-acp-model")
+(declare-function emagent--capture-derived-mode "emagent-chat-mode")
 (declare-function emagent-acp-send-prompt "emagent-acp-send")
 (declare-function emagent-acp--progress "emagent-acp-prompt")
 (declare-function emagent-acp--retriable-prompt-error-p "emagent-acp-prompt")
-(declare-function emagent-acp--model-entries-from-response "emagent-acp-model")
-
 ;; Optional integrations — loaded only when the dependency is present.
 (require 'emagent-consult nil t)
 (require 'emagent-embark nil t)
@@ -258,8 +252,6 @@ send; the buffer model is restored when the turn ends (see
                         (emagent--send-prompt-safe buf user-text)))))
                (emagent--send-prompt-safe buf user-text)))))))))
 
-(declare-function emagent-tools--buttons-prompt "emagent-tools")
-
 (defun emagent--restore-turn-model ()
   "Restore the session model overridden by `/model' and clear the override.
 Called on a successful turn: switches back to the captured base model and clears
@@ -390,8 +382,20 @@ works."
        buffer-file-name
        (not (emagent-chat--buffer-displayed-p))))
 
+(defun emagent-mode-entry (&optional arg)
+  "Public entry for `emagent-mode' with display deferral.
+
+ARG is accepted for major-mode compatibility and ignored by the
+derived-mode implementation.  See `emagent-mode' for the user-facing
+docstring."
+  (interactive "P")
+  (ignore arg)
+  (if (emagent-mode--defer-p)
+      (emagent--mark-session-pending)
+    (emagent--mode-activate)))
+
 ;;;###autoload
-(defun emagent-mode (&optional arg)
+(defalias 'emagent-mode #'emagent-mode-entry
   "Major mode for emagent chat scratch buffers.
 
 Derived from `org-mode'.  Type after the `* user>' stub, then
@@ -405,15 +409,9 @@ them as Org headlines).
 When `emagent-activate-on-display' is non-nil, opening an undisplayed
 session file defers full activation until first display.
 
-Run \\[emagent-mode] to reconnect a saved session.
+Run \\[emagent-mode] to reconnect a saved session.")
 
-ARG is accepted for major-mode compatibility and ignored by the
-derived-mode implementation."
-  (interactive "P")
-  (ignore arg)
-  (if (emagent-mode--defer-p)
-      (emagent--mark-session-pending)
-    (emagent--mode-activate)))
+(emagent--capture-derived-mode)
 
 (defun emagent--maybe-register-session ()
   "On opening a session file, mark it pending or activate it now.
@@ -637,15 +635,11 @@ otherwise the project.el root, otherwise ~/."
                         (emagent--project-directory-initial)
                         nil t)))
 
-(declare-function emagent-trust--ensure-provider-features "emagent-trust")
 (declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
 (declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
 (declare-function emagent-acp--connected-p "emagent-acp-state")
 (declare-function emagent-acp--connecting-p "emagent-acp-state")
 (declare-function emagent-acp--run-when-connected-queue "emagent-acp-state")
-(declare-function emagent-claude-relocate-session "emagent-claude" (session-id old-dir new-dir))
-(declare-function emagent-cursor-relocate-session "emagent-cursor" (session-id old-dir new-dir))
-
 ;;;###autoload
 (defun emagent-trust-workspace (&optional both-agents)
   "Write on-disk workspace trust for Claude and/or Cursor.

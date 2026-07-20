@@ -34,6 +34,11 @@
 ;;; Code:
 
 (require 'json)
+(declare-function emagent-trust-cursor-trusted-p "emagent-trust-cursor" (directory))
+
+(declare-function emagent-trust-claude-trusted-p "emagent-trust-claude" (directory))
+(declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
+(declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
 
 (defgroup emagent-trust nil
   "Workspace trust integration for emagent."
@@ -142,11 +147,6 @@ as `{}').  Optional pretty-print uses `json-pretty-print-buffer'."
       (?y 'y)
       (?n 'n)
       (?q 'q))))
-
-(declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
-(declare-function emagent-trust-claude-trusted-p "emagent-trust-claude" (directory))
-(declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
-(declare-function emagent-trust-cursor-trusted-p "emagent-trust-cursor" (directory))
 
 (defun emagent-trust--ensure-provider-features ()
   "Load Claude/Cursor trust code.

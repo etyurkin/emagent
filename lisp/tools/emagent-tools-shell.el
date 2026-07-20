@@ -38,6 +38,9 @@
 (require 'org)
 
 (declare-function emagent-tools--root-directory "emagent-tools")
+(declare-function emagent-shell-run-command-async "emagent-shell")
+
+(declare-function emagent-shell-run-command "emagent-shell")
 
 (defconst emagent-tools--grep-max-results 50)
 
@@ -371,9 +374,6 @@ agent's built-in WebSearch and shell tools are blocked.
 
 Arguments: MAX-BYTES."
   (emagent-tools--run-async-sync #'emagent-tool-fetch-url-async url max-bytes))
-
-(declare-function emagent-shell-run-command "emagent-shell")
-(declare-function emagent-shell-run-command-async "emagent-shell")
 
 (defun emagent-tool-run-shell-command (command &optional directory)
   "Run COMMAND in DIRECTORY through Emacs, not an agent terminal."

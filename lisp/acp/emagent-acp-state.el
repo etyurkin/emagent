@@ -187,8 +187,6 @@ underlying representation for now."
     (if (emagent-acp-state-prompt-finalized state) 'done 'finalizing))
    (t 'idle)))
 
-(declare-function emagent-acp--client-started-p "emagent-acp-protocol")
-
 (defun emagent-acp--connecting-p ()
   "Return non-nil when an ACP session is starting but not yet ready."
   (and emagent-acp--session

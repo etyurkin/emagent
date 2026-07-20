@@ -31,7 +31,6 @@
 
 ;;; Code:
 
-(declare-function emagent-log "emagent-log")
 (declare-function emagent-tool-compile "emagent-tools-shell")
 (defvar emagent-acp-prefer-emacs)
 
@@ -112,6 +111,7 @@ These are always redirected to `emagent-tool-compile' for navigable errors.")
 (declare-function emagent-tool-grep-async "emagent-tools-shell")
 (declare-function emagent-tools--run-git "emagent-tools-shell")
 (declare-function emagent-tools--clamp-timeout "emagent-tools-shell")
+(declare-function emagent-log "emagent-log")
 
 (defvar emagent-tools--timeout-override)
 (defvar emagent-tools--shell-output-limit)

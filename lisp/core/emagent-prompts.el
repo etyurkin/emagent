@@ -495,7 +495,6 @@ Emacs regexp differs from PCRE: use \\\\( \\\\) for groups (escaped parens), \\\
 ```elisp
 (require 'org)
 (require 'org-element)
-
 (org-element-map (org-element-parse-buffer) 'headline
   (lambda (hl)
     (org-element-property :raw-value hl)))
@@ -617,8 +616,6 @@ structural_insert path: foo.el
            \"\\n\")))
 ```"
   "Emacs Lisp reference guide served to the agent via the `elisp_guide' MCP tool.")
-
-(declare-function emagent-struct-available-p "emagent-struct")
 
 (defun emagent-prompts--structural-tool-list ()
   "Return a comma-separated list of lisp-sitter MCP tool names."

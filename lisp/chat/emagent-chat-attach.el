@@ -39,14 +39,11 @@
 (require 'emagent-context)
 (require 'emagent-session)
 
+(eval-when-compile (require 'flymake))
 
 (defvar emagent-chat--on-attach)
 
 ;;;###autoload
-(declare-function flymake-diagnostics "flymake")
-(declare-function flymake-diagnostic-beg "flymake")
-(declare-function flymake-diagnostic-type "flymake")
-(declare-function flymake-diagnostic-text "flymake")
 
 (defun emagent-chat-attach-buffer ()
   "Attach a buffer summary to the next prompt."
@@ -159,7 +156,7 @@ the prompt text."
 
 (defun emagent-chat--flymake-error-lines ()
   "Return flymake diagnostic lines from all open file-visiting buffers."
-  (when (fboundp 'flymake-diagnostics)
+  (when (and (require 'flymake nil t) (fboundp 'flymake-diagnostics))
     (let (lines)
       (dolist (buf (buffer-list))
         (when (and (buffer-file-name buf)

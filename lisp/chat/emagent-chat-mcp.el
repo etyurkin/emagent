@@ -44,9 +44,9 @@
 (require 'emagent-session)
 
 (declare-function emagent-chat--slash-token-bounds "emagent-chat-slash")
-(declare-function emagent-cursor-command "emagent-cursor")
-(declare-function emagent-cursor-check-command "emagent-cursor")
 (declare-function emagent-cursor-write-mcp-approvals "emagent-mcp-server")
+(declare-function emagent-cursor-check-command "emagent-cursor")
+(declare-function emagent-cursor-command "emagent-cursor")
 
 (defvar emagent-chat-provider)
 

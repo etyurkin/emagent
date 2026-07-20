@@ -234,22 +234,39 @@ Run \\[emagent-mode] to reconnect a saved session."
   (emagent-chat--mode-line-recompute)
   (run-with-idle-timer 0 nil #'emagent-chat--setup-faces-deferred))
 
-(setq emagent--mode-function (symbol-function 'emagent-mode))
+(defvar emagent--derived-mode-fn nil
+  "Function cell for the `define-derived-mode' body of `emagent-mode'.
 
-(defvar emagent--mode-function nil
-  "Saved function cell for the `emagent-mode' derived-mode implementation.")
+Captured immediately after `define-derived-mode' so the public
+`emagent-mode' entry in emagent.el can wrap deferral and Org-safe
+init without `advice-add'.  Reloading this file re-captures and
+reinstalls the public entry when it is already defined.")
 
-(defun emagent--mode-activate (&optional _arg)
+(defun emagent--capture-derived-mode ()
+  "Save the derived-mode function; reinstall public entry if present.
+
+Only capture when `emagent-mode' still names the derived-mode
+implementation.  After `emagent-mode-entry' is installed, skip capture
+so a later call cannot replace the saved body with the wrapper."
+  (let ((fn (symbol-function 'emagent-mode)))
+    (unless (and (fboundp 'emagent-mode-entry)
+                 (eq (indirect-function fn)
+                     (indirect-function 'emagent-mode-entry)))
+      (setq emagent--derived-mode-fn fn)))
+  (when (fboundp 'emagent-mode-entry)
+    (defalias 'emagent-mode #'emagent-mode-entry)))
+
+(emagent--capture-derived-mode)
+
+(defun emagent--mode-activate ()
   "Run the derived `emagent-mode' with Org init vars bound safely.
 
-_ARG is ignored; `define-derived-mode' generates a zero-argument
-entry point.  Binding `org-startup-with-inline-images' and
-`org-element-use-cache' here keeps large session buffers from
-tripping Org parser errors during parent `org-mode' init."
+Binding `org-startup-with-inline-images' and `org-element-use-cache'
+here keeps large session buffers from tripping Org parser errors
+during parent `org-mode' init."
   (let ((org-startup-with-inline-images nil)
         (org-element-use-cache nil))
-    (funcall emagent--mode-function)))
-
+    (funcall emagent--derived-mode-fn)))
 
 (defun emagent-chat--session-buffer-p ()
   "Return non-nil when current buffer resembles an emagent session file."

@@ -5,9 +5,6 @@
 ;; Batch `check-declare' over Melpa recipe sources (emagent.el + lisp/**/*.el).
 ;; Exits non-zero when any declaration is wrong or the defining file is missing.
 ;;
-;; Known false positives (cl-defstruct accessors, C primitives) are filtered:
-;; check-declare cannot see those definitions in the .el sources.
-;;
 ;;   emacs -Q --batch -l ci/check-declare.el -f emagent-check-declare-batch
 
 ;;; Code:
@@ -19,19 +16,6 @@
   (file-name-as-directory
    (or (getenv "EMAGENT_ROOT")
        (expand-file-name ".." (file-name-directory load-file-name)))))
-
-(defvar emagent-check-declare--ignore-functions
-  '("flymake-diagnostics"
-    "flymake-diagnostic-beg"
-    "flymake-diagnostic-type"
-    "flymake-diagnostic-text"
-    "treesit-node-at"
-    "treesit-node-type"
-    "treesit-available-p"
-    "org-element-property"
-    "org-element-at-point"
-    "split-string-shell-argument")
-  "Function names check-declare cannot verify (structs / C subrs / versioned).")
 
 (defun emagent-check-declare--files ()
   "Return Melpa recipe Elisp files under `emagent-check-declare--root'."
@@ -47,7 +31,6 @@
       (let ((def-file (car group))
             (entries (cdr group)))
         (dolist (entry entries)
-          ;; ENTRY is (SRC-FILE FN-NAME REASON) with string fields.
           (push (list def-file (nth 0 entry) (nth 1 entry) (nth 2 entry))
                 out))))
     (nreverse out)))
@@ -62,15 +45,9 @@
                       (expand-file-name "lisp" root) t "\\`[^.]")
                      load-path))
          (files (emagent-check-declare--files))
-         (raw (let ((warning-suppress-types
-                     (cons '(check-declare) warning-suppress-types)))
-                (cl-loop for file in files
-                         append (check-declare-file file))))
-         (flat (emagent-check-declare--flatten raw))
-         (errors (cl-remove-if
-                  (lambda (e)
-                    (member (nth 2 e) emagent-check-declare--ignore-functions))
-                  flat)))
+         (errors (emagent-check-declare--flatten
+                  (cl-loop for file in files
+                           append (check-declare-file file)))))
     (if (null errors)
         (progn
           (message "check-declare: clean (%d files)" (length files))

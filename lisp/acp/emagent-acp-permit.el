@@ -61,8 +61,6 @@
       (setf (emagent-acp-state-session-auto-approve state) t))))
 
 (declare-function emagent-acp--send-request "emagent-acp-prompt")
-(declare-function emagent-acp--emit-tool-call-display "emagent-acp-tool-call")
-(declare-function emagent-acp--provider-symbol "emagent-acp-provider")
 (declare-function emagent-cursor-enrich-tool-call-update "emagent-cursor")
 (declare-function emagent-chat--open-response-p "emagent-chat")
 
