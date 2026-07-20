@@ -46,6 +46,7 @@
 (defvar emagent--force-activation)
 
 (declare-function org-appear-mode "ext:org-appear")
+(declare-function emagent-chat--cancel-scheduled-table-align "emagent-chat")
 
 
 (defun emagent-chat--ensure-org-startup ()
@@ -189,8 +190,8 @@ Run \\[emagent-mode] to reconnect a saved session."
                                        (emagent-chat--read-allowed-tools-property))
         emagent-chat-allowed-permissions (or emagent-chat-allowed-permissions
                                             (emagent-chat--read-allowed-permissions-property))
-        emagent-chat--font-lock-deferred-p nil
-        emagent-chat--table-align-deferred-p nil)
+        emagent-chat--font-lock-deferred-p nil)
+  (emagent-chat--cancel-scheduled-table-align)
   (when-let ((model (or emagent-chat-model (emagent-chat--read-model-property))))
     (setq emagent-chat-model (emagent-model-canonical-id model)))
   (setq-local default-directory (emagent-chat--session-directory))

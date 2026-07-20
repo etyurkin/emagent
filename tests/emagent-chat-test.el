@@ -334,42 +334,39 @@ session present (the UI no longer pulls from the ACP layer)."
            (should-not emagent-chat--font-lock-deferred-p)
            (should (= flushed 1))))))))
 
-(ert-deftest emagent-chat-test-table-align-deferred-while-turn-in-flight ()
-  "Do not flush full-buffer table align while the ACP turn is busy.
+(ert-deftest emagent-chat-test-schedule-align-org-tables-region-only ()
+  "Schedule one idle align of the response region; never full-buffer from hooks.
 
-Regression: spinner `redisplay' + window-configuration-change-hook ran
-`org-at-table-p'/`org-element-at-point' over the chat buffer and pegged CPU."
+Regression: spinner `redisplay' + window-configuration-change-hook scanned
+the whole buffer with `org-at-table-p'/`org-element-at-point' and pegged CPU."
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
-     (let* ((state (emagent-test--make-acp-state nil buffer))
-            (aligned 0)
+     (let* ((aligned-bounds nil)
             (idle-fns nil))
-       (setq emagent-acp--session state)
-       (setf (emagent-acp-state-busy state) t)
        (with-current-buffer buffer
-         (pop-to-buffer buffer)
          (insert "| a | b |\n|---+---|\n| 1 | 2 |\n")
-         (setq emagent-chat--table-align-deferred-p nil)
-         (emagent-test--with-mocks
-             (((symbol-function 'emagent-chat--align-org-tables-in-region)
-               (lambda (&rest _) (cl-incf aligned)))
-              ((symbol-function 'run-with-idle-timer)
-               (lambda (_secs _repeat fn &rest _args)
-                 (push fn idle-fns)
-                 nil)))
-           (emagent-chat--maybe-align-org-tables-in-region (point-min) (point-max))
-           (should emagent-chat--table-align-deferred-p)
-           (should (= aligned 0))
-           (emagent-chat--flush-deferred-table-align)
-           (should emagent-chat--table-align-deferred-p)
-           (should (= aligned 0))
-           (should-not idle-fns)
-           (setf (emagent-acp-state-busy state) nil)
-           (emagent-chat--flush-deferred-table-align)
-           (should-not emagent-chat--table-align-deferred-p)
-           (should (= (length idle-fns) 1))
-           (funcall (car idle-fns))
-           (should (= aligned 1))))))))
+         (let ((start (point-min))
+               (end (point-max)))
+           (emagent-test--with-mocks
+               (((symbol-function 'emagent-chat--align-org-tables-in-region)
+                 (lambda (s e &rest _)
+                   (push (cons s e) aligned-bounds)))
+                ((symbol-function 'run-with-idle-timer)
+                 (lambda (_secs _repeat fn &rest _args)
+                   (push fn idle-fns)
+                   'fake-timer)))
+             (emagent-chat--schedule-align-org-tables start end)
+             (should (markerp emagent-chat--table-align-start))
+             (should (markerp emagent-chat--table-align-end))
+             (should (= (marker-position emagent-chat--table-align-start) start))
+             (should (= (marker-position emagent-chat--table-align-end) end))
+             (should (= (length idle-fns) 1))
+             (should-not aligned-bounds)
+             (funcall (car idle-fns))
+             (should-not emagent-chat--table-align-start)
+             (should-not emagent-chat--table-align-end)
+             (should (= (length aligned-bounds) 1))
+             (should (equal (car aligned-bounds) (cons start end))))))))))
 
 (ert-deftest emagent-chat-test-spinner-refresh-does-not-redisplay ()
   "Spinner ticks must not call `redisplay' (re-enters window-config hooks)."
@@ -539,9 +536,12 @@ Regression: spinner `redisplay' + window-configuration-change-hook ran
      (setf (emagent-acp-state-busy emagent-acp--session) t)
      (with-current-buffer buffer
        (emagent-test--sync-status)
+       ;; Nil start-time so `emagent-chat--spinner-sync-frame' does not
+       ;; overwrite the frame index we set explicitly below.
        (setq emagent-chat--mode-line-head nil
              emagent-chat--mode-line-tail nil
              emagent-chat--mode-line-cache nil
+             emagent-chat--spinner-start-time nil
              emagent-chat--spinner-frame 0)
        (pop-to-buffer buffer)
        (should (emagent-chat--spinner-refresh-buffer buffer))
