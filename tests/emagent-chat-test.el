@@ -82,6 +82,18 @@
   (should-not (emagent-chat--bare-slash-command-p "hello"))
   (should-not (emagent-chat--bare-slash-command-p "/compress\nmore")))
 
+(ert-deftest emagent-chat-test-mode-enable-seeds-cursor-slash-commands ()
+  "Cursor built-ins are available after mode enable without connecting."
+  (with-temp-buffer
+    (let ((emagent-default-provider 'cursor)
+          (emagent-chat-slash-commands nil))
+      (delay-mode-hooks (emagent-mode))
+      (emagent--on-mode-enable)
+      (should (eq emagent-chat-provider 'cursor))
+      (should (cl-find "compress" emagent-chat-slash-commands
+                       :key (lambda (c) (map-elt c 'name))
+                       :test #'string=)))))
+
 (ert-deftest emagent-chat-test-slash-token-bounds-midline ()
   "A `/name' token is detected at point anywhere on the prompt line, and the
 `/model' completion offers the client command; a path like `src/a' is not one."

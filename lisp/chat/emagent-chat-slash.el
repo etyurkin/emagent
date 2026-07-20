@@ -71,7 +71,7 @@
          (choices (and state (emagent-acp--model-choices state nil))))
     (cond
      ((not choices)
-      (message "emagent: no models available yet — connect the agent first"))
+      (message "emagent: no models available yet — M-x emagent-connect"))
      (t
       (let* ((selection (completing-read "Model for this turn: "
                                          (mapcar #'car choices) nil t))
@@ -179,6 +179,7 @@ Arguments: DESCRIPTION, HINT."
            (emagent-cursor-slash-commands (emagent-session-project-directory))
            emagent-chat-slash-commands))))
 
+
 ;;;###autoload
 (defun emagent-chat-set-slash-commands (commands)
   "Merge normalized COMMANDS from the agent into `emagent-chat-slash-commands'."
@@ -250,6 +251,8 @@ long as the `/' is preceded by the heading, the line start, or whitespace."
               ((string-prefix-p "/" prefix))
               ;; Client commands (e.g. /model) are always offered; agent
               ;; commands are merged in once the session publishes them.
+              ;; Cursor built-ins are seeded on mode enable / `emagent-connect'
+              ;; without waiting for a dummy prompt.
               (commands (append emagent-chat--client-slash-commands
                                 emagent-chat-slash-commands)))
     ;; Start the completion region AFTER the "/" so the framework sees the

@@ -295,15 +295,23 @@ overflow restore the buffer model immediately."
         emagent-chat--on-quit #'emagent-acp-shutdown-buffer
         emagent-chat-provider (or (emagent-session-agent) emagent-default-provider)))
 
+(declare-function emagent-chat-seed-cursor-slash-commands "emagent-chat-slash")
+
 (defun emagent--on-mode-enable ()
   "Wire callbacks when enabling `emagent-mode'.
 
 Do not auto-connect on mode activation; delayed ACP reconnect callbacks can
 rewrite session metadata and mark restored buffers modified.  Connection still
-happens on first send via `emagent--send-prompt'."
+happens on first send via `emagent--send-prompt', or explicitly via
+`emagent-connect'.
+
+Cursor built-in slash commands are seeded locally so TAB works before the
+first prompt without spawning the agent.  Claude agent slash commands require
+`emagent-connect' (or any send) so the agent can publish them."
   (emagent-chat--wire-buffer)
   (emagent-chat--setup-faces)
-  (add-hook 'kill-buffer-hook #'emagent-acp-shutdown-buffer nil t))
+  (add-hook 'kill-buffer-hook #'emagent-acp-shutdown-buffer nil t)
+  (emagent-chat-seed-cursor-slash-commands))
 
 (defun emagent--session-buffer-p ()
   "Return non-nil when current `org-mode' buffer is an emagent session."
@@ -682,6 +690,24 @@ Requires `emagent-mode' in a buffer whose agent is Claude."
   (message "emagent: Claude reconnected with a new session (trust from disk)"))
 
 ;;;###autoload
+(defun emagent-connect ()
+  "Connect or reconnect this buffer's ACP agent.
+
+Use after opening a saved session when you want slash commands, models, or
+MCP state before the first prompt.  Safe to call when already connected —
+queued ready callbacks run immediately.  Cursor built-in slash commands are
+also re-seeded so TAB completion stays populated during reconnect."
+  (interactive)
+  (unless (derived-mode-p 'emagent-mode)
+    (user-error "Turn on emagent-mode in this buffer first"))
+  (emagent-chat--wire-buffer)
+  (emagent-chat-seed-cursor-slash-commands)
+  (emagent-acp-ensure-connected
+   :on-ready
+   (lambda ()
+     (message "emagent: connected"))))
+
+;;;###autoload
 (defun emagent (&optional prompt-directory)
   "Start a new emagent session and connect.
 
@@ -734,6 +760,7 @@ leaves the session files in the old location and causes session/load to fail."
 
 (dolist (sym '(emagent-trust-workspace
                emagent-trust-claude-reconnect
+               emagent-connect
                emagent-set-project-directory
                emagent-chat-send
                emagent-chat-send-or-babel
