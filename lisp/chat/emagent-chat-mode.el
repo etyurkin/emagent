@@ -316,37 +316,39 @@ working inside session buffers."
   (interactive)
   (if (fboundp 'transient-define-prefix)
       (progn
-        (unless (fboundp 'emagent--transient-menu)
-          (eval
-           '(transient-define-prefix emagent--transient-menu ()
-              "Emagent commands."
-              ["Send & navigate"
-               ("SPC" "Send / execute src block" emagent-chat-send-or-babel)
-               ("u" "New prompt heading" emagent-chat-new-prompt)
-               ("g" "Interrupt agent (ESC ESC)" emagent-chat-interrupt)]
-              ["Attach"
-               ("a" "Attach buffer context" emagent-chat-attach-buffer)
-               ("b" "Send btw side note to agent" emagent-btw)
-               ("d" "Attach project files" emagent-chat-attach-files)
-               ("e" "Attach error context" emagent-chat-attach-error-context)
-               ("i" "Attach image" emagent-chat-attach-image)]
-              ["Extract response"
-               ("r" "Insert last response into buffer" emagent-chat-insert-last-response)
-               ("s" "Insert src block into buffer" emagent-chat-insert-src-block)]
-              ;; org's own `C-c ?' command, shadowed by this palette; shown
-              ;; only when point is in a table, where it is meaningful.
-              ["Table" :if org-at-table-p
-               ("f" "Field info (org's C-c ?)" org-table-field-info)]
-              ["Session"
-               ("m" "Set session model (/model = one turn)" emagent-set-model)
-               ("p" "Change project directory" emagent-set-project-directory)
-               ("P" "Reset permissions" emagent-reset-permissions)
-               ("t" "Trust workspace on disk" emagent-trust-workspace)
-               ("R" "Claude: new session (trust)" emagent-trust-claude-reconnect)
-               ("l" "View log" emagent-log-view)])
-           t))
+        ;; Redefine each time so palette changes apply after package reload
+        ;; without requiring a full Emacs restart.
+        (eval
+         '(transient-define-prefix emagent--transient-menu ()
+            "Emagent commands."
+            ["Send & navigate"
+             ("SPC" "Send / execute src block" emagent-chat-send-or-babel)
+             ("u" "New prompt heading" emagent-chat-new-prompt)
+             ("g" "Interrupt agent (ESC ESC)" emagent-chat-interrupt)]
+            ["Attach"
+             ("a" "Attach buffer context" emagent-chat-attach-buffer)
+             ("b" "Send btw side note to agent" emagent-btw)
+             ("d" "Attach project files" emagent-chat-attach-files)
+             ("e" "Attach error context" emagent-chat-attach-error-context)
+             ("i" "Attach image" emagent-chat-attach-image)]
+            ["Extract response"
+             ("r" "Insert last response into buffer" emagent-chat-insert-last-response)
+             ("s" "Insert src block into buffer" emagent-chat-insert-src-block)]
+            ;; org's own `C-c ?' command, shadowed by this palette; shown
+            ;; only when point is in a table, where it is meaningful.
+            ["Table" :if org-at-table-p
+             ("f" "Field info (org's C-c ?)" org-table-field-info)]
+            ["Session"
+             ("c" "Connect / reconnect agent" emagent-connect)
+             ("m" "Set session model (/model = one turn)" emagent-set-model)
+             ("p" "Change project directory" emagent-set-project-directory)
+             ("P" "Reset permissions" emagent-reset-permissions)
+             ("t" "Trust workspace on disk" emagent-trust-workspace)
+             ("R" "Claude: new session (trust)" emagent-trust-claude-reconnect)
+             ("l" "View log" emagent-log-view)])
+         t)
         (call-interactively 'emagent--transient-menu))
-    (message "emagent: SPC=send, p=prompt, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
+    (message "emagent: SPC=send, c=connect, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
 
 (unless (advice-member-p #'emagent-chat--suppress-inline-images-in-session-buffers
                           'org-display-inline-images)

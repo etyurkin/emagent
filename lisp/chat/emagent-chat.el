@@ -411,7 +411,7 @@ Only used when terminal-notifier is installed."
 # This buffer is a scratch pad for chatting with emagent.
 # Type after '* username> ' and press C-c C-c to send.
 #
-# C-c ?     command palette: model, attach, new prompt, log, project, trust, …
+# C-c ?     command palette: connect, model, attach, new prompt, log, project, trust, …
 # ESC ESC   interrupt agent response
 # C-x k     kill buffer and disconnect agent
 # M-x emagent-mode to reconnect a saved session

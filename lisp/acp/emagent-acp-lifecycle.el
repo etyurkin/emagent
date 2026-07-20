@@ -215,6 +215,9 @@ Arguments: CLIENT, ON-READY."
     (setq emagent-acp-logging-enabled t))
   (with-current-buffer chat-buffer
     (emagent-chat-clear-slash-commands)
+    ;; Cursor built-ins are local; keep them available while the agent
+    ;; connects so TAB completion does not go empty mid-reconnect.
+    (emagent-chat-seed-cursor-slash-commands)
     (setq emagent-acp--session (emagent-acp--make-state :client client
                                                         :chat-buffer chat-buffer
                                                         :on-reveal on-reveal))
