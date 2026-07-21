@@ -152,16 +152,24 @@ A prose-only transform: it is applied outside src blocks so a fenced
    (replace-regexp-in-string "^###+ \\(.*\\)$" "* \\1" text)))
 
 (defun emagent-chat--convert-markdown-prose (text)
-  "Convert markdown links and glued sentences in prose TEXT.
+  "Convert markdown links, bold, and glued sentences in prose TEXT.
 
 Prose-only transforms applied outside src blocks, so a fenced `arr[i](fn)' or
-`path.Join' is left as literal code."
+`path.Join' is left as literal code.  Bold runs after inline-code conversion
+in `emagent-chat--convert-agent-markup' so `**`code`**' becomes
+`*=code=*' rather than leaving markdown stars around org verbatim."
   (let ((result
          ;; Markdown links [text](url) → [[url][text]] org links.
          (replace-regexp-in-string
           "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
           "[[\\2][\\1]]"
           text)))
+    ;; Markdown bold **text** → org bold *text*.  Same pattern as the
+    ;; streaming insert path; without this, finish rewrite reintroduces
+    ;; markdown stars around already-converted =verbatim= spans.
+    (setq result
+          (replace-regexp-in-string
+           "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*" result))
     ;; Insert a space when sentence-ending punctuation is immediately followed
     ;; by a capital letter.  Bind case-fold-search=nil so [A-Z] only matches
     ;; true uppercase — without this, domain names like github.corp get spaces.
@@ -423,7 +431,7 @@ Arguments: TEXT."
   "Convert leftover markdown markup in agent responses to org.
 
 Code fences are converted to src blocks first; the remaining prose transforms
-\(inline backticks, tables, heading/spacing normalization) then run only
+\(inline backticks, bold, tables, heading/spacing normalization) then run only
 outside those blocks, so a fenced backtick span, `## heading', or table row
 is never rewritten inside code.
 
@@ -433,8 +441,8 @@ Arguments: TEXT."
                   (emagent-chat--convert-code-fences
                    (emagent-chat--fix-org-src-citations
                     (emagent-chat--unwrap-outer-org-src text)))))
-         ;; Prose-corrupting transforms (inline code, headings, tables, links,
-         ;; sentence spacing) run only outside src blocks so code survives.
+         ;; Prose-corrupting transforms (inline code, bold, headings, tables,
+         ;; links, sentence spacing) run only outside src blocks so code survives.
          (prose (emagent-chat--map-outside-src-blocks
                  (lambda (s)
                    (emagent-chat--convert-markdown-prose

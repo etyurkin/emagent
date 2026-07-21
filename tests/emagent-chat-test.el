@@ -1759,6 +1759,23 @@ makes the link unclickable in org-mode."
                    (emagent-chat--org-verbatim-paths
                     "see https://example.com/a/b"))))
 
+(ert-deftest emagent-chat-test-bold-around-inline-code ()
+  "Finish conversion must turn **`code`** into org * =code= *, not leave **.
+
+Regression: `emagent-chat--convert-agent-markup' converted backticks but not
+markdown bold, so finish rewrite replaced a clean streamed body with
+`**=code=**' markdown leaks."
+  (should (string= "*=PATCH_ENV= cell-transparent* — nested =let=/=LOOP="
+                   (emagent-chat--convert-agent-markup
+                    "**`PATCH_ENV` cell-transparent** — nested `let`/`LOOP`")))
+  (should (string= "1. *=PATCH_ENV= cell-transparent* — nested =let="
+                   (emagent-chat--convert-agent-markup
+                    "1. **`PATCH_ENV` cell-transparent** — nested `let`")))
+  ;; Already-converted verbatim inside leftover markdown bold.
+  (should (string= "*=PATCH_ENV= cell-transparent*"
+                   (emagent-chat--convert-agent-markup
+                    "**=PATCH_ENV= cell-transparent**"))))
+
 (ert-deftest emagent-chat-test-inline-code-preserves-backslashes ()
   "Inline-code conversion must not reinterpret backslashes in the span.
 
