@@ -50,6 +50,40 @@
 (declare-function org-appear-mode "ext:org-appear")
 (declare-function emagent-chat--cancel-scheduled-table-align "emagent-chat")
 
+;; ACP connect/send composition lives above this file (`emagent-acp-connect'
+;; requires `emagent-chat'); declared here rather than required to avoid a
+;; load cycle.
+(declare-function emagent-acp-send "emagent-acp-connect")
+(declare-function emagent-acp-attach-context "emagent-acp-send")
+(declare-function emagent-acp-shutdown-buffer "emagent-acp-send")
+
+(defvar emagent-default-provider)
+
+(defun emagent-chat--wire-buffer ()
+  "Attach per-buffer emagent callbacks."
+  (setq emagent-chat--on-send #'emagent-acp-send
+        emagent-chat--on-attach #'emagent-acp-attach-context
+        emagent-chat--on-quit #'emagent-acp-shutdown-buffer
+        emagent-chat-provider (or (emagent-session-agent) emagent-default-provider)))
+
+(defun emagent-chat--on-mode-enable ()
+  "Wire callbacks when enabling `emagent-mode'.
+
+Do not auto-connect on mode activation; delayed ACP reconnect callbacks can
+rewrite session metadata and mark restored buffers modified.  Connection still
+happens on first send via `emagent-acp-send', or explicitly via
+`emagent-connect'.
+
+Cursor built-in slash commands are seeded locally so TAB works before the
+first prompt without spawning the agent.  Claude agent slash commands require
+`emagent-connect' (or any send) so the agent can publish them."
+  (emagent-chat--wire-buffer)
+  (emagent-chat--setup-faces)
+  (add-hook 'kill-buffer-hook #'emagent-acp-shutdown-buffer nil t)
+  (emagent-chat-seed-cursor-slash-commands))
+
+(add-hook 'emagent-mode-hook #'emagent-chat--on-mode-enable)
+
 (defun emagent-chat--ensure-org-startup ()
   "Ensure the buffer requests Org block folding on startup."
   (unless (save-excursion

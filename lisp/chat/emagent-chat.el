@@ -62,7 +62,7 @@
 (declare-function emagent-set-project-directory "emagent" (new-dir))
 (declare-function emagent-trust-workspace "emagent" (&optional arg))
 (declare-function emagent-trust-claude-reconnect "emagent" ())
-(declare-function emagent-acp-ensure-connected "emagent")
+(declare-function emagent-acp-ensure-connected "emagent-acp-connect")
 (defvar-local emagent-chat--assistant-marker nil
   "Insert position for the in-flight emagent response.")
 

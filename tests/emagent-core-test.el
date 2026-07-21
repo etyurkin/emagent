@@ -63,7 +63,7 @@
        ((symbol-function 'emagent-mcp-ensure-cursor-config) (lambda () nil))
        ((symbol-function 'emagent-chat--session-directory) (lambda () "/tmp/proj")))
     (with-temp-buffer
-      (let ((client (emagent--make-client 'cursor (current-buffer))))
+      (let ((client (emagent-acp--make-client 'cursor (current-buffer))))
         (should (hash-table-p client))
         (should (string= "cursor-agent" (map-elt client :command)))))))
 

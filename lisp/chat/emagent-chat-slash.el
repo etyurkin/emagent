@@ -46,7 +46,7 @@
   :group 'emagent)
 
 (declare-function emagent-chat-cycle-or-org-cycle "emagent-chat")
-(declare-function emagent-acp-ensure-connected "emagent")
+(declare-function emagent-acp-ensure-connected "emagent-acp-connect")
 (declare-function emagent-chat--slash-mcp-apply "emagent-chat-mcp")
 
 (defconst emagent-chat--client-slash-commands

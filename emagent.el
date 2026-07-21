@@ -87,6 +87,7 @@ target BUFFER (hence the two-argument signature)."
 (require 'emagent-chat)
 (require 'emagent-acp)
 (require 'emagent-acp-model)
+(require 'emagent-acp-connect)
 (require 'emagent-cursor)
 (require 'emagent-claude)
 (require 'emagent-trust)
@@ -139,162 +140,6 @@ combinations are logged to `emagent-log-buffer-name' and offered in the
 startup picker when there is more than one choice."
   :type 'boolean
   :group 'emagent)
-
-(defun emagent--make-client (provider buffer)
-  "Create an ACP client for PROVIDER using BUFFER as context."
-  (let ((process-directory (and (buffer-live-p buffer)
-                                (with-current-buffer buffer
-                                  (emagent-chat--session-directory)))))
-    (pcase provider
-      ('cursor (emagent-cursor-make-client :context-buffer buffer
-                                           :process-directory process-directory))
-      ('claude (emagent-claude-make-client :context-buffer buffer
-                                           :process-directory process-directory))
-      (_ (user-error "Unknown emagent provider: %s" provider)))))
-
-(cl-defun emagent-acp-ensure-connected (&key on-ready on-reveal)
-  "Connect the current emagent buffer to its ACP provider if needed.
-
-When the agent process died but buffer-local state remains, tear it down and
-reconnect (resuming the saved session id when present).  Optional ON-READY runs
-once the session is ready; ON-REVEAL runs when the chat buffer should be shown.
-While a connection is already in flight, ON-READY is queued instead of tearing
-the session down and starting over."
-  (when on-ready (push on-ready emagent-acp--when-connected-queue))
-  (cond
-   ((emagent-acp--connected-p)
-    (emagent-acp--run-when-connected-queue))
-   ((emagent-acp--connecting-p)
-    nil)
-   (t
-    (emagent-acp--teardown-stale-session)
-    (let* ((provider (or emagent-chat-provider emagent-default-provider))
-           (client (emagent--make-client provider (current-buffer))))
-      (emagent-acp-start :client client
-                        :chat-buffer (current-buffer)
-                        :on-ready #'emagent-acp--run-when-connected-queue
-                        :on-reveal on-reveal
-                        :callbacks
-                        `((:cb-chunk          . ,#'emagent-chat-append-assistant)
-                          (:cb-thought        . ,#'emagent-chat-append-thought)
-                          (:cb-finish         . ,(lambda (&rest args)
-                                                    (apply #'emagent-chat-finish-assistant args)
-                                                    (emagent--restore-turn-model)))
-                          (:cb-fail           . ,(lambda (&rest args)
-                                                    (apply #'emagent-chat-fail-assistant args)
-                                                    (emagent--turn-model-on-failure
-                                                     (car args))))
-                          (:cb-slash-commands . ,#'emagent-chat-set-slash-commands)
-                          (:cb-tool-call      . ,#'emagent-chat-show-tool-call)
-                          (:cb-permission     . ,#'emagent-chat-permission-prompt)
-                          (:cb-status         . ,#'emagent-chat-set-status)))))))
-
-(defun emagent--send-prompt-safe (buffer user-text)
-  "Send USER-TEXT from BUFFER, logging and surfacing failures in the chat."
-  (with-current-buffer buffer
-    (condition-case err
-        (emagent-acp-send-prompt user-text)
-      (error
-       (let ((msg (error-message-string err)))
-         (when (fboundp 'emagent-chat--send-pending-end)
-           (emagent-chat--send-pending-end))
-         (emagent-log "emagent: send failed: %s" msg)
-         (when (fboundp 'emagent-chat-fail-assistant)
-           (emagent-chat-fail-assistant msg)))))))
-
-(defun emagent--send-prompt (user-text)
-  "Ensure connection and send USER-TEXT from the current buffer.
-When a per-turn model override (`emagent-chat--turn-model', set by `/model') is
-active and differs from the session model, switch to it transiently first, then
-send; the buffer model is restored when the turn ends (see
-`emagent-chat-finish-assistant' / `emagent-chat-fail-assistant')."
-  (let ((buf (current-buffer))
-        (turn-model emagent-chat--turn-model)
-        (token emagent-chat--send-token))
-    (emagent-acp-ensure-connected
-     :on-ready
-     (lambda ()
-       (with-current-buffer buf
-         (when (emagent-chat--send-active-p token)
-           (let* ((state emagent-acp--session)
-                  (current (and state (emagent-acp-current-model-id)))
-                  (target (and turn-model state
-                                (emagent-acp--match-model-id turn-model state nil))))
-             (if (and target current (not (string= target current)))
-                 (progn
-                   ;; Remember the real session model to restore to (only the
-                   ;; first time, so a sticky post-failure override still points
-                   ;; back at the original global model).
-                   (unless emagent-chat--turn-model-base
-                     (setq emagent-chat--turn-model-base current))
-                   (when (fboundp 'emagent-acp--progress)
-                     (emagent-acp--progress
-                      state
-                      (format "switching model to %s for this turn…"
-                              (if (fboundp 'emagent-acp--model-display-name)
-                                  (emagent-acp--model-display-name state nil target)
-                                target))))
-                   (emagent-acp-set-model-transient
-                    target
-                    (lambda ()
-                      (when (emagent-chat--send-active-p token)
-                        (emagent--send-prompt-safe buf user-text)))))
-               (emagent--send-prompt-safe buf user-text)))))))))
-
-(defun emagent--restore-turn-model ()
-  "Restore the session model overridden by `/model' and clear the override.
-Called on a successful turn: switches back to the captured base model and clears
-`emagent-chat--turn-model' so the next prompt uses the buffer model again."
-  (when emagent-chat--turn-model
-    (when emagent-chat--turn-model-base
-      (emagent-acp-set-model-transient emagent-chat--turn-model-base #'ignore))
-    (setq emagent-chat--turn-model nil
-          emagent-chat--turn-model-base nil)))
-
-(defun emagent--turn-model-on-failure (&optional message)
-  "After a failed `/model' turn, keep or restore the per-turn override.
-
-MESSAGE is the failure text used to classify transient vs permanent errors.
-Only transient network failures (after retries are exhausted) ask whether to
-keep the override for a manual `retry'.  Permanent errors such as context
-overflow restore the buffer model immediately."
-  (when emagent-chat--turn-model
-    (if (and message (fboundp 'emagent-acp--retriable-prompt-error-p)
-         (emagent-acp--retriable-prompt-error-p message))
-        (emagent-tools--buttons-prompt
-         (format "Continue with %s for the next prompt?" emagent-chat--turn-model)
-         '(("Yes, keep it" . keep) ("No, use the buffer model" . restore))
-         (current-buffer)
-         (lambda (choice)
-           (when (eq choice 'restore)
-             (emagent--restore-turn-model))))
-      (emagent--restore-turn-model))))
-
-(defun emagent-chat--wire-buffer ()
-  "Attach per-buffer emagent callbacks."
-  (setq emagent-chat--on-send #'emagent--send-prompt
-        emagent-chat--on-attach #'emagent-acp-attach-context
-        emagent-chat--on-quit #'emagent-acp-shutdown-buffer
-        emagent-chat-provider (or (emagent-session-agent) emagent-default-provider)))
-
-
-(defun emagent--on-mode-enable ()
-  "Wire callbacks when enabling `emagent-mode'.
-
-Do not auto-connect on mode activation; delayed ACP reconnect callbacks can
-rewrite session metadata and mark restored buffers modified.  Connection still
-happens on first send via `emagent--send-prompt', or explicitly via
-`emagent-connect'.
-
-Cursor built-in slash commands are seeded locally so TAB works before the
-first prompt without spawning the agent.  Claude agent slash commands require
-`emagent-connect' (or any send) so the agent can publish them."
-  (emagent-chat--wire-buffer)
-  (emagent-chat--setup-faces)
-  (add-hook 'kill-buffer-hook #'emagent-acp-shutdown-buffer nil t)
-  (emagent-chat-seed-cursor-slash-commands))
-
-(add-hook 'emagent-mode-hook #'emagent--on-mode-enable)
 
 (defun emagent--provider-available-p (provider)
   "Return non-nil when PROVIDER's ACP agent executable can be found.
@@ -350,7 +195,7 @@ When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
       (setq default-directory (expand-file-name cwd))
       (setq result
             (condition-case err
-                (let ((client (emagent--make-client provider buffer)))
+                (let ((client (emagent-acp--make-client provider buffer)))
                   (unwind-protect
                       (progn
                         (emagent-acp-send-request

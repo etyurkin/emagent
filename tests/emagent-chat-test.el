@@ -6,6 +6,7 @@
 (require 'emagent-test-utils)
 (require 'emagent-chat)
 (require 'emagent-acp-tool-call)
+(require 'emagent-acp-connect)
 
 ;;;; Slugs and labels
 
@@ -75,6 +76,37 @@
   (should (string-match-p "<conversation>" (emagent-chat--compress-prompt-text "hello")))
   (should (string-match-p "hello" (emagent-chat--compress-prompt-text "hello"))))
 
+(ert-deftest emagent-chat-test-dispatch-compress-empty-fails ()
+  "A /compress with no prior conversation fails the response, not dispatch."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (let (dispatched)
+         (setq emagent-chat--on-send (lambda (&rest _args) (setq dispatched t)))
+         (goto-char (point-max))
+         (insert (emagent-chat--user-heading-prefix) "/compress")
+         (emagent-chat-send)
+         (should-not dispatched)
+         (should (string-match-p "No conversation to compress" (buffer-string))))))))
+
+(ert-deftest emagent-chat-test-dispatch-compress-sends-summary ()
+  "A /compress with prior conversation sends a summary prompt with COMPRESS set."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (insert (emagent-chat--user-heading-prefix) "hello\n\n** Response\nhi there\n\n")
+       (let (sent-text sent-compress)
+         (setq emagent-chat--on-send
+               (lambda (text &optional compress)
+                 (setq sent-text text sent-compress compress)))
+         (goto-char (point-max))
+         (insert (emagent-chat--user-heading-prefix) "/compress")
+         (emagent-chat-send)
+         (should sent-compress)
+         (should (string-match-p "<conversation>" sent-text))
+         (should (string-match-p "hello" sent-text)))))))
+
 (ert-deftest emagent-chat-test-bare-slash-command-p ()
   (should (emagent-chat--bare-slash-command-p "/compress"))
   (should (emagent-chat--bare-slash-command-p "/plan refactor auth"))
@@ -88,7 +120,7 @@
     (let ((emagent-default-provider 'cursor)
           (emagent-chat-slash-commands nil))
       (delay-mode-hooks (emagent-mode))
-      (emagent--on-mode-enable)
+      (emagent-chat--on-mode-enable)
       (should (eq emagent-chat-provider 'cursor))
       (should (cl-find "compress" emagent-chat-slash-commands
                        :key (lambda (c) (map-elt c 'name))
@@ -1171,7 +1203,7 @@ no custom fontification), even on org heading lines (prompt and Thinking)."
     (let (restored)
       (cl-letf (((symbol-function 'emagent-acp-set-model-transient)
                  (lambda (m _cb) (setq restored m))))
-        (emagent--restore-turn-model))
+        (emagent-acp--restore-turn-model))
       (should (equal "sonnet" restored))
       (should-not emagent-chat--turn-model)
       (should-not emagent-chat--turn-model-base))))
@@ -1187,7 +1219,7 @@ no custom fontification), even on org heading lines (prompt and Thinking)."
                  (lambda (&rest _) (setq prompted t)))
                 ((symbol-function 'emagent-acp-set-model-transient)
                  (lambda (_ _cb) nil)))
-        (emagent--turn-model-on-failure
+        (emagent-acp--turn-model-on-failure
          "prompt failed: Internal error: Prompt is too long"))
       (should-not prompted)
       (should-not emagent-chat--turn-model)

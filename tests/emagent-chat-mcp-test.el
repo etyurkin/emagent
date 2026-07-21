@@ -8,6 +8,7 @@
 (require 'emagent-chat-mcp)
 (require 'emagent-acp-state)
 (require 'emagent-acp-send)
+(require 'emagent-chat-actions)
 
 (ert-deftest emagent-chat-mcp-test-command-p ()
   (should (emagent-chat--mcp-command-p "/mcp"))
@@ -49,24 +50,20 @@
   (should-not (emagent-chat--mcp-needs-auth-p "disabled")))
 
 (ert-deftest emagent-chat-mcp-test-send-does-not-dispatch ()
-  "Bare /mcp is handled client-side and never dispatches an ACP prompt."
-  (let ((dispatched nil)
-        (ran nil)
-        (state (emagent-test--make-acp-state)))
-    (setf (emagent-acp-state-ready state) t
-          (emagent-acp-state-busy state) nil
-          (emagent-acp-state-session-id state) "s1")
-    (emagent-test--with-mocks
-        (((symbol-function 'emagent-acp--session) (lambda () state))
-         ((symbol-function 'emagent-chat--slash-mcp-apply)
-          (lambda (&optional _text) (setq ran t)))
-         ((symbol-function 'emagent-acp--dispatch-prompt-request)
-          (lambda (&rest _) (setq dispatched t)))
-         ((symbol-function 'emagent-acp--provider-normalize-slash-prompt)
-          (lambda (_s text) text)))
-      (emagent-acp-send-prompt "/mcp")
-      (should ran)
-      (should-not dispatched))))
+  "Bare /mcp is intercepted by `emagent-chat-send' and never reaches ACP."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let (dispatched ran)
+       (with-current-buffer buffer
+         (setq emagent-chat--on-send (lambda (&rest _args) (setq dispatched t)))
+         (goto-char (point-max))
+         (insert (emagent-chat--user-heading-prefix) "/mcp")
+         (emagent-test--with-mocks
+             (((symbol-function 'emagent-chat--slash-mcp-apply)
+               (lambda (&optional _text) (setq ran t))))
+           (emagent-chat-send))
+         (should ran)
+         (should-not dispatched))))))
 
 (ert-deftest emagent-chat-mcp-test-select-lists-async ()
   "Interactive select starts mcp list asynchronously (no sync call-process)."

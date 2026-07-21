@@ -43,6 +43,7 @@
 (require 'emagent-chat-input)
 (require 'emagent-chat-response)
 (require 'emagent-chat-reasoning)
+(require 'emagent-chat-compress)
 (require 'emagent-acp-usage)
 (require 'emagent-acp-state)
 
@@ -126,6 +127,18 @@ partial response, and sends `btw, TEXT' as a new prompt."
     (when emagent-chat--on-send
       (funcall emagent-chat--on-send text))))
 
+(defun emagent-chat--dispatch-compress ()
+  "Handle a /compress-family slash command from `emagent-chat-send'.
+
+Summarizes the prior conversation and forwards the summary to
+`emagent-chat--on-send' with the compress flag, so ACP resets the session with
+it once the turn finishes (see `emagent-acp-send-prompt').  With no prior
+conversation, fails the just-opened response instead of dispatching."
+  (let ((history (emagent-chat--conversation-history-text)))
+    (if (string-empty-p history)
+        (emagent-chat-fail-assistant "No conversation to compress")
+      (funcall emagent-chat--on-send (emagent-chat--compress-prompt-text history) t))))
+
 (defun emagent-chat-send ()
   "Send the `* user>' prompt at point to the agent (C-c C-c).
 
@@ -174,7 +187,11 @@ Sending a previous prompt replaces its old response."
                 (emagent-chat--insert-switching-scaffold)
               (emagent-chat--insert-preparing-scaffold)))
           (when emagent-chat--on-send
-            (funcall emagent-chat--on-send input)))))))
+            (if (and (emagent-chat--bare-slash-command-p input)
+                     (emagent-chat--compress-command-p input))
+                (emagent-chat--dispatch-compress)
+              (funcall emagent-chat--on-send input))))))))
+
 (defun emagent-chat-interrupt ()
   "Stop any in-flight emagent work (ESC ESC).
 
