@@ -123,6 +123,46 @@
          (when (file-exists-p file) (delete-file file)))))))
 
 
+(ert-deftest emagent-core-test-open-does-not-mark-buffer-modified ()
+  "Opening/activating a saved session must not mark the buffer modified.
+
+Regression: mode entry rewrote #+EMAGENT_PROJECT into the abbreviated
+trailing-slash form on every visit, so reopening a session always dirtied
+the buffer.  Cookie housekeeping had the same bug when inserting."
+  (emagent-test--with-temp-project
+   (lambda (dir)
+     (let* ((file (expand-file-name "session.org" dir))
+            ;; Absolute path without trailing slash — the form that used to
+            ;; be rewritten (and dirty the buffer) on every activation.
+            (project (directory-file-name (expand-file-name dir)))
+            (emagent--pending-buffers nil)
+            (emagent-activate-on-display t)
+            buf)
+       (unwind-protect
+           (progn
+             (write-region
+              (format "# -*- mode: emagent -*-\n#+EMAGENT_PROJECT: %s\n* user> \n"
+                      project)
+              nil file)
+             (setq buf (find-file-noselect file))
+             (with-current-buffer buf
+               (should-not (buffer-modified-p))
+               (emagent-mode-force)
+               (should (derived-mode-p 'emagent-mode))
+               (should-not (buffer-modified-p))))
+         (when (buffer-live-p buf) (kill-buffer buf))
+         (when (file-exists-p file) (delete-file file)))))))
+
+(ert-deftest emagent-core-test-ensure-mode-cookie-preserves-unmodified ()
+  "Inserting a missing mode cookie must not mark an unmodified buffer dirty."
+  (with-temp-buffer
+    (insert "#+EMAGENT_SESSION: abc\n#+EMAGENT_PROJECT: /tmp/proj/\n")
+    (set-buffer-modified-p nil)
+    (emagent-chat--ensure-mode-cookie)
+    (goto-char (point-min))
+    (should (looking-at-p "#[ \t]*-\\*-.*\\bmode:[ \t]*emagent\\b"))
+    (should-not (buffer-modified-p))))
+
 (ert-deftest emagent-core-test-mode-toggle-off-does-not-defer ()
   "Calling `emagent-mode' while already active must not mark the buffer pending."
   (emagent-test--with-temp-project

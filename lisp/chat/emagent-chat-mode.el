@@ -81,8 +81,18 @@ Run \\[emagent-mode] to reconnect a saved session."
                          (emagent-session-store-read-project-property)))
                 (dir (expand-file-name raw)))
       (setq emagent-chat-project-directory dir)
-      (emagent-session-store-write-top-property
-       "EMAGENT_PROJECT" (emagent-session-store-display-project-directory dir)))
+      ;; Normalize the header form without dirtying a just-opened file.
+      ;; Trailing-slash / abbreviate differences used to mark every visit
+      ;; modified even when the project path was unchanged.
+      (let* ((display (emagent-session-store-display-project-directory dir))
+             (current (emagent-session-store-read-project-property))
+             (current-norm
+              (and current
+                   (emagent-session-store-display-project-directory current)))
+             (was-modified (buffer-modified-p)))
+        (unless (equal current-norm display)
+          (emagent-session-store-write-top-property "EMAGENT_PROJECT" display)
+          (set-buffer-modified-p was-modified))))
     (setq emagent-chat-session-id (or emagent-chat-session-id
                                       (emagent-session-store-read-session-property))
           emagent-chat-model (or emagent-chat-model (emagent-session-store-read-model-property))

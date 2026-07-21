@@ -75,14 +75,19 @@ and let-binding it makes `setq-local' fail on Emacs 29."
 
 Session files always carry the cookie so `set-auto-mode' routes through
 `emagent-mode' (and its safe Org init bindings) instead of bare
-`org-mode'."
+`org-mode'.  Accept any `mode: emagent' file-local cookie line (extra
+props allowed).  Housekeeping inserts must not mark a visited file
+modified."
   (save-excursion
     (save-restriction
       (widen)
       (goto-char (point-min))
-      (unless (looking-at-p "[ \t]*# -*- mode: emagent -*-")
-        (let ((inhibit-read-only t))
-          (insert "# -*- mode: emagent -*-\n"))))))
+      (unless (looking-at-p
+               "#[ \t]*-\\*-.*\\bmode:[ \t]*emagent\\b.*-\\*-")
+        (let ((inhibit-read-only t)
+              (was-modified (buffer-modified-p)))
+          (insert "# -*- mode: emagent -*-\n")
+          (set-buffer-modified-p was-modified))))))
 
 (defcustom emagent-activate-on-display t
   "When non-nil, defer emagent session activation until the buffer is shown.
