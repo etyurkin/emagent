@@ -36,7 +36,7 @@
 
 (require 'cl-lib)
 (require 'map)
-(require 'emagent-chat-header)
+(require 'emagent-session-store)
 (require 'emagent-chat-input)
 (require 'emagent-chat-response)
 
@@ -77,7 +77,7 @@
 (defun emagent-chat--conversation-history-text ()
   "Return prior conversation text for /compress, or \"\"."
   (save-excursion
-    (let* ((zone (emagent-chat--metadata-end))
+    (let* ((zone (emagent-session-store-metadata-end))
            (end (or (emagent-chat--compress-boundary) (point))))
       (when (and end (> end zone))
         (string-trim (buffer-substring-no-properties zone end))))))

@@ -42,6 +42,7 @@
 (require 'cl-lib)
 (require 'emagent-log)
 (require 'emagent-tools)
+(require 'emagent-chat-ui)
 (require 'emagent-chat)
 (require 'emagent-acp)
 (require 'emagent-cursor)

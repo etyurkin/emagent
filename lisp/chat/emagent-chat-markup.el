@@ -531,5 +531,77 @@ chunk pegs the command loop for both Cursor and Claude."
         (emagent-chat--font-lock-response-tail))
     (setq emagent-chat--font-lock-deferred-p t)))
 
+(defun emagent-chat--flush-deferred-font-lock ()
+  "Font-lock the response tail when a deferred flush was requested.
+
+Skipped while an ACP turn is still in flight so settle happens once."
+  (when (and emagent-chat--font-lock-deferred-p
+             (emagent-chat--buffer-active-p)
+             (not (and (fboundp 'emagent-acp-turn-in-flight-p)
+                       (emagent-acp-turn-in-flight-p))))
+    (setq emagent-chat--font-lock-deferred-p nil)
+    (emagent-chat--font-lock-response-tail)))
+
+(defvar-local emagent-chat--table-align-start nil
+  "Marker for the start of a pending idle org-table align region, or nil.")
+
+(defvar-local emagent-chat--table-align-end nil
+  "Marker for the end of a pending idle org-table align region, or nil.")
+
+(defvar-local emagent-chat--table-align-timer nil
+  "Idle timer that aligns `emagent-chat--table-align-start'..end, or nil.")
+
+(defun emagent-chat--cancel-scheduled-table-align ()
+  "Cancel any pending idle org-table alignment for this buffer."
+  (when emagent-chat--table-align-timer
+    (cancel-timer emagent-chat--table-align-timer)
+    (setq emagent-chat--table-align-timer nil))
+  (when (markerp emagent-chat--table-align-start)
+    (set-marker emagent-chat--table-align-start nil))
+  (when (markerp emagent-chat--table-align-end)
+    (set-marker emagent-chat--table-align-end nil))
+  (setq emagent-chat--table-align-start nil
+        emagent-chat--table-align-end nil))
+
+(defun emagent-chat--run-scheduled-table-align ()
+  "Align the pending org-table region, if any, without dirtying the buffer."
+  (setq emagent-chat--table-align-timer nil)
+  (when-let* ((start emagent-chat--table-align-start)
+              (end emagent-chat--table-align-end)
+              (s (marker-position start))
+              (e (marker-position end))
+              ((< s e)))
+    (setq emagent-chat--table-align-start nil
+          emagent-chat--table-align-end nil)
+    (set-marker start nil)
+    (set-marker end nil)
+    (let ((was-modified (buffer-modified-p)))
+      (unwind-protect
+          (save-excursion
+            (emagent-chat--align-org-tables-in-region s e))
+        (set-buffer-modified-p was-modified)))))
+
+(defun emagent-chat--schedule-align-org-tables (start end)
+  "Schedule one idle alignment of org tables between START and END.
+
+Replaces any previous pending region for this buffer.  Never runs from
+redisplay/`window-configuration-change-hook' — that path hung Emacs on
+large chats via `org-element' parses."
+  (when (and (integer-or-marker-p start)
+             (integer-or-marker-p end)
+             (< (if (markerp start) (marker-position start) start)
+                (if (markerp end) (marker-position end) end)))
+    (emagent-chat--cancel-scheduled-table-align)
+    (setq emagent-chat--table-align-start (copy-marker start t)
+          emagent-chat--table-align-end (copy-marker end nil))
+    (let ((buf (current-buffer)))
+      (setq emagent-chat--table-align-timer
+            (run-with-idle-timer
+             0 nil
+             (lambda ()
+               (when (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (emagent-chat--run-scheduled-table-align)))))))))
+
 (provide 'emagent-chat-markup)
 ;;; emagent-chat-markup.el ends here

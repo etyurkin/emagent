@@ -42,7 +42,6 @@
 (require 'emagent-session)
 
 (declare-function emagent-acp--permission-pending-p "emagent-acp-prompt")
-(declare-function emagent-acp--maybe-complete-deferred-prompt "emagent-acp-prompt")
 (declare-function emagent-acp--drain-permission-queue "emagent-acp-request")
 
 ;;; -------------------------------------------------------------------------
@@ -165,9 +164,13 @@ buffer signals \"Selecting deleted buffer\"."
 (defun emagent-acp--maybe-recover-stall (state)
   "Unstick a session that finished on the wire but left the buffer open.
 
+Runs `emagent-acp--stall-recovery-functions' (see `emagent-acp-state') instead
+of calling `emagent-acp-prompt' functions by name, since `emagent-acp-prompt'
+requires this file.
+
 Arguments: STATE."
   (when (and state (emagent-acp-state-ready state) (not (emagent-acp-state-busy state)))
-    (emagent-acp--maybe-complete-deferred-prompt state)
+    (run-hook-with-args 'emagent-acp--stall-recovery-functions state)
     (when (emagent-acp-state-permission-queue state)
       (emagent-acp--drain-permission-queue state))))
 

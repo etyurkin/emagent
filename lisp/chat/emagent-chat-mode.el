@@ -38,6 +38,7 @@
 (require 'emagent-log)
 (require 'emagent-chat-markup)
 (require 'emagent-chat-header)
+(require 'emagent-session-store)
 (require 'emagent-context)
 (require 'emagent-chat-mode-line)
 (require 'emagent-chat-actions)
@@ -48,7 +49,6 @@
 (declare-function emagent-chat--unregister-live-buffer "emagent-chat")
 
 (declare-function org-appear-mode "ext:org-appear")
-(declare-function emagent-chat--cancel-scheduled-table-align "emagent-chat")
 
 ;; ACP connect/send composition lives above this file (`emagent-acp-connect'
 ;; requires `emagent-chat'); declared here rather than required to avoid a
@@ -90,7 +90,7 @@ first prompt without spawning the agent.  Claude agent slash commands require
             (goto-char (point-min))
             ;; Accept both modern #+STARTUP: and legacy STARTUP: (without #+).
             (re-search-forward "^\\(?:#\\+\\)?STARTUP:.*\\bhideblocks\\b" nil t))
-    (emagent-chat--write-top-property "STARTUP" "hideblocks")))
+    (emagent-session-store-write-top-property "STARTUP" "hideblocks")))
 
 (defun emagent-chat--disable-incompatible-org-minor-modes ()
   "Turn off org minor modes that break on emagent chat buffer content."
@@ -246,22 +246,22 @@ Run \\[emagent-mode] to reconnect a saved session."
     (setq-local emagent-chat--tool-call-lines (make-hash-table :test 'equal))
     (emagent-chat--writable)
     (when-let* ((raw (or emagent-chat-project-directory
-                         (emagent-chat--read-project-property)))
+                         (emagent-session-store-read-project-property)))
                 (dir (expand-file-name raw)))
       (setq emagent-chat-project-directory dir)
-      (emagent-chat--write-top-property "EMAGENT_PROJECT"
-                                        (emagent-chat--display-project-directory dir)))
+      (emagent-session-store-write-top-property
+       "EMAGENT_PROJECT" (emagent-session-store-display-project-directory dir)))
     (setq emagent-chat-session-id (or emagent-chat-session-id
-                                      (emagent-chat--read-session-property))
-          emagent-chat-model (or emagent-chat-model (emagent-chat--read-model-property))
+                                      (emagent-session-store-read-session-property))
+          emagent-chat-model (or emagent-chat-model (emagent-session-store-read-model-property))
           emagent-chat-provider (emagent-session-agent)
           emagent-chat-allowed-tools (or emagent-chat-allowed-tools
-                                         (emagent-chat--read-allowed-tools-property))
+                                         (emagent-session-store-read-allowed-tools-property))
           emagent-chat-allowed-permissions (or emagent-chat-allowed-permissions
-                                              (emagent-chat--read-allowed-permissions-property))
+                                              (emagent-session-store-read-allowed-permissions-property))
           emagent-chat--font-lock-deferred-p nil)
     (emagent-chat--cancel-scheduled-table-align)
-    (when-let ((model (or emagent-chat-model (emagent-chat--read-model-property))))
+    (when-let ((model (or emagent-chat-model (emagent-session-store-read-model-property))))
       (setq emagent-chat-model (emagent-model-canonical-id model)))
     (setq-local default-directory (emagent-chat--session-directory))
     (if (bound-and-true-p doom-modeline-mode)
@@ -474,7 +474,7 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
       (rename-buffer buffer-name t)
       (setq emagent-chat-slug slug
             emagent-chat-session-id (or emagent-chat-session-id
-                                        (emagent-chat--read-session-property)))
+                                        (emagent-session-store-read-session-property)))
       (emagent-session-set-project-directory dir))
     buffer))
 

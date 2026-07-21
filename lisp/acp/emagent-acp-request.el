@@ -40,6 +40,7 @@
 (require 'emagent-acp-state)
 (require 'emagent-acp-protocol)
 (require 'emagent-tools)
+(require 'emagent-chat-ui)
 (require 'emagent-chat)
 (require 'emagent-acp-permit)
 (require 'emagent-acp-tool-call)

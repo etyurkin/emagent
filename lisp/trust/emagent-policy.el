@@ -37,8 +37,8 @@
 (require 'emagent-policy-rules-shell)
 (require 'emagent-policy-rules-elisp)
 (require 'emagent-policy-rules-python)
+(require 'emagent-chat-ui)
 
-(declare-function emagent-tools--buttons-prompt "emagent-tools")
 (defvar emagent-tools--chat-buffer)
 (defvar emagent-tools--acp-session-p)
 
@@ -184,7 +184,10 @@ Return nil when ok, (:deny . REASON), or (:confirm . REASON)."
 (defun emagent-policy--runtime-confirm-p (reason context)
   "Prompt for runtime confirmation; return non-nil when allowed.
 
-Arguments: REASON, CONTEXT."
+Arguments: REASON, CONTEXT.
+Uses a synchronous completing-read dialog.  The inline button prompt is
+asynchronous and cannot drive `emagent-policy-enforce', which must return a
+boolean before tool execution continues."
   (or (emagent-policy--skip-runtime-confirm-p)
       (let* ((preview (truncate-string-to-width (or context "") 400 nil nil "…"))
              (preamble (when (not (string-empty-p preview))
@@ -193,17 +196,15 @@ Arguments: REASON, CONTEXT."
                                      "python"
                                    "shell")
                                  preview)))
-             (prompt (format "Policy check: *%s*" reason)))
-        (if (and (boundp 'emagent-tools--chat-buffer)
-                 emagent-tools--chat-buffer
-                 (buffer-live-p emagent-tools--chat-buffer))
-            (eq 'yes
-                (emagent-tools--buttons-prompt
-                 prompt
-                 '(("Allow" . yes) ("Deny" . no))
-                 emagent-tools--chat-buffer
-                 preamble))
-          (y-or-n-p (format "%s — allow? " prompt))))))
+             (prompt (format "Policy check: *%s*" reason))
+             (choice nil))
+        (emagent-tools--buttons-prompt
+         prompt
+         '(("Allow" . yes) ("Deny" . no))
+         nil
+         (lambda (v) (setq choice v))
+         preamble)
+        (eq 'yes choice))))
 
 (defun emagent-policy-enforce (verdict &optional context)
   "Apply VERDICT at execution time; signal `user-error' when blocked.

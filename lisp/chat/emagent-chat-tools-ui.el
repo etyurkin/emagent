@@ -43,6 +43,8 @@
 
 (require 'emagent-chat-header)
 
+(require 'emagent-session-store)
+
 (require 'emagent-chat-markup)
 
 (require 'emagent-chat-reasoning)
@@ -50,6 +52,8 @@
 (require 'emagent-chat-thought)
 
 (require 'emagent-chat-response)
+
+(require 'emagent-chat-ui)
 
 (require 'emagent-tools)
 
@@ -72,7 +76,7 @@ Arguments: TEXT."
   ;; property live in the chat buffer and are invisible from inside it.
   (let ((project (or (and (boundp 'emagent-chat-project-directory)
                           emagent-chat-project-directory)
-                     (emagent-chat--read-project-property))))
+                     (emagent-session-store-read-project-property))))
     (with-temp-buffer
       (insert text)
       (goto-char (point-min))

@@ -2,7 +2,7 @@
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; SPDX-License-Identifier: MIT
-;; Version: 1.2.6
+;; Version: 1.2.7
 ;; This file is part of emagent.
 ;;
 ;; Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -43,6 +43,7 @@
 (require 'emagent-policy-match)
 (require 'emagent-policy-rules-elisp)
 (require 'emagent-policy)
+(require 'emagent-chat-ui)
 
 (defvaralias 'emagent-tools-eval-blocked-symbols 'emagent-policy-elisp-blocked-symbols)
 (defvaralias 'emagent-tools-eval-dangerous-symbols 'emagent-policy-elisp-dangerous-symbols)
@@ -142,111 +143,6 @@ of in the minibuffer.  Bound per MCP dispatch by `emagent-mcp--run-tool'.")
   "When non-nil, skip Emacs-side tool confirmation for this call.
 ACP chat sessions use `session/request_permission' instead; a second MCP
 prompt would not block the agent and is ignored.")
-
-(defun emagent-tools--apply-button-line-keymap (beg end keymap)
-  "Attach KEYMAP to the button line spanning BEG through END (exclusive).
-Shortcuts then work anywhere on that line, including at line beginning."
-  (when (and beg end keymap (< beg end))
-    (let ((line-beg (save-excursion (goto-char beg) (line-beginning-position))))
-      (put-text-property line-beg (1- end) 'keymap keymap))))
-
-(defun emagent-tools--goto-first-button (pos)
-  "Move point to the first button at or after POS; return non-nil on success."
-  (when pos
-    (goto-char pos)
-    (or (button-at (point))
-        (when-let ((btn (next-button (max (1- pos) (point-min)))))
-          (goto-char (button-start btn))
-          t))))
-
-(defun emagent-tools--focus-inline-buttons (chat-buffer button-pos)
-  "Move point to BUTTON-POS in CHAT-BUFFER so button keymaps accept shortcuts."
-  (when (and chat-buffer (buffer-live-p chat-buffer) button-pos)
-    (when-let ((pos (if (markerp button-pos)
-                        (marker-position button-pos)
-                      button-pos)))
-      (if-let ((win (get-buffer-window chat-buffer)))
-          (progn
-            (select-window win)
-            (with-current-buffer chat-buffer
-              (emagent-tools--goto-first-button pos)
-              (recenter -3)))
-        (with-current-buffer chat-buffer
-          (emagent-tools--goto-first-button pos))))))
-
-(defun emagent-tools--buttons-prompt (prompt choices chat-buffer callback &optional preamble)
-  "Insert optional PREAMBLE, PROMPT, and CHOICES as buttons in CHAT-BUFFER.
-CHOICES is a list of (LABEL . VALUE) pairs.  Non-blocking: inserts the dialog
-and returns immediately.  CALLBACK is called with the VALUE when a button is
-clicked.  Falls back to `completing-read' (synchronous) when CHAT-BUFFER is
-nil or dead, calling CALLBACK with the chosen value."
-  (if (not (and chat-buffer (buffer-live-p chat-buffer)))
-      (let* ((labels (mapcar #'car choices))
-             (label (completing-read (concat prompt " ") labels nil t)))
-        (funcall callback (cdr (assoc label choices))))
-    (let (start-mark end-mark first-button (responded nil))
-      (let ((do-respond
-             (lambda (v)
-               (unless responded
-                 (setq responded t)
-                 (when (and start-mark end-mark
-                            (marker-buffer start-mark)
-                            (marker-buffer end-mark))
-                   (with-current-buffer chat-buffer
-                     (let ((inhibit-read-only t))
-                       (when (fboundp 'emagent-chat--writable)
-                         (funcall #'emagent-chat--writable))
-                       (delete-region (marker-position start-mark)
-                                      (marker-position end-mark)))))
-                 (funcall callback v)))))
-        (with-current-buffer chat-buffer
-          (let ((inhibit-read-only t))
-            (when (fboundp 'emagent-chat--writable)
-              (funcall #'emagent-chat--writable))
-            (goto-char (point-max))
-            (unless (bolp) (insert "\n"))
-            (setq start-mark (copy-marker (point) nil))
-            (when preamble (insert preamble))
-            (insert "\n" prompt "\n")
-            ;; Build keymap with all shortcuts BEFORE inserting buttons,
-            ;; then pass it to each insert-button so the button's own
-            ;; overlay keymap contains our shortcuts (higher priority than
-            ;; any external overlay we add afterward).
-            (let ((btn-keymap (make-sparse-keymap)))
-              (set-keymap-parent btn-keymap button-map)
-              ;; First pass: define all shortcuts in btn-keymap
-              (dolist (choice choices)
-                (let* ((v (cdr choice))
-                       (key (cond
-                             ((memq v '(yes :allow-once)) "y")
-                             ((memq v '(no :deny))        "n")
-                             ((eq v :allow-session)       "s")
-                             ((eq v :allow-always)        "w")
-                             ((memq v '(all :allow-all))  "a")
-                             (t nil))))
-                  (when key
-                    (define-key btn-keymap (kbd key)
-                                (let ((vv v))
-                                  (lambda () (interactive) (funcall do-respond vv)))))))
-              ;; Second pass: insert buttons with btn-keymap as their keymap
-              (dolist (choice choices)
-                (let ((v (cdr choice)))
-                  (unless first-button
-                    (setq first-button (copy-marker (point) nil)))
-                  (insert-button
-                   (concat "[" (car choice) "]")
-                   'keymap btn-keymap
-                   'action (lambda (_b) (funcall do-respond v))
-                   'follow-link t)
-                  (insert "  ")))
-              (insert "\n")
-              (setq end-mark (copy-marker (point) nil))
-              (when first-button
-                (emagent-tools--apply-button-line-keymap
-                 (marker-position first-button)
-                 (marker-position end-mark)
-                 btn-keymap)))))
-        (emagent-tools--focus-inline-buttons chat-buffer first-button)))))
 
 (defun emagent-tools--remember-allowed-tool (tool-name)
   "Record TOOL-NAME as allowed for this session and persist it when possible."

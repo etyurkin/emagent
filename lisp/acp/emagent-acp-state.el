@@ -40,6 +40,14 @@
 (require 'emagent-acp-protocol)
 
 (declare-function emagent-acp--refresh-mode-line "emagent-acp-usage")
+
+(defvar emagent-acp--stall-recovery-functions nil
+  "Functions run by `emagent-acp--maybe-recover-stall' on a settled session.
+Each is called with the `emagent-acp-state'.  Populated by `emagent-acp-prompt'
+at load time with `emagent-acp--maybe-complete-deferred-prompt' so
+`emagent-acp-usage' (required by `emagent-acp-prompt') does not have to declare
+a function back into it.")
+
 (defvar-local emagent-acp--session nil
   "ACP session state for the current emagent buffer.")
 

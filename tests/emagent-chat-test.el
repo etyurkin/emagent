@@ -1716,7 +1716,7 @@ bracket must flush once the following non-`(' text confirms it is not a link."
       (should (string= (file-truename outside-home)
                        (emagent-chat--display-path outside-home))))
     (should (string= (file-name-as-directory (abbreviate-file-name project))
-                     (emagent-chat--display-project-directory project)))))
+                     (emagent-session-store-display-project-directory project)))))
 
 (ert-deftest emagent-chat-test-display-path-relative-ignores-default-directory ()
   "Relative paths resolve against the project, not `default-directory'.

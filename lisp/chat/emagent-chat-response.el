@@ -82,9 +82,6 @@ Thinking block."
           emagent-chat--thought-open-p nil
           emagent-chat--reasoning-streamed-p nil)))
 
-(declare-function emagent-chat--flush-deferred-font-lock "emagent-chat")
-(declare-function emagent-chat--schedule-align-org-tables "emagent-chat")
-
 (defun emagent-chat-insert-system (message)
   "Append system MESSAGE to `emagent-log-buffer-name'."
   (emagent-log "%s" message))

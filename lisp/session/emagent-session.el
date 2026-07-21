@@ -34,16 +34,17 @@
 ;; live here — below the chat UI — rather than in `emagent-chat', which would
 ;; force those layers to depend upward on the whole UI module.
 ;;
-;; Persistence (org top-property read/write) and model-id normalization live in
-;; the leaf `emagent-chat-header'; permission stores live in
-;; `emagent-permissions'.  This module carries no UI side effects — callers that
-;; also need a mode-line refresh (e.g. on a model change) wrap these accessors.
+;; Persistence (org top-property read/write) lives in the leaf
+;; `emagent-session-store'; model-id normalization lives in `emagent-model';
+;; permission stores live in `emagent-permissions'.  This module carries no
+;; UI side effects — callers that also need a mode-line refresh (e.g. on a
+;; model change) wrap these accessors.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'emagent-model)
-(require 'emagent-chat-header)
+(require 'emagent-session-store)
 (require 'emagent-permissions)
 
 ;;;; Buffer-local session fields
@@ -79,30 +80,30 @@ New choices persist under `emagent-permissions-directory'.")
 
 (defun emagent-session-id ()
   "Return the persisted ACP session id for the current buffer."
-  (or emagent-chat-session-id (emagent-chat--read-session-property)))
+  (or emagent-chat-session-id (emagent-session-store-read-session-property)))
 
 (defun emagent-session-set-id (session-id)
   "Store ACP SESSION-ID in the current buffer."
   (unless (equal emagent-chat-session-id session-id)
     (setq emagent-chat-session-id session-id)
-    (emagent-chat--write-top-property "EMAGENT_SESSION" session-id)))
+    (emagent-session-store-write-top-property "EMAGENT_SESSION" session-id)))
 
 (defun emagent-session-clear-id ()
   "Remove the ACP session id from the current buffer."
   (setq emagent-chat-session-id nil)
-  (emagent-chat--delete-top-property "EMAGENT_SESSION"))
+  (emagent-session-store-delete-top-property "EMAGENT_SESSION"))
 
 (defun emagent-session-set-project-directory (directory)
   "Store DIRECTORY as the project directory in the current buffer."
   (let ((dir (expand-file-name directory)))
     (setq emagent-chat-project-directory dir)
     (setq-local default-directory dir)
-    (emagent-chat--write-top-property "EMAGENT_PROJECT"
-                                      (emagent-chat--display-project-directory dir))))
+    (emagent-session-store-write-top-property
+     "EMAGENT_PROJECT" (emagent-session-store-display-project-directory dir))))
 
 (defun emagent-session-project-directory ()
   "Return the project directory for the current emagent buffer."
-  (or emagent-chat-project-directory (emagent-chat--read-project-property)))
+  (or emagent-chat-project-directory (emagent-session-store-read-project-property)))
 
 (defun emagent-session-set-model (model)
   "Store ACP MODEL id in the current buffer.
@@ -110,13 +111,13 @@ No UI side effects — callers that need a mode-line refresh add it themselves."
   (setq model (emagent-model-canonical-id model))
   (unless (equal emagent-chat-model model)
     (setq emagent-chat-model model)
-    (emagent-chat--write-top-property "EMAGENT_MODEL" model))
+    (emagent-session-store-write-top-property "EMAGENT_MODEL" model))
   (setq emagent-chat-model (or emagent-chat-model model)))
 
 (defun emagent-session-model ()
   "Return the ACP model id for the current emagent buffer."
   (emagent-model-canonical-id
-   (or emagent-chat-model (emagent-chat--read-model-property))))
+   (or emagent-chat-model (emagent-session-store-read-model-property))))
 
 (defun emagent-session-model-display (&optional model)
   "Return MODEL as a short label for the mode line."
@@ -127,19 +128,19 @@ No UI side effects — callers that need a mode-line refresh add it themselves."
   "Store the ACP provider AGENT symbol in the current buffer."
   (when agent
     (setq emagent-chat-provider agent)
-    (emagent-chat--write-top-property "EMAGENT_AGENT" (symbol-name agent))))
+    (emagent-session-store-write-top-property "EMAGENT_AGENT" (symbol-name agent))))
 
 (defun emagent-session-agent ()
   "Return the ACP provider symbol for the current emagent buffer, or nil."
   (or emagent-chat-provider
-      (when-let* ((value (emagent-chat--read-agent-property))
+      (when-let* ((value (emagent-session-store-read-agent-property))
                   ((not (string-empty-p value))))
         (intern value))))
 
 (defun emagent-session-allowed-tools ()
   "Return MCP tools allowed without confirmation for this buffer's project."
   (let* ((legacy (or emagent-chat-allowed-tools
-                     (emagent-chat--read-allowed-tools-property)))
+                     (emagent-session-store-read-allowed-tools-property)))
          (stored (when-let ((dir (emagent-session-project-directory)))
                    (emagent-permissions-project-tools dir))))
     (cl-delete-duplicates (append legacy stored))))
@@ -157,7 +158,7 @@ No UI side effects — callers that need a mode-line refresh add it themselves."
 (defun emagent-session-allowed-permissions ()
   "Return legacy buffer permission fingerprints still honored at the gate."
   (or emagent-chat-allowed-permissions
-      (emagent-chat--read-allowed-permissions-property)))
+      (emagent-session-store-read-allowed-permissions-property)))
 
 (defun emagent-session-add-allowed-permission (fingerprint)
   "Persist FINGERPRINT as globally allowed for ACP permission requests."

@@ -6,7 +6,7 @@
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; URL: https://github.com/etyurkin/emagent
-;; Version: 1.2.6
+;; Version: 1.2.7
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: comm tools
 
@@ -456,7 +456,7 @@ leaves the session files in the old location and causes session/load to fail."
         (emagent-acp-shutdown-buffer))
       (emagent-acp-ensure-connected)
       (message "emagent: project → %s, reconnecting…"
-               (emagent-chat--display-project-directory new-dir)))))
+               (emagent-session-store-display-project-directory new-dir)))))
 
 (dolist (sym '(emagent-trust-workspace
                emagent-trust-claude-reconnect
