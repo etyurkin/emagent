@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -36,21 +35,36 @@
 
 (require 'cl-lib)
 (require 'map)
+(require 'org)
 (require 'emagent-log)
+(require 'emagent-acp-model)
+(require 'emagent-acp-state)
+(require 'emagent-chat-input)
+(require 'emagent-session)
+(require 'emagent-chat-model-ui)
 
 (defgroup emagent-chat nil
   "Emagent chat UI."
   :group 'emagent)
 
-(declare-function emagent-session-project-directory "emagent-session")
-(declare-function emagent-chat--user-zone-start "emagent-chat-input")
-(declare-function emagent-chat--user-heading-re "emagent-chat-input")
-(declare-function emagent-chat-cycle-or-org-cycle "emagent-chat")
-(declare-function emagent-acp-ensure-connected "emagent")
-(declare-function emagent-acp--session "emagent-acp-state")
-(declare-function emagent-acp--connected-p "emagent-acp-state")
-(declare-function emagent-acp--model-choices "emagent-acp-model")
-(declare-function emagent-chat--slash-mcp-apply "emagent-chat-mcp")
+;; Owned by `emagent-acp-connect' (which requires `emagent-chat', so this
+;; file — required by the facade — cannot require it back); set there once
+;; the real implementation is defined, so use before connect is a no-op.
+(defvar emagent-chat--on-ensure-connected #'ignore
+  "Function called to connect the current buffer's ACP provider if needed.
+Called with the same `:on-ready'/`:on-reveal' keyword arguments as
+`emagent-acp-ensure-connected'.")
+
+;; Owned by `emagent-chat-mcp' (which requires this file for slash-token
+;; helpers, so this file cannot require it back); set there once the real
+;; implementation is defined.
+(defvar emagent-chat--on-slash-mcp #'ignore
+  "Function called to run the client `/mcp' UI for the current buffer.")
+
+(defun emagent-chat-cycle-or-org-cycle ()
+  "Cycle visibility with `org-cycle' (responses fold as native Org subtrees)."
+  (interactive)
+  (org-cycle))
 
 (defconst emagent-chat--client-slash-commands
   '(((name . "model")
@@ -97,7 +111,7 @@ stripped from the text sent to the agent."
       (user-error "No `/model' token at point"))
     (if (emagent-acp--connected-p)
         (emagent-chat--slash-model-apply-1 bounds)
-      (emagent-acp-ensure-connected
+      (funcall emagent-chat--on-ensure-connected
        :on-ready
        (lambda ()
          (with-current-buffer buf
@@ -108,9 +122,7 @@ stripped from the text sent to the agent."
   "Run the client slash command NAME (dispatch after completion)."
   (pcase name
     ("model" (emagent-chat--slash-model-apply))
-    ("mcp"
-     (require 'emagent-chat-mcp)
-     (emagent-chat--slash-mcp-apply))))
+    ("mcp" (funcall emagent-chat--on-slash-mcp))))
 
 (defvar emagent-chat-provider)
 (defvar-local emagent-chat-slash-commands nil

@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -41,20 +40,11 @@
 (require 'emagent-acp-provider)
 (require 'emagent-acp-protocol)
 (require 'emagent-chat-compress)
-(require 'emagent-chat-mcp)
-
-;; Defined in emagent-acp-prompt.el, which declares this file's functions the
-;; same way; declaring here avoids a require cycle between the two modules.
-(declare-function emagent-acp--cancel-outstanding-permissions "emagent-acp-request")
-(declare-function emagent-acp--refresh-mode-line "emagent-acp-usage")
-(declare-function emagent-acp--agent-error-only-response-p "emagent-acp-prompt")
-(declare-function emagent-acp--turn-hit-transient-error-p "emagent-acp-prompt")
-(declare-function emagent-acp--turn-did-no-work-p "emagent-acp-prompt")
-(declare-function emagent-chat-begin-thought "emagent-chat-thought")
-(declare-function emagent-chat--open-response-p "emagent-chat")
-(declare-function emagent-chat--send-pending-end "emagent-chat")
-(declare-function emagent-chat--promote-transient-to-thinking "emagent-chat-reasoning")
-(declare-function emagent-acp--chat-buffer "emagent-acp-usage")
+(require 'emagent-acp-usage)
+(require 'emagent-chat)
+(require 'emagent-chat-reasoning)
+(require 'emagent-chat-thought)
+(require 'emagent-acp-permission-queue)
 
 (defun emagent-acp-attach-context (text)
   "Attach TEXT to the next prompt in the current buffer."
@@ -103,23 +93,6 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
     (push (substring text pos) parts)
     (cons (string-trim (apply #'concat (nreverse parts)))
           (nreverse images))))
-
-(defun emagent-acp--abort-compress-empty (state)
-  "Close an empty /compress request with an error in the chat buffer.
-
-Arguments: STATE."
-  (emagent-acp--clear-prompt-watchdog state)
-  (emagent-acp--cancel-prompt-render state)
-  (setf (emagent-acp-state-busy state) nil)
-  (setf (emagent-acp-state-assistant-text state) "")
-  (setf (emagent-acp-state-thought-text state) "")
-  (setf (emagent-acp-state-prompt-finalized state) t)
-  (setf (emagent-acp-state-prompt-finishing state) nil)
-  (when-let ((buf (emagent-acp--chat-buffer state)))
-    (with-current-buffer buf
-      (when-let ((cb (emagent-acp-state-cb-fail state)))
-        (funcall cb "No conversation to compress"))))
-  (emagent-acp--refresh-mode-line state))
 
 (defconst emagent-acp--materialize-prompt-text
   (concat "Acknowledge that this compacted session is ready. "
@@ -359,8 +332,15 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
   ;; Push the now-busy status; the mode line starts the spinner from it.
   (emagent-acp--refresh-mode-line state))
 
-(cl-defun emagent-acp-send-prompt (user-text)
-  "Send USER-TEXT to the current buffer's ACP session."
+(cl-defun emagent-acp-send-prompt (user-text &optional compress)
+  "Send USER-TEXT to the current buffer's ACP session.
+
+When COMPRESS is non-nil, USER-TEXT is already a compression summary prompt
+assembled by `emagent-chat--dispatch-compress': context injection is skipped
+and the turn is marked so `emagent-acp--render-prompt-response' resets the
+session with the summary once it finishes.  MCP and /compress detection live
+in the chat send path (`emagent-chat-send'); by the time a prompt reaches
+here it is always the final text to dispatch."
   (let* ((state (emagent-acp--session))
          (session-id (emagent-acp-state-session-id state)))
     (unless (emagent-acp-state-ready state)
@@ -368,44 +348,28 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
     (when (emagent-acp-state-busy state)
       (user-error "Emagent is busy"))
     (setq user-text (emagent-acp--provider-normalize-slash-prompt state user-text))
-    ;; Safety net if `/mcp' reaches ACP send (primary intercept is chat-send).
-    (when (emagent-chat--mcp-command-p user-text)
-      (emagent-chat--slash-mcp-apply user-text)
-      (cl-return-from emagent-acp-send-prompt))
-    (let ((slash-command-p (emagent-chat--bare-slash-command-p user-text)))
-      (when (and slash-command-p
-                 (fboundp 'emagent-chat--compress-command-p)
-                 (emagent-chat--compress-command-p user-text))
-        (let ((history (with-current-buffer (emagent-acp--chat-buffer state)
-                         (emagent-chat--conversation-history-text))))
-          (if (string-empty-p history)
-              (progn
-                (emagent-acp--abort-compress-empty state)
-                (cl-return-from emagent-acp-send-prompt))
-            (setq user-text (emagent-chat--compress-prompt-text history))
-            (setf (emagent-acp-state-compress-pending state) t)
-            (setq slash-command-p nil))))
-      (let* ((extra (emagent-acp-state-extra-context state))
-             (full-prompt (if (or slash-command-p (emagent-acp-state-compress-pending state))
-                              user-text
-                            (emagent-context-build-prompt user-text extra)))
-             (extracted (emagent-acp--extract-image-links
-                         (substring-no-properties full-prompt)))
-             (clean-text (car extracted))
-             (images (cdr extracted))
-             (blocks `[((type . "text") (text . ,clean-text))]))
-        (setf (emagent-acp-state-extra-context state) nil)
-        (cond
-         ((emagent-acp-state-compress-pending state)
-          (emagent-log "compressing conversation"))
-         (slash-command-p
-          (emagent-log "send slash command: %s" user-text)))
-        (emagent-log "dispatch prompt (%d chars)" (length clean-text))
-        (emagent-acp--turn-begin state)
-        (emagent-acp--dispatch-prompt-request
-         :state state :session-id session-id
-         :blocks blocks :images images
-         :gen (emagent-acp-state-prompt-generation state) :attempt 1)))))
+    (when compress
+      (setf (emagent-acp-state-compress-pending state) t))
+    (let* ((slash-command-p (and (not compress) (emagent-chat--bare-slash-command-p user-text)))
+           (extra (emagent-acp-state-extra-context state))
+           (full-prompt (if (or slash-command-p compress)
+                            user-text
+                          (emagent-context-build-prompt user-text extra)))
+           (extracted (emagent-acp--extract-image-links
+                       (substring-no-properties full-prompt)))
+           (clean-text (car extracted))
+           (images (cdr extracted))
+           (blocks `[((type . "text") (text . ,clean-text))]))
+      (setf (emagent-acp-state-extra-context state) nil)
+      (cond
+       (compress (emagent-log "compressing conversation"))
+       (slash-command-p (emagent-log "send slash command: %s" user-text)))
+      (emagent-log "dispatch prompt (%d chars)" (length clean-text))
+      (emagent-acp--turn-begin state)
+      (emagent-acp--dispatch-prompt-request
+       :state state :session-id session-id
+       :blocks blocks :images images
+       :gen (emagent-acp-state-prompt-generation state) :attempt 1))))
 
 (cl-defun emagent-acp--finalize-in-flight-prompt (&optional stop-notice)
   "Finalize the in-flight prompt and cancel it on the agent side.
@@ -444,6 +408,12 @@ finalized."
     (emagent-acp--render-prompt-response state)
     (emagent-acp--refresh-mode-line state)
     t))
+
+;; `emagent-chat-actions' (required by the facade `emagent-chat', which this
+;; file requires) calls this indirectly through
+;; `emagent-chat--on-finalize-in-flight' (set here) so Esc-Esc/btw can stop an
+;; in-flight prompt without requiring this file back.
+(setq emagent-chat--on-finalize-in-flight #'emagent-acp--finalize-in-flight-prompt)
 
 (defun emagent-acp-interrupt ()
   "Interrupt the in-flight prompt and close the response block cleanly.

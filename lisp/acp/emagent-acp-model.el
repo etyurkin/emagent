@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -43,10 +42,11 @@
 (defvar emagent-model-history nil
   "Minibuffer history for agent/model choices.")
 
-(declare-function emagent-acp--send-request "emagent-acp-prompt")
-(require 'emagent-model)
-(declare-function emagent-acp--saved-model-id "emagent-acp-usage")
+(require 'emagent-acp-protocol)
 
+(require 'emagent-model)
+(require 'emagent-acp-usage)
+(require 'emagent-acp-wire)
 (defun emagent-acp--auto-model-candidate (state models)
   "Return the agent's auto/default model id when advertised.
 
@@ -54,9 +54,6 @@ Arguments: STATE, MODELS."
   (or (and (emagent-acp--model-available-p "default[]" state models) "default[]")
       (and (emagent-acp--model-available-p emagent-acp-auto-model-id state models)
            emagent-acp-auto-model-id)))
-(declare-function emagent-acp--session-ready "emagent-acp-lifecycle")
-(declare-function emagent-acp--progress "emagent-acp-prompt")
-(declare-function emagent-acp-make-session-set-config-option-request "emagent-acp-protocol" t)
 
 (defun emagent-acp--normalize-config-option (emagent-acp-option)
   "Internal helper for EMAGENT-ACP-OPTION."
@@ -200,12 +197,6 @@ over legacy `models'."
               (map-elt model-option :options))
     (emagent-acp--available-model-entries models)))
 
-(defun emagent-acp--current-model-id (state models)
-  
-  "Internal helper for STATE and MODELS."
-  (or (map-elt (emagent-acp--model-config-option state) :current-value)
-      (and models (map-elt models 'currentModelId))
-      (emagent-acp--saved-model-id state)))
 
 (defun emagent-acp--model-display-name (state models model-id)
   
@@ -341,6 +332,8 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
 (defun emagent-acp--finish-configure-model (state session-id on-ready resumed)
   
   "Internal helper for STATE and SESSION-ID and ON-READY and RESUMED."
+  (unless (fboundp 'emagent-acp--session-ready)
+    (require 'emagent-acp-lifecycle))
   (emagent-acp--session-ready
    :state state
    :session-id session-id

@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -29,159 +28,22 @@
 
 ;;; Commentary:
 
-;; Major mode setup and keymaps for emagent chat buffers.
+;; Facade for `emagent-mode': keymap, `define-derived-mode', public
+;; wrapper, open/send/dispatch.  Faces and activation live in
+;; `emagent-chat-mode-faces' and `emagent-chat-mode-activate'.
+;;
+;; DAG: mode-faces → mode-activate → mode facade.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'org)
-(require 'map)
-(require 'emagent-log)
-(require 'emagent-chat-markup)
+(require 'emagent-chat-mode-activate)
 (require 'emagent-chat-header)
-(require 'emagent-context)
-(require 'emagent-chat-mode-line)
+(require 'emagent-session-store)
 (require 'emagent-chat-actions)
-
-(declare-function emagent-mode-force "emagent")
-
-(declare-function org-appear-mode "ext:org-appear")
-(declare-function emagent-chat--cancel-scheduled-table-align "emagent-chat")
-
-(defun emagent-chat--ensure-org-startup ()
-  "Ensure the buffer requests Org block folding on startup."
-  (unless (save-excursion
-            (goto-char (point-min))
-            ;; Accept both modern #+STARTUP: and legacy STARTUP: (without #+).
-            (re-search-forward "^\\(?:#\\+\\)?STARTUP:.*\\bhideblocks\\b" nil t))
-    (emagent-chat--write-top-property "STARTUP" "hideblocks")))
-
-(defun emagent-chat--disable-incompatible-org-minor-modes ()
-  "Turn off org minor modes that break on emagent chat buffer content."
-  (setq-local org-element-use-cache nil)
-  ;; Toggling org-appear off runs org-element parsing on the element at point.
-  ;; During desktop restore point can sit mid-buffer with the org cache in an
-  ;; inconsistent state, which signals \"Invalid search bound (wrong side of
-  ;; point)\".  Disabling org-appear must never abort emagent-mode setup.
-  (when (bound-and-true-p org-appear-mode)
-    (condition-case nil
-        (org-appear-mode -1)
-      (error nil))))
-
-(defun emagent-chat--setup-buffer-display ()
-  "Configure prose wrapping and table scrolling for emagent buffers.
-
-Prose uses `visual-line-mode'.  Wide org tables scroll horizontally via
-`org-phscroll-mode', which applies only inside table regions — not buffer-wide.
-`truncate-lines' must stay nil; phscroll does not work when it is t.
-
-Runs late on `org-mode-hook' so it overrides user hooks (e.g. org-modern
-`kwarks/org--table-buffer-setup') that disable wrapping globally."
-  (when (derived-mode-p 'emagent-mode)
-    (setq-local org-startup-truncated nil
-                truncate-lines nil)
-    (when (boundp 'word-wrap)
-      (setq-local word-wrap t))
-    (visual-line-mode 1)
-    (when (fboundp 'org-phscroll-mode)
-      (org-phscroll-mode 1))))
-
-(defvar-local emagent-chat--safe-src-fontify-p nil
-  "Non-nil when this buffer uses buffer-local safe src fontification.")
-
-(defvar-local emagent-chat--safe-fontify-installed nil
-  "Non-nil when `emagent-chat--safe-fontify-region' is installed locally.")
-
-(defconst emagent-chat--org-src-fontify-fn
-  (symbol-function 'org-src-font-lock-fontify-block)
-  "Original `org-src-font-lock-fontify-block' function cell.")
-
-(defun emagent-chat--setup-faces ()
-  "Configure org highlighting, line wrap, and block folding for emagent buffers."
-  (emagent-chat--disable-incompatible-org-minor-modes)
-  (emagent-chat--enable-safe-src-fontify)
-  (setq-local org-src-fontify-natively t
-              org-ellipsis "…"
-              org-fontify-quote-and-verse-blocks t
-              org-cycle-hide-block-startup t
-              ;; Render `[[link][text]]' as just TEXT regardless of the
-              ;; user's global setting — the `/model' marker and any links
-              ;; in agent output should read as links, not raw markup.
-              org-link-descriptive t)
-  (when font-lock-mode
-    (font-lock-flush))
-  (emagent-chat--setup-buffer-display))
-
-(defun emagent-chat--setup-faces-deferred ()
-  "Re-apply `emagent-chat--setup-faces' after org startup hooks finish."
-  (when (derived-mode-p 'emagent-mode)
-    (emagent-chat--setup-faces)))
-
-(defun emagent-chat--fragile-shell-src-p (lang start end)
-  "Return non-nil when LANG src between START and END would break `sh-mode'.
-
-`sh-mode' signals `end-of-buffer' while font-locking a command substitution
-that wraps a heredoc (`$(cat <<'EOF'...)').  Detect that cheaply and skip
-native fontification instead of paying for the failing pass.
-
-Arguments: LANG, START, END."
-  (and (member (downcase (or lang "")) '("sh" "bash" "shell" "zsh"))
-       (< start end)
-       (save-excursion
-         (save-restriction
-           (narrow-to-region start end)
-           (goto-char start)
-           (and (search-forward "$(" end t)
-                (search-forward "<<" end t))))))
-
-(defun emagent-chat--plain-src-block-face (start end)
-  "Mark START..END as a plain `org-block' without native lang fontify."
-  (add-text-properties
-   start end
-   '(face org-block src-block t
-     font-lock-fontified t fontified t font-lock-multiline t)))
-
-(defun emagent-chat--safe-src-fontify-block (lang start end)
-  "Safe `org-src-font-lock-fontify-block' for emagent session buffers.
-
-Skip native fontification for fragile shell heredoc patterns and catch
-other lang font-lock errors so large session buffers stay quiet.
-
-Arguments: LANG, START, END."
-  (if (emagent-chat--fragile-shell-src-p lang start end)
-      (emagent-chat--plain-src-block-face start end)
-    (condition-case nil
-        (funcall emagent-chat--org-src-fontify-fn lang start end)
-      (error
-       (emagent-chat--plain-src-block-face start end)
-       nil))))
-
-(defun emagent-chat--safe-fontify-region (orig beg end &optional verbose)
-  "Around buffer-local `font-lock-fontify-region-function' for sessions.
-
-Rebinds `org-src-font-lock-fontify-block' only while fontifying this
-buffer — no global `advice-add' on Org.
-
-Arguments: ORIG, BEG, END, VERBOSE."
-  (if (not emagent-chat--safe-src-fontify-p)
-      (funcall orig beg end verbose)
-    (cl-letf (((symbol-function 'org-src-font-lock-fontify-block)
-               #'emagent-chat--safe-src-fontify-block))
-      (funcall orig beg end verbose))))
-
-(defun emagent-chat--enable-safe-src-fontify ()
-  "Install buffer-local safe src fontification for the current buffer."
-  (setq-local emagent-chat--safe-src-fontify-p t)
-  (unless emagent-chat--safe-fontify-installed
-    (add-function :around (local 'font-lock-fontify-region-function)
-                  #'emagent-chat--safe-fontify-region)
-    (setq-local emagent-chat--safe-fontify-installed t)))
-
-(declare-function emagent-chat-tab "emagent-chat-slash")
-(declare-function emagent-chat-beginning-of-line "emagent-chat-input")
-(declare-function emagent-chat-yank "emagent-chat-attach")
-(declare-function emagent-chat-history-previous-or-previous-line "emagent-chat-input")
-(declare-function emagent-chat-history-next-or-next-line "emagent-chat-input")
+(require 'emagent-chat-attach)
+(require 'emagent-chat-input)
 
 (defvar emagent-mode-map
   (let ((map (make-sparse-keymap)))
@@ -196,8 +58,12 @@ Arguments: ORIG, BEG, END, VERBOSE."
     map)
   "Keymap for `emagent-mode'.")
 
-(define-derived-mode emagent-mode org-mode "Emagent"
-  "Major mode for emagent chat scratch buffers.
+;; The public `defun emagent-mode' further down this file redefines this
+;; symbol with a different (optional-arg) calling convention; suppress the
+;; resulting compiler warning about the redefinition, on both definitions.
+(with-suppressed-warnings ((callargs emagent-mode) (redefine emagent-mode))
+  (define-derived-mode emagent-mode org-mode "Emagent"
+    "Major mode for emagent chat scratch buffers.
 
 Derived from `org-mode'.  Type after the `* user>' stub, then
 \\[emagent-chat-send] to send the prompt at point (its heading line
@@ -207,109 +73,97 @@ completes available commands.  Agent responses are inserted between
 `** Thinking' / `** Response' subsections (TAB folds them as Org headlines).
 
 Run \\[emagent-mode] to reconnect a saved session."
-  (require 'emagent)
-  (setq-local buffer-read-only nil)
-  (setq-local emagent-chat--tool-call-lines (make-hash-table :test 'equal))
-  (emagent-chat--writable)
-  (when-let* ((raw (or emagent-chat-project-directory
-                       (emagent-chat--read-project-property)))
-              (dir (expand-file-name raw)))
-    (setq emagent-chat-project-directory dir)
-    (emagent-chat--write-top-property "EMAGENT_PROJECT"
-                                      (emagent-chat--display-project-directory dir)))
-  (setq emagent-chat-session-id (or emagent-chat-session-id
-                                    (emagent-chat--read-session-property))
-        emagent-chat-model (or emagent-chat-model (emagent-chat--read-model-property))
-        emagent-chat-provider (emagent-session-agent)
-        emagent-chat-allowed-tools (or emagent-chat-allowed-tools
-                                       (emagent-chat--read-allowed-tools-property))
-        emagent-chat-allowed-permissions (or emagent-chat-allowed-permissions
-                                            (emagent-chat--read-allowed-permissions-property))
-        emagent-chat--font-lock-deferred-p nil)
-  (emagent-chat--cancel-scheduled-table-align)
-  (when-let ((model (or emagent-chat-model (emagent-chat--read-model-property))))
-    (setq emagent-chat-model (emagent-model-canonical-id model)))
-  (setq-local default-directory (emagent-chat--session-directory))
-  (if (bound-and-true-p doom-modeline-mode)
-      (emagent-chat--setup-doom-modeline)
-    (setq-local mode-line-format
-                  (append (default-value 'mode-line-format)
-                          '(" " (:eval (emagent-mode-line))))))
-  (org-indent-mode -1)
-  (emagent-chat--disable-incompatible-org-minor-modes)
-  (when-let ((dir (emagent-session-project-directory)))
-    (rename-buffer (emagent-chat--buffer-name-for-label
-                    (emagent-chat--short-cwd-label dir))
-                   t))
-  (emagent-chat--insert-initial-comment)
-  (emagent-chat--sync-user-zone-marker)
-  (add-hook 'completion-at-point-functions
-            #'emagent-chat-slash-command-completion-at-point -90 t)
-  (setq-local imenu-create-index-function #'emagent-chat--imenu-create-index)
-  (font-lock-add-keywords nil emagent-chat--tool-line-font-lock-keywords 'append)
-  (setq-local bookmark-make-record-function #'emagent-chat--bookmark-make-record)
-  (emagent-chat--setup-faces)
-  (emagent-chat--mode-line-recompute)
-  (run-with-idle-timer 0 nil #'emagent-chat--setup-faces-deferred))
+    (require 'emagent)
+    (setq-local buffer-read-only nil)
+    (setq-local emagent-chat--tool-call-lines (make-hash-table :test 'equal))
+    (emagent-chat--writable)
+    (when-let* ((raw (or emagent-chat-project-directory
+                         (emagent-session-store-read-project-property)))
+                (dir (expand-file-name raw)))
+      (setq emagent-chat-project-directory dir)
+      ;; Normalize the header form without dirtying a just-opened file.
+      ;; Trailing-slash / abbreviate differences used to mark every visit
+      ;; modified even when the project path was unchanged.
+      (let* ((display (emagent-session-store-display-project-directory dir))
+             (current (emagent-session-store-read-project-property))
+             (current-norm
+              (and current
+                   (emagent-session-store-display-project-directory current)))
+             (was-modified (buffer-modified-p)))
+        (unless (equal current-norm display)
+          (emagent-session-store-write-top-property "EMAGENT_PROJECT" display)
+          (set-buffer-modified-p was-modified))))
+    (setq emagent-chat-session-id (or emagent-chat-session-id
+                                      (emagent-session-store-read-session-property))
+          emagent-chat-model (or emagent-chat-model (emagent-session-store-read-model-property))
+          emagent-chat-provider (emagent-session-agent)
+          emagent-chat-allowed-tools (or emagent-chat-allowed-tools
+                                         (emagent-session-store-read-allowed-tools-property))
+          emagent-chat-allowed-permissions (or emagent-chat-allowed-permissions
+                                              (emagent-session-store-read-allowed-permissions-property))
+          emagent-chat--font-lock-deferred-p nil)
+    (emagent-chat--cancel-scheduled-table-align)
+    (when-let ((model (or emagent-chat-model (emagent-session-store-read-model-property))))
+      (setq emagent-chat-model (emagent-model-canonical-id model)))
+    (setq-local default-directory (emagent-chat--session-directory))
+    (if (bound-and-true-p doom-modeline-mode)
+        (emagent-chat--setup-doom-modeline)
+      (setq-local mode-line-format
+                    (append (default-value 'mode-line-format)
+                            '(" " (:eval (emagent-mode-line))))))
+    (org-indent-mode -1)
+    (emagent-chat--disable-incompatible-org-minor-modes)
+    (when-let ((dir (emagent-session-project-directory)))
+      (rename-buffer (emagent-chat--buffer-name-for-label
+                      (emagent-chat--short-cwd-label dir))
+                     t))
+    (emagent-chat--insert-initial-comment)
+    (emagent-chat--sync-user-zone-marker)
+    (add-hook 'completion-at-point-functions
+              #'emagent-chat-slash-command-completion-at-point -90 t)
+    (setq-local imenu-create-index-function #'emagent-chat--imenu-create-index)
+    (font-lock-add-keywords nil emagent-chat--tool-line-font-lock-keywords 'append)
+    (setq-local bookmark-make-record-function #'emagent-chat--bookmark-make-record)
+    (emagent-chat--setup-faces)
+    (emagent-chat--mode-line-recompute)
+    (emagent-chat--register-live-buffer)
+    (add-hook 'kill-buffer-hook #'emagent-chat--unregister-live-buffer nil t)
+    (run-with-idle-timer 0 nil #'emagent-chat--setup-faces-deferred)))
 
 (defalias 'emagent--derived-mode (symbol-function 'emagent-mode)
   "Bare `define-derived-mode' implementation of `emagent-mode'.
 
 Captured immediately after `define-derived-mode' so the public
-`emagent-mode' entry can wrap display deferral without `advice-add'.
-Reloading this file re-captures and reinstalls the public entry.")
+`emagent-mode' defun below can wrap display deferral without `advice-add'.
+Installed into `emagent--derived-mode-function' for
+`emagent-chat-mode-activate' (which must not require this facade back).")
 
-(defun emagent--install-mode-entry ()
-  "Reinstall public `emagent-mode' after reloading this file.
+(setq emagent--derived-mode-function #'emagent--derived-mode)
 
-`define-derived-mode' overwrites `emagent-mode'; restore the entry
-wrapper when it is already defined in emagent.el.
 
-Copy the function cell rather than creating a symbol alias.
-Emacs 29's `provided-mode-derived-p' follows symbol aliases and would
-then look for `derived-mode-parent' on `emagent-mode-entry' (nil),
-breaking `derived-mode-p'."
-  (when (fboundp 'emagent-mode-entry)
-    (defalias 'emagent-mode (symbol-function 'emagent-mode-entry))))
+;;;###autoload
+(with-suppressed-warnings ((redefine emagent-mode))
+  (defun emagent-mode (&optional arg)
+    "Major mode for emagent chat scratch buffers.
 
-(emagent--install-mode-entry)
+ARG is accepted for major-mode compatibility; pass `force' (or use
+`emagent-mode-force') to bypass display deferral.
 
-(defun emagent--run-derived-mode ()
-  "Run derived `emagent-mode' with Org startup inline images disabled.
+Derived from `org-mode'.  Type after the `* user>' stub, then
+\\[emagent-chat-send] to send the prompt at point (its heading line
+plus any body lines).
+On a slash-command line (plugin skills such as /workflow:dev),
+\\[emagent-chat-tab] completes available commands.  Agent responses are
+inserted between `** Thinking' / `** Response' subsections (TAB folds
+them as Org headlines).
 
-Only bind `org-startup-with-inline-images' here.  Do not let-bind
-`org-element-use-cache': the mode body and
-`emagent-chat--disable-incompatible-org-minor-modes' set it buffer-local,
-and let-binding it makes `setq-local' fail on Emacs 29."
-  (let ((org-startup-with-inline-images nil))
-    (emagent--derived-mode)))
+When `emagent-activate-on-display' is non-nil, opening an undisplayed
+session file defers full activation until first display.
 
-(defun emagent-chat--session-buffer-p ()
-  "Return non-nil when current buffer resembles an emagent session file."
-  (and (derived-mode-p 'org-mode)
-       (save-excursion
-         (save-restriction
-           (widen)
-           (goto-char (point-min))
-           (let ((limit (min (+ (point-min) 4096) (point-max))))
-             (or (looking-at-p "# -*- mode: emagent -*-")
-                 (re-search-forward
-                  "^#\\+EMAGENT_SESSION:[ \t]*\\S-"
-                  limit t)))))))
+Run \\[emagent-mode] to reconnect a saved session."
+    (interactive "P")
+    (emagent-mode-entry arg)))
 
-(defun emagent-chat--ensure-mode-cookie ()
-  "Insert `# -*- mode: emagent -*-' at point-min when missing.
-
-Session files always carry the cookie so `set-auto-mode' routes through
-`emagent-mode' (and its safe Org init bindings) instead of bare
-`org-mode'."
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (unless (looking-at-p "[ \t]*# -*- mode: emagent -*-")
-        (let ((inhibit-read-only t))
-          (insert "# -*- mode: emagent -*-\n"))))))
 
 (cl-defun emagent-chat-open (&key project-dir)
   "Open or create an emagent buffer for PROJECT-DIR.
@@ -329,13 +183,11 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
       (rename-buffer buffer-name t)
       (setq emagent-chat-slug slug
             emagent-chat-session-id (or emagent-chat-session-id
-                                        (emagent-chat--read-session-property)))
+                                        (emagent-session-store-read-session-property)))
       (emagent-session-set-project-directory dir))
     buffer))
 
 ;;;; Context-sensitive C-c C-c
-
-(declare-function emagent-chat--send-bounds "emagent-chat-input")
 
 (defun emagent-chat-send-or-babel ()
   "Execute the src block at point, send the prompt, or defer to org.
@@ -395,13 +247,6 @@ working inside session buffers."
          t)
         (call-interactively 'emagent--transient-menu))
     (message "emagent: SPC=send, c=connect, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
-
-(add-hook 'org-mode-hook #'emagent-chat--setup-buffer-display 110 t)
-(add-hook 'emagent-mode-hook #'emagent-chat--setup-faces 100 t)
-(dolist (buffer (buffer-list))
-  (with-current-buffer buffer
-    (when (derived-mode-p 'emagent-mode)
-      (emagent-chat--setup-faces))))
 
 (provide 'emagent-chat-mode)
 ;;; emagent-chat-mode.el ends here

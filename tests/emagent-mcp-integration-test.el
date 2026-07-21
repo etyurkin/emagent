@@ -198,6 +198,80 @@
     (should (string-match-p "HTTP/1.1 200" sent))
     (should (string-match-p "/tmp" sent))))
 
+;;;; Timer-yield drain
+
+(ert-deftest emagent-mcp-integration-test-filter-defers-dispatch-to-timer ()
+  "Filter only buffers DATA and schedules a drain tick; it never dispatches inline."
+  (let* ((proc (generate-new-buffer " *fake*"))
+         (store (make-hash-table :test 'eq))
+         (scheduled nil)
+         (request (emagent-test--http-post
+                   "tok" (json-serialize '((jsonrpc . "2.0") (id . 1) (method . "ping"))))))
+    (emagent-test--with-mocks
+        (((symbol-function 'process-get)
+          (lambda (p prop) (and (eq p proc) (gethash prop store))))
+         ((symbol-function 'process-put)
+          (lambda (p prop val) (when (eq p proc) (puthash prop val store)) val))
+         ((symbol-function 'process-live-p) (lambda (p) (eq p proc)))
+         ((symbol-function 'run-with-timer)
+          (lambda (_delay _repeat fn &rest args) (setq scheduled (cons fn args)) 'fake-timer))
+         ((symbol-function 'process-send-string) (lambda (&rest _) nil)))
+      (emagent-mcp--filter proc request)
+      ;; Data is buffered but not yet parsed/dispatched by the filter itself.
+      (should (equal (gethash 'emagent-mcp-data store) request))
+      (should scheduled)
+      ;; Running the scheduled tick drains and clears the buffered request.
+      (apply (car scheduled) (cdr scheduled))
+      (should (string-empty-p (gethash 'emagent-mcp-data store))))))
+
+(ert-deftest emagent-mcp-integration-test-drain-handles-one-request-per-tick ()
+  "Drain handles exactly one buffered request per tick, then reschedules for more."
+  (let* ((proc (generate-new-buffer " *fake*"))
+         (store (make-hash-table :test 'eq))
+         (sent "")
+         (scheduled nil)
+         (req1 (emagent-test--http-post
+                "tok" (json-serialize '((jsonrpc . "2.0") (id . 1) (method . "ping")))))
+         (req2 (emagent-test--http-post
+                "tok" (json-serialize '((jsonrpc . "2.0") (id . 2) (method . "ping"))))))
+    (emagent-test--with-mocks
+        (((symbol-function 'process-get)
+          (lambda (p prop) (and (eq p proc) (gethash prop store))))
+         ((symbol-function 'process-put)
+          (lambda (p prop val) (when (eq p proc) (puthash prop val store)) val))
+         ((symbol-function 'process-live-p) (lambda (p) (eq p proc)))
+         ((symbol-function 'run-with-timer)
+          (lambda (_delay _repeat fn &rest args) (setq scheduled (cons fn args)) 'fake-timer))
+         ((symbol-function 'process-send-string)
+          (lambda (_proc data) (setq sent (concat sent data)))))
+      (puthash 'emagent-mcp-data (concat req1 req2) store)
+      (emagent-mcp--drain proc)
+      (should (= 1 (length (string-split sent "HTTP/1.1" t))))
+      (should scheduled)
+      (setq sent "")
+      (let ((next scheduled))
+        (setq scheduled nil)
+        (apply (car next) (cdr next)))
+      (should (= 1 (length (string-split sent "HTTP/1.1" t))))
+      (should (string-empty-p (gethash 'emagent-mcp-data store))))))
+
+(ert-deftest emagent-mcp-integration-test-sentinel-cancels-drain-timer ()
+  "Sentinel cancels PROC's pending drain timer when the connection closes."
+  (let* ((proc (generate-new-buffer " *fake*"))
+         (store (make-hash-table :test 'eq))
+         (cancelled nil))
+    (puthash 'emagent-mcp-drain-timer 'fake-timer store)
+    (emagent-test--with-mocks
+        (((symbol-function 'process-get)
+          (lambda (p prop) (and (eq p proc) (gethash prop store))))
+         ((symbol-function 'process-put)
+          (lambda (p prop val) (when (eq p proc) (puthash prop val store)) val))
+         ((symbol-function 'process-live-p) (lambda (_p) nil))
+         ((symbol-function 'cancel-timer) (lambda (timer) (setq cancelled timer))))
+      (emagent-mcp--sentinel proc "closed"))
+    (should (eq cancelled 'fake-timer))
+    (should-not (gethash 'emagent-mcp-drain-timer store))))
+
 (provide 'emagent-mcp-integration-test)
 
 ;;; emagent-mcp-integration-test.el ends here

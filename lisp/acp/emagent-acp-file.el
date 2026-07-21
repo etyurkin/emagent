@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -40,10 +39,8 @@
 (require 'emagent-acp-custom)
 (require 'emagent-acp-protocol)
 (require 'emagent-session)
-
-(declare-function emagent-acp--prepare-interactive-context "emagent-acp-prompt")
-(declare-function emagent-acp--notify-user "emagent-acp-prompt")
-(declare-function emagent-acp--chat-buffer "emagent-acp-usage")
+(require 'emagent-acp-prompt)
+(require 'emagent-acp-usage)
 
 (defvar emagent-tools--root-boundary)
 (defvar emagent-tools--project-directory)

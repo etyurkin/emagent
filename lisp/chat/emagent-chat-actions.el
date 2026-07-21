@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -44,14 +43,21 @@
 (require 'emagent-chat-input)
 (require 'emagent-chat-response)
 (require 'emagent-chat-reasoning)
+(require 'emagent-chat-compress)
 (require 'emagent-acp-usage)
 (require 'emagent-acp-state)
+(require 'emagent-chat-send-state)
+(require 'emagent-chat-response-state)
+(require 'emagent-chat-model-ui)
+(require 'emagent-chat-mcp)
 
-(declare-function emagent-acp-interrupt "emagent-acp-send")
-(declare-function emagent-acp--finalize-in-flight-prompt "emagent-acp-send")
-(declare-function emagent-chat--send-pending-begin "emagent-chat")
-(declare-function emagent-chat--send-pending-end "emagent-chat")
-(declare-function emagent-chat--send-active-p "emagent-chat")
+;; Owned by `emagent-acp-send' (which requires `emagent-chat', so this file —
+;; required by the facade — cannot require it back); set there once the real
+;; implementation is defined, so a stop before ACP loads is simply a no-op.
+(defvar emagent-chat--on-finalize-in-flight #'ignore
+  "Function called to finalize/cancel the in-flight ACP prompt.
+Takes one optional STOP-NOTICE argument; see
+`emagent-acp--finalize-in-flight-prompt'.")
 
 (defun emagent-chat--operation-active-p ()
   "Return non-nil when the buffer has work Esc-Esc should stop."
@@ -89,8 +95,8 @@ Return non-nil when something was stopped."
         (emagent-acp--clear-when-connected-queue))
       (emagent-chat--abort-open-response))
     (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
-      (emagent-acp--finalize-in-flight-prompt
-       "/Stopped — awaiting new instructions./"))
+      (funcall emagent-chat--on-finalize-in-flight
+               "/Stopped — awaiting new instructions./"))
     (emagent-chat--send-pending-end)
     (when (fboundp 'emagent-chat--refresh-mode-line)
       (emagent-chat--refresh-mode-line))
@@ -120,12 +126,24 @@ partial response, and sends `btw, TEXT' as a new prompt."
     (user-error "BTW message is empty"))
   (let ((text (format "btw, %s" (string-trim text))))
     (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
-      (emagent-acp--finalize-in-flight-prompt))
+      (funcall emagent-chat--on-finalize-in-flight))
     (emagent-log "btw send: %s" (emagent-log-truncate-line text 80))
     (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
       (emagent-chat--begin-response response-pos))
     (when emagent-chat--on-send
       (funcall emagent-chat--on-send text))))
+
+(defun emagent-chat--dispatch-compress ()
+  "Handle a /compress-family slash command from `emagent-chat-send'.
+
+Summarizes the prior conversation and forwards the summary to
+`emagent-chat--on-send' with the compress flag, so ACP resets the session with
+it once the turn finishes (see `emagent-acp-send-prompt').  With no prior
+conversation, fails the just-opened response instead of dispatching."
+  (let ((history (emagent-chat--conversation-history-text)))
+    (if (string-empty-p history)
+        (emagent-chat-fail-assistant "No conversation to compress")
+      (funcall emagent-chat--on-send (emagent-chat--compress-prompt-text history) t))))
 
 (defun emagent-chat-send ()
   "Send the `* user>' prompt at point to the agent (C-c C-c).
@@ -150,11 +168,8 @@ Sending a previous prompt replaces its old response."
       (when (string-empty-p input)
         (user-error "Prompt is empty"))
       ;; Client `/mcp' never goes to the agent (Claude or Cursor).
-      (if (and (fboundp 'emagent-chat--mcp-command-p)
-               (emagent-chat--mcp-command-p input))
-          (progn
-            (require 'emagent-chat-mcp)
-            (emagent-chat--slash-mcp-apply input))
+      (if (emagent-chat--mcp-command-p input)
+          (emagent-chat--slash-mcp-apply input)
         (when override
           (setq emagent-chat--turn-model override))
         (let ((response-pos
@@ -175,7 +190,11 @@ Sending a previous prompt replaces its old response."
                 (emagent-chat--insert-switching-scaffold)
               (emagent-chat--insert-preparing-scaffold)))
           (when emagent-chat--on-send
-            (funcall emagent-chat--on-send input)))))))
+            (if (and (emagent-chat--bare-slash-command-p input)
+                     (emagent-chat--compress-command-p input))
+                (emagent-chat--dispatch-compress)
+              (funcall emagent-chat--on-send input))))))))
+
 (defun emagent-chat-interrupt ()
   "Stop any in-flight emagent work (ESC ESC).
 

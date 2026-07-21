@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; SPDX-License-Identifier: MIT
 
 ;; This file is part of emagent.
@@ -29,15 +28,13 @@
 ;;; Commentary:
 
 ;; MCP tool entries gated by `emagent-struct-available-p'.  Appended to
-;; `emagent-mcp--tools' in emagent-mcp.el.
+;; `emagent-mcp--tools' in emagent-mcp-registry.el.
 
 ;;; Code:
 
 (require 'emagent-struct)
 (require 'emagent-tools)
-
-(declare-function emagent-mcp--arg "emagent-mcp")
-(declare-function emagent-mcp--bool "emagent-mcp")
+(require 'emagent-mcp-util)
 
 (defun emagent-mcp--structural-path-prop ()
   "JSON schema property for a structural tool file path."

@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -38,9 +37,9 @@
 (require 'map)
 (require 'emagent-log)
 (require 'emagent-acp-custom)
-(require 'emagent-acp-protocol)
+(require 'emagent-acp-protocol-client)
 
-(declare-function emagent-acp--refresh-mode-line "emagent-acp-usage")
+
 (defvar-local emagent-acp--session nil
   "ACP session state for the current emagent buffer.")
 
@@ -135,38 +134,6 @@ Arguments: EMAGENT-ACP-ERROR."
   (or emagent-acp--session
       (error "No active emagent session for this buffer")))
 
-(defun emagent-acp--agent-rss-mb (state)
-  "Return the agent process RSS in MB via `process-attributes', or nil.
-
-Arguments: STATE."
-  (when-let* ((client (emagent-acp-state-client state))
-              (proc (and client (map-elt client :process)))
-              ((processp proc))
-              (pid (process-id proc))
-              ((> pid 0))
-              (attrs (ignore-errors (process-attributes pid)))
-              (rss-kb (alist-get 'rss attrs)))
-    (round (/ (float rss-kb) 1024))))
-
-(defun emagent-acp--start-rss-timer (state)
-  "Start a repeating timer that refreshes :agent-rss in STATE every 15 s."
-  (when-let ((old (emagent-acp-state-agent-rss-timer state)))
-    (cancel-timer old))
-  (setf (emagent-acp-state-agent-rss-timer state)
-            (run-with-timer
-             5 15
-             (lambda ()
-               (if (buffer-live-p (emagent-acp-state-chat-buffer state))
-                   (let ((mb (emagent-acp--agent-rss-mb state)))
-                     (setf (emagent-acp-state-agent-rss state) mb)
-                     (emagent-acp--refresh-mode-line state))
-                 (emagent-acp--stop-rss-timer state))))))
-
-(defun emagent-acp--stop-rss-timer (state)
-  "Cancel the RSS polling timer for STATE."
-  (when-let ((timer (and state (emagent-acp-state-agent-rss-timer state))))
-    (cancel-timer timer)
-    (setf (emagent-acp-state-agent-rss-timer state) nil)))
 
 (defun emagent-acp--turn-phase (state)
   "Return the lifecycle phase of STATE's current turn.
@@ -219,6 +186,11 @@ underlying representation for now."
        (emagent-acp-state-ready emagent-acp--session)
        (let ((client (emagent-acp-state-client emagent-acp--session)))
          (and client (emagent-acp--client-started-p client)))))
+
+(defun emagent-acp--permission-pending-p (state)
+  "Return non-nil when STATE has unanswered permission requests."
+  (or (emagent-acp-state-permission-busy state)
+      (emagent-acp-state-permission-queue state)))
 
 (defun emagent-acp--cancel-wakeup (state)
   "Cancel a pending or armed agent wakeup (ScheduleWakeup) for STATE."
@@ -274,6 +246,54 @@ Bridges the keyword-keyed callback alist wired by the app to typed slots."
     (:cb-permission     (setf (emagent-acp-state-cb-permission state) value))
     (:cb-status         (setf (emagent-acp-state-cb-status state) value))
     (_ (emagent-log "unknown callback key %S" key))))
+
+(defconst emagent-acp--agent-error-signature-re
+  (concat "RetriableError\\|getaddrinfo\\|ENOTFOUND\\|EAI_AGAIN"
+          "\\|ECONNRESET\\|ECONNREFUSED\\|ConnectionRefused"
+          "\\|ETIMEDOUT\\|EPIPE"
+          "\\|\\[unavailable\\]\\|socket hang up\\|WritableIterable is closed")
+  "Machine-generated markers of a transient error emitted as agent output.
+Deliberately stricter than `emagent-acp--retriable-prompt-error-p': it must
+not match prose such as \"network error\" or \"timeout\" that can legitimately
+appear inside a real answer.")
+
+(defun emagent-acp--turn-did-no-work-p (state)
+  "Return non-nil when STATE's turn did no real work.
+No tool invocations and little text means replaying the prompt is safe."
+  (let ((text (string-trim (or (emagent-acp-state-assistant-text state) "")))
+        (titles (emagent-acp-state-tool-call-titles state)))
+    (and (or (null titles) (zerop (hash-table-count titles)))
+         (< (length text) 400))))
+
+(defun emagent-acp--agent-error-only-response-p (state)
+  "Return non-nil when STATE's finished turn is only a transient agent error.
+
+Some agents (e.g. cursor-agent-acp) accept the prompt, then hit a transient
+network failure and emit the error as the whole turn's output instead of
+failing the request.  Such a turn carries no real content and no tool calls
+\(`emagent-acp--turn-did-no-work-p'), so it is safe for emagent to re-issue the
+prompt with backoff rather than surface the error.  Matching uses
+`emagent-acp--agent-error-signature-re', which only recognises
+machine-generated error markers."
+  (let ((text (string-trim (or (emagent-acp-state-assistant-text state) ""))))
+    (and (not (emagent-acp-state-compress-pending state))
+         (not (emagent-acp-state-quiet-prompt state))
+         (emagent-acp--turn-did-no-work-p state)
+         (not (string-empty-p text))
+         (string-match-p emagent-acp--agent-error-signature-re text))))
+
+(defun emagent-acp--turn-hit-transient-error-p (state)
+  "Return non-nil when STATE's finished turn ended on a transient error marker.
+
+Unlike `emagent-acp--agent-error-only-response-p' this does not require the
+turn to be empty: it is true even when tool calls ran or real content was
+produced.  Such a turn must NOT be replayed (that would repeat side effects
+like commits or pushes); instead emagent resumes it by sending \"continue\",
+mirroring what a user does by hand."
+  (let ((text (or (emagent-acp-state-assistant-text state) "")))
+    (and (not (emagent-acp-state-compress-pending state))
+         (not (emagent-acp-state-quiet-prompt state))
+         (string-match-p emagent-acp--agent-error-signature-re text))))
 
 (provide 'emagent-acp-state)
 ;;; emagent-acp-state.el ends here

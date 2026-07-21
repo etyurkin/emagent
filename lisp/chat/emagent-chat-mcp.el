@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:gpt-5.3-codex
 
 ;; SPDX-License-Identifier: MIT
 
@@ -42,11 +41,9 @@
 (require 'map)
 (require 'emagent-log)
 (require 'emagent-session)
-
-(declare-function emagent-chat--slash-token-bounds "emagent-chat-slash")
-(declare-function emagent-cursor-write-mcp-approvals "emagent-mcp-server")
-(declare-function emagent-cursor-check-command "emagent-cursor")
-(declare-function emagent-cursor-command "emagent-cursor")
+(require 'emagent-chat-slash)
+(require 'emagent-mcp-server)
+(require 'emagent-cursor-command)
 
 (defvar emagent-chat-provider)
 
@@ -127,7 +124,6 @@ Supports Cursor \(`name: status'\) and Claude
   "Return (PROGRAM . DEFAULT-DIRECTORY) for the current provider's MCP CLI."
   (pcase emagent-chat-provider
     ('cursor
-     (require 'emagent-cursor)
      (emagent-cursor-check-command)
      (cons (emagent-cursor-command) (emagent-session-project-directory)))
     ('claude
@@ -337,6 +333,11 @@ health-checks the in-process emagent MCP server."
     (delete-region (car bounds) (cdr bounds)))
   (emagent-chat--mcp-select-and-act (and text (emagent-chat--mcp-arg text))))
 
+;; `emagent-chat-slash' (required above) cannot require this file back (this
+;; file requires it, for the slash-token helpers), so the callback slot it
+;; declares is wired here once the real implementation is defined.
+(setq emagent-chat--on-slash-mcp #'emagent-chat--slash-mcp-apply)
+
 (defun emagent-cursor-approve-configured-mcp-servers ()
   "Approve non-emagent servers from ~/.cursor/mcp.json for the session cwd.
 
@@ -344,7 +345,6 @@ Writes Cursor's per-project mcp-approvals.json (required for ACP to load
 http MCP servers) and also runs `cursor-agent mcp enable' as a belt-and-
 braces.  Best-effort; failures are logged."
   (require 'emagent-mcp)
-  (require 'emagent-cursor)
   (when (and (eq emagent-chat-provider 'cursor)
              (executable-find (emagent-cursor-command)))
     (let* ((directory (emagent-session-project-directory))

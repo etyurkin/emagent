@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -37,15 +36,10 @@
 
 (require 'cl-lib)
 (require 'map)
-
-(declare-function emagent-chat--with-stable-view "emagent-chat")
-(declare-function emagent-chat--writable "emagent-chat-input")
-(declare-function emagent-chat--metadata-end "emagent-chat-header")
-(declare-function emagent-chat--user-heading-prefix "emagent-chat-input")
-(declare-function emagent-chat--reset-response-state "emagent-chat-response")
-(declare-function emagent-chat--sync-user-zone-marker "emagent-chat-input")
-(declare-function emagent-chat--find-open-response-begin "emagent-chat")
-(declare-function emagent-chat--user-heading-re "emagent-chat-input")
+(require 'emagent-session-store)
+(require 'emagent-chat-input)
+(require 'emagent-chat-response)
+(require 'emagent-chat-response-state)
 
 (defun emagent-chat--bare-slash-command-p (text)
   "Return non-nil when TEXT is a single-line slash command."
@@ -82,7 +76,7 @@
 (defun emagent-chat--conversation-history-text ()
   "Return prior conversation text for /compress, or \"\"."
   (save-excursion
-    (let* ((zone (emagent-chat--metadata-end))
+    (let* ((zone (emagent-session-store-metadata-end))
            (end (or (emagent-chat--compress-boundary) (point))))
       (when (and end (> end zone))
         (string-trim (buffer-substring-no-properties zone end))))))

@@ -6,6 +6,7 @@
 (require 'emagent-test-utils)
 (require 'emagent-chat)
 (require 'emagent-acp-tool-call)
+(require 'emagent-acp-connect)
 
 ;;;; Slugs and labels
 
@@ -75,6 +76,37 @@
   (should (string-match-p "<conversation>" (emagent-chat--compress-prompt-text "hello")))
   (should (string-match-p "hello" (emagent-chat--compress-prompt-text "hello"))))
 
+(ert-deftest emagent-chat-test-dispatch-compress-empty-fails ()
+  "A /compress with no prior conversation fails the response, not dispatch."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (let (dispatched)
+         (setq emagent-chat--on-send (lambda (&rest _args) (setq dispatched t)))
+         (goto-char (point-max))
+         (insert (emagent-chat--user-heading-prefix) "/compress")
+         (emagent-chat-send)
+         (should-not dispatched)
+         (should (string-match-p "No conversation to compress" (buffer-string))))))))
+
+(ert-deftest emagent-chat-test-dispatch-compress-sends-summary ()
+  "A /compress with prior conversation sends a summary prompt with COMPRESS set."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (insert (emagent-chat--user-heading-prefix) "hello\n\n** Response\nhi there\n\n")
+       (let (sent-text sent-compress)
+         (setq emagent-chat--on-send
+               (lambda (text &optional compress)
+                 (setq sent-text text sent-compress compress)))
+         (goto-char (point-max))
+         (insert (emagent-chat--user-heading-prefix) "/compress")
+         (emagent-chat-send)
+         (should sent-compress)
+         (should (string-match-p "<conversation>" sent-text))
+         (should (string-match-p "hello" sent-text)))))))
+
 (ert-deftest emagent-chat-test-bare-slash-command-p ()
   (should (emagent-chat--bare-slash-command-p "/compress"))
   (should (emagent-chat--bare-slash-command-p "/plan refactor auth"))
@@ -88,7 +120,7 @@
     (let ((emagent-default-provider 'cursor)
           (emagent-chat-slash-commands nil))
       (delay-mode-hooks (emagent-mode))
-      (emagent--on-mode-enable)
+      (emagent-chat--on-mode-enable)
       (should (eq emagent-chat-provider 'cursor))
       (should (cl-find "compress" emagent-chat-slash-commands
                        :key (lambda (c) (map-elt c 'name))
@@ -1171,7 +1203,7 @@ no custom fontification), even on org heading lines (prompt and Thinking)."
     (let (restored)
       (cl-letf (((symbol-function 'emagent-acp-set-model-transient)
                  (lambda (m _cb) (setq restored m))))
-        (emagent--restore-turn-model))
+        (emagent-acp--restore-turn-model))
       (should (equal "sonnet" restored))
       (should-not emagent-chat--turn-model)
       (should-not emagent-chat--turn-model-base))))
@@ -1187,7 +1219,7 @@ no custom fontification), even on org heading lines (prompt and Thinking)."
                  (lambda (&rest _) (setq prompted t)))
                 ((symbol-function 'emagent-acp-set-model-transient)
                  (lambda (_ _cb) nil)))
-        (emagent--turn-model-on-failure
+        (emagent-acp--turn-model-on-failure
          "prompt failed: Internal error: Prompt is too long"))
       (should-not prompted)
       (should-not emagent-chat--turn-model)
@@ -1684,7 +1716,7 @@ bracket must flush once the following non-`(' text confirms it is not a link."
       (should (string= (file-truename outside-home)
                        (emagent-chat--display-path outside-home))))
     (should (string= (file-name-as-directory (abbreviate-file-name project))
-                     (emagent-chat--display-project-directory project)))))
+                     (emagent-session-store-display-project-directory project)))))
 
 (ert-deftest emagent-chat-test-display-path-relative-ignores-default-directory ()
   "Relative paths resolve against the project, not `default-directory'.
@@ -1726,6 +1758,23 @@ makes the link unclickable in org-mode."
   (should (string= "see https://example.com/a/b"
                    (emagent-chat--org-verbatim-paths
                     "see https://example.com/a/b"))))
+
+(ert-deftest emagent-chat-test-bold-around-inline-code ()
+  "Finish conversion must turn **`code`** into org * =code= *, not leave **.
+
+Regression: `emagent-chat--convert-agent-markup' converted backticks but not
+markdown bold, so finish rewrite replaced a clean streamed body with
+`**=code=**' markdown leaks."
+  (should (string= "*=PATCH_ENV= cell-transparent* — nested =let=/=LOOP="
+                   (emagent-chat--convert-agent-markup
+                    "**`PATCH_ENV` cell-transparent** — nested `let`/`LOOP`")))
+  (should (string= "1. *=PATCH_ENV= cell-transparent* — nested =let="
+                   (emagent-chat--convert-agent-markup
+                    "1. **`PATCH_ENV` cell-transparent** — nested `let`")))
+  ;; Already-converted verbatim inside leftover markdown bold.
+  (should (string= "*=PATCH_ENV= cell-transparent*"
+                   (emagent-chat--convert-agent-markup
+                    "**=PATCH_ENV= cell-transparent**"))))
 
 (ert-deftest emagent-chat-test-inline-code-preserves-backslashes ()
   "Inline-code conversion must not reinterpret backslashes in the span.
@@ -1777,6 +1826,41 @@ replacement text when agent output contains paths like C:\\Users."
             (should-not (string-match-p "^\\*\\* Thinking" text))
             (should (string-match-p (emagent-chat--user-heading-re) text))
             (should (= (point) (emagent-chat--user-prompt-input-pos))))))))))
+
+(ert-deftest emagent-chat-test-finalize-streamed-assistant-skips-rewrite-when-unchanged ()
+  "Finalizing with text identical to the streamed body skips delete+insert."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-append-assistant "Hello world.")
+          (let ((before-body (emagent-chat--response-body-text))
+                (deleted nil))
+            (cl-letf (((symbol-function 'delete-region)
+                       (lambda (&rest _) (setq deleted t))))
+              (emagent-chat--finalize-streamed-assistant "Hello world."))
+            (should-not deleted)
+            (should (string= before-body (emagent-chat--response-body-text)))
+            (should-not (string-match-p "Hello world\\.Hello world\\."
+                                        (emagent-chat--response-body-text))))))))))
+
+(ert-deftest emagent-chat-test-finalize-streamed-assistant-rewrites-when-changed ()
+  "Finalizing with text that differs from the streamed body still rewrites it."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-append-assistant "Loading data...")
+          (emagent-chat-finish-assistant "Here:\n\n| a | b |\n| 1 | 2 |")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "^|-" text))
+            (should-not (string-match-p "Loading data" text)))))))))
 
 (ert-deftest emagent-chat-test-finish-keeps-tools-in-reasoning ()
   (emagent-test--with-emagent-buffer

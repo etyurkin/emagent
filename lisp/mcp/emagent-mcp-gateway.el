@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -30,7 +29,7 @@
 ;;; Commentary:
 
 ;; Feature shim for the MCP gateway.  Prompt gating and Cursor project
-;; approvals live in `emagent-mcp-server'
+;; approvals live under `emagent-mcp-server' leaves
 ;; (`emagent-mcp-gateway-system-prompt', `emagent-cursor-write-mcp-approvals').
 
 ;;; Code:

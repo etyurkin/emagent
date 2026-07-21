@@ -1,9 +1,8 @@
-;;; emagent-chat-mode-line.el --- Mode-line status and spinner for emagent  -*- lexical-binding: t; -*-
+;;; emagent-chat-mode-line.el --- Mode-line status for emagent chat  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -29,205 +28,21 @@
 
 ;;; Commentary:
 
-;; Busy spinner animation, mode-line status string assembly, context-usage
-;; display, and doom-modeline integration for emagent chat buffers.
+;; Mode-line status string assembly, context-usage display, and doom-modeline
+;; integration for emagent chat buffers.  Busy spinner lives in
+;; `emagent-chat-spinner' (DAG: buffer → spinner → mode-line).
 
 ;;; Code:
 
-(require 'cl-lib)
-(require 'map)
+(require 'emagent-chat-buffer)
+(require 'emagent-chat-spinner)
+(require 'emagent-chat-response-state)
+(require 'emagent-chat-send-state)
+(require 'emagent-session)
 
-(declare-function emagent-chat--open-response-p "emagent-chat")
-(declare-function emagent-chat-model-display "emagent-chat")
-(declare-function doom-modeline-set-modeline "ext:doom-modeline")
-
-;;; -------------------------------------------------------------------------
-;;; Spinner appearance
-;;; -------------------------------------------------------------------------
-
-(defgroup emagent-chat nil
-  "Emagent chat UI."
-  :group 'emagent)
-
-(defvar emagent-chat--spinner-timer nil
-  "Repeating timer that advances the spinner while any session is busy.")
-
-(defun emagent-chat--spinner-after-custom-set (sym val)
-  "Set SYM to VAL and refresh emagent mode lines."
-  (set-default sym val)
-  (set sym val)
-  (when (and (eq sym 'emagent-chat-spinner-interval)
-             emagent-chat--spinner-timer)
-    (cancel-timer emagent-chat--spinner-timer)
-    (setq emagent-chat--spinner-timer
-          (run-with-timer 0 val #'emagent-chat--spinner-tick)))
-  (dolist (buf (buffer-list))
-    (when (buffer-live-p buf)
-      (with-current-buffer buf
-        (when (derived-mode-p 'emagent-mode)
-          (emagent-chat--mode-line-recompute)
-          (emagent-chat--maybe-force-mode-line-update)))))
-  nil)
-
-(defcustom emagent-chat-spinner-interval 0.4
-  "Seconds between spinner animation frames."
-  :type 'number
-  :group 'emagent-chat
-  :set #'emagent-chat--spinner-after-custom-set)
-
-(defcustom emagent-chat-spinner-height 1.15
-  "Scale factor for spinner dots or the braille glyph (`height' face property).
-When nil, the spinner inherits the mode-line height."
-  :type '(choice (const :tag "inherit" nil) number)
-  :group 'emagent-chat
-  :set #'emagent-chat--spinner-after-custom-set)
-
-(defcustom emagent-chat-spinner-style 'dots
-  "How to render the busy spinner in the mode line.
-`braille' is one Unicode braille character; `dots' is three horizontal dots."
-  :type '(choice (const :tag "Braille glyph" braille)
-                 (const :tag "Dot grid" dots))
-  :group 'emagent-chat
-  :set #'emagent-chat--spinner-after-custom-set)
-
-(defcustom emagent-chat-spinner-dot-on "●"
-  "Character for a lit spinner dot when `emagent-chat-spinner-style' is `dots'."
-  :type 'string
-  :group 'emagent-chat
-  :set #'emagent-chat--spinner-after-custom-set)
-
-(defcustom emagent-chat-spinner-dot-off "○"
-  "Character for an unlit spinner dot when `emagent-chat-spinner-style' is `dots'."
-  :type 'string
-  :group 'emagent-chat
-  :set #'emagent-chat--spinner-after-custom-set)
-
-(defface emagent-chat-spinner
-  '((t (:inherit (bold mode-line-emphasis))))
-  "Face for the mode-line busy spinner glyph."
-  :group 'emagent-chat)
-
-;;; -------------------------------------------------------------------------
-;;; Frame data and rendering
-;;; -------------------------------------------------------------------------
-
-(defconst emagent-chat--spinner-frames ["⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"]
-  "Braille spinner frames shown while the agent is busy.")
-
-(defvar emagent-chat--spinner-frame 0
-  "Current spinner frame index into `emagent-chat--spinner-frames'.")
-
-(defvar emagent-chat--spinner-start-time nil
-  "Epoch time when the busy spinner animation started, or nil when idle.")
-
-(defconst emagent-chat--spinner-dot-frames '((t nil nil) (nil t nil) (nil nil t) (nil t nil))
-  "Four-frame chase: @00, 0@0, 00@, 0@0, and so on.")
-
-(defun emagent-chat--spinner-frame-count ()
-  "Return the number of spinner frames for the active style."
-  (pcase emagent-chat-spinner-style
-    ('dots (length emagent-chat--spinner-dot-frames))
-    (_ (length emagent-chat--spinner-frames))))
-
-(defun emagent-chat--spinner-dot-face (lit)
-  "Return the face for spinner dot LIT state."
-  (let ((height emagent-chat-spinner-height))
-    (if lit
-        (if height
-            `(:inherit emagent-chat-spinner :height ,height)
-          'emagent-chat-spinner)
-      (if height
-          `(:inherit shadow :height ,height)
-        'shadow))))
-
-(defun emagent-chat--spinner-dot-char (lit)
-  "Return a propertized on/off dot character.
-
-Arguments: LIT."
-  (propertize (if lit emagent-chat-spinner-dot-on emagent-chat-spinner-dot-off)
-              'face (emagent-chat--spinner-dot-face lit)))
-
-(defun emagent-chat--spinner-dot-grid ()
-  "Return three horizontal dots for the current spinner frame."
-  (let ((pattern (nth emagent-chat--spinner-frame emagent-chat--spinner-dot-frames)))
-    (concat (emagent-chat--spinner-dot-char (nth 0 pattern))
-            (emagent-chat--spinner-dot-char (nth 1 pattern))
-            (emagent-chat--spinner-dot-char (nth 2 pattern)))))
-
-(defun emagent-chat--spinner-braille ()
-  "Return the current frame as one braille character."
-  (let ((face (if emagent-chat-spinner-height
-                  `(:inherit emagent-chat-spinner
-                            :height ,emagent-chat-spinner-height)
-                'emagent-chat-spinner)))
-    (propertize (aref emagent-chat--spinner-frames emagent-chat--spinner-frame)
-                'face face)))
-
-(defun emagent-chat--spinner-sync-frame ()
-  "Update `emagent-chat--spinner-frame' from elapsed time since spinner start."
-  (when emagent-chat--spinner-start-time
-    (let* ((count (emagent-chat--spinner-frame-count))
-           (interval (max 0.05 emagent-chat-spinner-interval)))
-      (setq emagent-chat--spinner-frame
-            (% (floor (/ (- (float-time) emagent-chat--spinner-start-time)
-                         interval))
-               count))
-      t)))
-
-(defun emagent-chat--spinner-string ()
-  "Return the current spinner rendering for the mode line."
-  (emagent-chat--spinner-sync-frame)
-  (pcase emagent-chat-spinner-style
-    ('dots (emagent-chat--spinner-dot-grid))
-    (_ (emagent-chat--spinner-braille))))
-
-(defun emagent-chat--mode-line-spinner-suffix ()
-  "Return the propertized busy spinner suffix for the mode line."
-  (concat " " (emagent-chat--spinner-string)))
-
-(defun emagent-chat--spinner-active-p ()
-  "Return non-nil when the mode-line thinking spinner should animate."
-  (and (or (emagent-chat--stat :busy) emagent-chat--send-pending)
-       (not (emagent-chat--stat :waiting-permission))))
-
-(defun emagent-chat--spinner-animate-p (&optional buffer)
-  "Return non-nil when BUFFER is displayed and should animate the spinner.
-
-The spinner keeps animating whenever the buffer is shown in any visible
-window, including an unselected window (two emagent buffers side by side) or
-while Emacs is unfocused.  It stops only when no visible frame displays the
-buffer."
-  (with-current-buffer (or buffer (current-buffer))
-    (and (emagent-chat--spinner-active-p)
-         (emagent-chat--buffer-displayed-p (current-buffer)))))
-
-(defun emagent-chat--any-spinner-active-p ()
-  "Return non-nil when any active emagent buffer needs spinner animation."
-  (cl-loop for buf in (buffer-list)
-           thereis (and (buffer-live-p buf)
-                        (with-current-buffer buf
-                          (and (derived-mode-p 'emagent-mode)
-                               (emagent-chat--spinner-animate-p buf))))))
-
-(declare-function emagent-chat--buffer-active-p "emagent-chat-markup")
-(declare-function emagent-chat--buffer-displayed-p "emagent-chat-markup")
-(declare-function emagent-chat--maybe-force-mode-line-update "emagent-chat")
-
-(defun emagent-chat--spinner-stop ()
-  "Cancel the spinner timer when no session needs animation."
-  (when emagent-chat--spinner-timer
-    (cancel-timer emagent-chat--spinner-timer))
-  (setq emagent-chat--spinner-timer nil
-        emagent-chat--spinner-start-time nil))
-
-(defun emagent-chat--spinner-ensure-running ()
-  "Start or stop the spinner timer based on active busy emagent buffers."
-  (if (emagent-chat--any-spinner-active-p)
-      (unless emagent-chat--spinner-timer
-        (setq emagent-chat--spinner-start-time (float-time)
-              emagent-chat--spinner-frame 0)
-        (emagent-chat--spinner-restart-timer))
-    (emagent-chat--spinner-stop)))
+;; Owned by the facade `emagent-chat' (which requires this file); forward
+;; declared here so this file never requires it back.
+(defvar emagent-chat--turn-model)
 
 ;;; -------------------------------------------------------------------------
 ;;; Mode-line cache and refresh
@@ -249,32 +64,41 @@ buffer."
   "Plist snapshot of ACP session status, pushed by the ACP layer via :cb-status.
 
 Keys: :busy :waiting-permission :ready :prompt-finishing :tool :tool-kind :rss
-:ctx-usage (a (USED . SIZE) cons or nil) :ctx-unavailable.  The mode line
-renders from this snapshot so the UI never calls up into the ACP runtime.")
+:model-id :ctx-usage (a (USED . SIZE) cons or nil) :ctx-unavailable.  The mode
+line renders from this snapshot so the UI never calls up into the ACP runtime.")
 
 (defun emagent-chat--stat (key)
   "Return status field KEY from the pushed ACP snapshot."
   (plist-get emagent-chat--status key))
+
+(defun emagent-chat-model-display ()
+  "Return a short model label for the mode line.
+Prefer the pending `/model' target while preparing a send, then the live ACP
+session model pushed via `emagent-chat-set-status' (including transient
+per-turn switches), otherwise the buffer's saved #+EMAGENT_MODEL."
+  (let ((id (cond
+              ((and emagent-chat--send-pending emagent-chat--turn-model)
+               emagent-chat--turn-model)
+              ((emagent-chat--stat :ready)
+               (emagent-chat--stat :model-id))
+              (t (emagent-session-model)))))
+    (when id (emagent-session-model-display id))))
+
+(defun emagent-chat-set-model (model)
+  "Store ACP MODEL id in the current buffer and refresh the mode line."
+  (emagent-session-set-model model)
+  (emagent-chat--refresh-mode-line))
 
 (defun emagent-chat-set-status (status)
   "Store the ACP STATUS snapshot for this buffer and refresh the mode line.
 This is the ACP layer's downward entry point (wired as :cb-status); it replaces
 the mode line pulling session state back out of the ACP layer."
   (setq emagent-chat--status status)
-  (when (and (emagent-chat--stat :busy)
-             (fboundp 'emagent-chat--spinner-ensure-running))
+  (when (emagent-chat--stat :busy)
     (emagent-chat--spinner-ensure-running))
   (if (emagent-chat--stat :busy)
       (emagent-chat--refresh-mode-line-soon)
     (emagent-chat--refresh-mode-line)))
-
-(defun emagent-chat--spinner-refresh-buffer (buffer)
-  "Refresh BUFFER's mode line when it is the active busy emagent buffer."
-  (with-current-buffer buffer
-    (when (emagent-chat--spinner-animate-p buffer)
-      (emagent-chat--mode-line-recompute)
-      (emagent-chat--maybe-force-mode-line-update)
-      t)))
 
 (defun emagent-chat--mode-line-recompute ()
   "Rebuild cached mode-line strings for the current emagent buffer."
@@ -377,46 +201,6 @@ the mode line pulling session state back out of the ACP layer."
                        (when rss-str   (concat sep rss-str)))))
     (cons head tail)))
 
-;;; -------------------------------------------------------------------------
-;;; Spinner lifecycle
-;;; -------------------------------------------------------------------------
-
-(defun emagent-chat--spinner-refresh-idle ()
-  "Apply the current spinner frame to the active busy emagent buffer.
-
-Uses `force-mode-line-update' only — never `redisplay'.  A forced redisplay
-from this timer re-entered `window-configuration-change-hook' and could run
-deferred org table alignment on the chat buffer until Emacs pegged CPU."
-  (let (active-refreshed)
-    (dolist (buf (buffer-list))
-      (when (buffer-live-p buf)
-        (with-current-buffer buf
-          (when (emagent-chat--spinner-refresh-buffer buf)
-            (setq active-refreshed t)))))
-    (when active-refreshed
-      (force-mode-line-update t))
-    (emagent-chat--spinner-ensure-running)))
-
-(defun emagent-chat--spinner-tick ()
-  "Refresh visible busy mode lines for the current spinner frame."
-  (emagent-chat--spinner-sync-frame)
-  (emagent-chat--spinner-refresh-idle))
-
-(defun emagent-chat--spinner-restart-timer ()
-  "Restart the spinner timer using `emagent-chat-spinner-interval'."
-  (when emagent-chat--spinner-timer
-    (cancel-timer emagent-chat--spinner-timer))
-  (setq emagent-chat--spinner-timer
-        (run-with-timer 0 emagent-chat-spinner-interval
-                        #'emagent-chat--spinner-tick)))
-
-(defun emagent-chat--spinner-start ()
-  "Start the spinner timer if not already running."
-  (emagent-chat--spinner-ensure-running)
-  (when (derived-mode-p 'emagent-mode)
-    (emagent-chat--mode-line-recompute)
-    (emagent-chat--maybe-force-mode-line-update)))
-
 (defun emagent-chat--mode-line-context-usage ()
   "Return a propertized context fill string, or nil.
 Shows a percentage when the provider reports context usage, `ctx:n/a' when a
@@ -479,7 +263,7 @@ connected provider (cursor) cannot report it, and nil otherwise."
   "Use the emagent doom-modeline layout when doom-modeline is active."
   (when (featurep 'doom-modeline)
     (emagent-chat--register-doom-modeline)
-    (when doom-modeline-mode
+    (when (and doom-modeline-mode (fboundp 'doom-modeline-set-modeline))
       (doom-modeline-set-modeline 'emagent-chat))))
 
 ;; Apply the emagent doom-modeline layout whenever an emagent buffer is

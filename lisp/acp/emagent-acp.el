@@ -1,10 +1,8 @@
 ;;; emagent-acp.el --- ACP wire-up for emagent -*- lexical-binding: t; -*-
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 ;; SPDX-License-Identifier: MIT
-;; Version: 1.2.5
-
+;; Version: 1.2.7
 ;; This file is part of emagent.
 ;;
 ;; Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -70,46 +68,16 @@
 (require 'emagent-acp-request)
 (require 'emagent-acp-prompt)
 (require 'emagent-acp-notify)
+(require 'emagent-acp-system-prompt)
 (require 'emagent-acp-lifecycle)
 (require 'emagent-acp-send)
 (require 'emagent-prompts)
-
-(defun emagent-acp--system-prompt ()
-  "Return the system prompt for new ACP sessions."
-  (concat emagent-acp-system-prompt
-          (emagent-mcp-gateway-system-prompt)
-          (when emagent-acp-prefer-emacs
-            (emagent-prompts--prefer-emacs-prompt))
-          (when emagent-acp-prefer-emacs
-            (emagent-prompts--structural-policy))))
-
-(defun emagent-acp--session-system-prompt (&optional compressed-context)
-  "Return the system prompt for session/new, optionally with COMPRESSED-CONTEXT."
-  (let ((summary (string-trim (or compressed-context ""))))
-    (if (string-empty-p summary)
-        (emagent-acp--system-prompt)
-      (concat (emagent-acp--system-prompt)
-              (format "\n\n[Compressed prior conversation context]\n%s"
-                      summary)))))
-
-(declare-function emagent-chat-clear-slash-commands "emagent-chat-slash")
-(declare-function emagent-chat-seed-cursor-slash-commands "emagent-chat-slash")
-(declare-function emagent-chat--bare-slash-command-p "emagent-chat-compress")
-(declare-function emagent-chat--compress-command-p "emagent-chat-compress")
-(declare-function emagent-chat--conversation-history-text "emagent-chat-compress")
-(declare-function emagent-chat--compress-prompt-text "emagent-chat-compress")
-(declare-function emagent-chat--refresh-mode-line-soon "emagent-chat-mode-line")
-(declare-function emagent-chat--spinner-start "emagent-chat-mode-line")
 
 (defun emagent-acp-prefer-emacs-p ()
   "Return non-nil when emagent instructs the agent to prefer Emacs tools."
   emagent-acp-prefer-emacs)
 
 ;;;; Public session state accessors (for use by emagent-chat.el)
-
-(declare-function emagent-permissions-reset-global "emagent-permissions")
-(declare-function emagent-permissions-reset-session "emagent-permissions")
-(declare-function emagent-permissions-reset-project "emagent-permissions")
 
 (defun emagent-reset-permissions ()
   "Reset stored emagent permissions via a minibuffer menu.

@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -45,9 +44,8 @@
 (require 'emagent-acp-usage)
 (require 'emagent-acp-notify)
 (require 'emagent-acp-permit)
+(require 'emagent-acp-system-prompt)
 
-(declare-function emagent-acp--system-prompt "emagent-acp")
-(declare-function emagent-acp--session-system-prompt "emagent-acp")
 (cl-defun emagent-acp--authenticate (&key state method-id on-ready)
   "Send an authenticate request with METHOD-ID, then connect the session.
 

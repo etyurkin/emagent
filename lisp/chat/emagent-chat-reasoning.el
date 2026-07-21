@@ -3,7 +3,6 @@
 ;; Copyright (C) 2026  Evgeniy Tyurkin, Mike Ivanov
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
-;; Assisted-by: Cursor:claude-sonnet-4.6
 
 ;; SPDX-License-Identifier: MIT
 
@@ -39,8 +38,9 @@
 (require 'emagent-log)
 (require 'emagent-chat-header)
 (require 'emagent-chat-markup)
-
-(declare-function emagent-chat--model-link "emagent-chat")
+(require 'emagent-chat-model-ui)
+(require 'emagent-chat-response-state)
+(require 'emagent-chat-input)
 
 (defun emagent-chat--open-reasoning-begin ()
   "Return point at the `** Thinking' headline in the open response body.
