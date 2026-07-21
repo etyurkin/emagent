@@ -37,9 +37,5 @@
 (require 'org-element)
 (require 'emagent-tools-file)
 
-(declare-function emagent-tools--root-directory "emagent-tools")
-(declare-function emagent-tools--eval-form-guard "emagent-tools")
-(declare-function emagent-tools--eval-form-safely "emagent-tools")
-
 (provide 'emagent-tools-intro)
 ;;; emagent-tools-intro.el ends here

@@ -41,7 +41,7 @@
 (defvar auto-insert)
 (defvar emagent-tools-show-written-buffer)
 
-(declare-function emagent-tools--root-directory "emagent-tools")
+(declare-function emagent-tools--root-directory "emagent-tools-core")
 (declare-function magit-toplevel "ext:magit-git")
 (defconst emagent-tools--icloud-dir
   (expand-file-name "~/Library/Mobile Documents/"))

@@ -1810,6 +1810,41 @@ replacement text when agent output contains paths like C:\\Users."
             (should (string-match-p (emagent-chat--user-heading-re) text))
             (should (= (point) (emagent-chat--user-prompt-input-pos))))))))))
 
+(ert-deftest emagent-chat-test-finalize-streamed-assistant-skips-rewrite-when-unchanged ()
+  "Finalizing with text identical to the streamed body skips delete+insert."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-append-assistant "Hello world.")
+          (let ((before-body (emagent-chat--response-body-text))
+                (deleted nil))
+            (cl-letf (((symbol-function 'delete-region)
+                       (lambda (&rest _) (setq deleted t))))
+              (emagent-chat--finalize-streamed-assistant "Hello world."))
+            (should-not deleted)
+            (should (string= before-body (emagent-chat--response-body-text)))
+            (should-not (string-match-p "Hello world\\.Hello world\\."
+                                        (emagent-chat--response-body-text))))))))))
+
+(ert-deftest emagent-chat-test-finalize-streamed-assistant-rewrites-when-changed ()
+  "Finalizing with text that differs from the streamed body still rewrites it."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-append-assistant "Loading data...")
+          (emagent-chat-finish-assistant "Here:\n\n| a | b |\n| 1 | 2 |")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "^|-" text))
+            (should-not (string-match-p "Loading data" text)))))))))
+
 (ert-deftest emagent-chat-test-finish-keeps-tools-in-reasoning ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)

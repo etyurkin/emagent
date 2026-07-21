@@ -164,26 +164,6 @@ sessions do not look idle while the agent re-hydrates context for a new model.")
 (defvar-local emagent-chat--send-token nil
   "Token for the in-flight pre-dispatch send; cleared on cancel or dispatch.")
 
-(defun emagent-chat--send-active-p (token)
-  "Return non-nil when TOKEN is still the active pre-dispatch send."
-  (and emagent-chat--send-pending (eq emagent-chat--send-token token)))
-
-(defun emagent-chat--send-pending-begin ()
-  "Mark the buffer as preparing a send and refresh the mode line."
-  (setq emagent-chat--send-pending t
-        emagent-chat--send-token (cl-gensym "emagent-send"))
-  (when (fboundp 'emagent-chat--refresh-mode-line)
-    (emagent-chat--refresh-mode-line))
-  (when (fboundp 'emagent-chat--spinner-ensure-running)
-    (emagent-chat--spinner-ensure-running)))
-
-(defun emagent-chat--send-pending-end ()
-  "Clear the pre-dispatch send marker and refresh the mode line."
-  (when emagent-chat--send-pending
-    (setq emagent-chat--send-pending nil
-          emagent-chat--send-token nil)
-    (when (fboundp 'emagent-chat--refresh-mode-line)
-      (emagent-chat--refresh-mode-line))))
 
 (defvar-local emagent-chat--turn-model nil
   "Model id overriding the buffer model for the in-flight turn, or nil.
@@ -614,15 +594,6 @@ ignored so chat rendering never stalls on OS notifications."
                 (ding t))
               (emagent-chat--notify-macos-inactive-update))
           (error nil))))))
-
-(defun emagent-chat--maybe-force-mode-line-update ()
-  "Refresh this buffer's mode line in every window that displays it.
-
-Updates whenever the buffer is shown in a visible window, not only the selected
-one, so the thinking spinner keeps animating in a side-by-side emagent window
-after focus moves elsewhere."
-  (when (emagent-chat--buffer-displayed-p)
-    (force-mode-line-update)))
 
 (defun emagent-chat--window-configuration-change (&optional _frames)
   "Flush deferred font-lock and refresh mode lines on focus change."

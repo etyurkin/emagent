@@ -36,7 +36,7 @@
 (require 'emagent-log)
 (require 'org)
 
-(declare-function emagent-tools--root-directory "emagent-tools")
+(declare-function emagent-tools--root-directory "emagent-tools-core")
 (declare-function emagent-shell-run-command-async "emagent-shell")
 
 (declare-function emagent-shell-run-command "emagent-shell")

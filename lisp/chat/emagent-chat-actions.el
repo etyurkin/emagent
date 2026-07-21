@@ -49,9 +49,33 @@
 
 (declare-function emagent-acp-interrupt "emagent-acp-send")
 (declare-function emagent-acp--finalize-in-flight-prompt "emagent-acp-send")
-(declare-function emagent-chat--send-pending-begin "emagent-chat")
-(declare-function emagent-chat--send-pending-end "emagent-chat")
-(declare-function emagent-chat--send-active-p "emagent-chat")
+
+;; Owned here rather than in the facade `emagent-chat' (which requires this
+;; file), so callers elsewhere can require this leaf without a cycle.  The
+;; backing vars stay defvar-local in `emagent-chat'; forward-declared here.
+(defvar emagent-chat--send-pending)
+(defvar emagent-chat--send-token)
+
+(defun emagent-chat--send-active-p (token)
+  "Return non-nil when TOKEN is still the active pre-dispatch send."
+  (and emagent-chat--send-pending (eq emagent-chat--send-token token)))
+
+(defun emagent-chat--send-pending-begin ()
+  "Mark the buffer as preparing a send and refresh the mode line."
+  (setq emagent-chat--send-pending t
+        emagent-chat--send-token (cl-gensym "emagent-send"))
+  (when (fboundp 'emagent-chat--refresh-mode-line)
+    (emagent-chat--refresh-mode-line))
+  (when (fboundp 'emagent-chat--spinner-ensure-running)
+    (emagent-chat--spinner-ensure-running)))
+
+(defun emagent-chat--send-pending-end ()
+  "Clear the pre-dispatch send marker and refresh the mode line."
+  (when emagent-chat--send-pending
+    (setq emagent-chat--send-pending nil
+          emagent-chat--send-token nil)
+    (when (fboundp 'emagent-chat--refresh-mode-line)
+      (emagent-chat--refresh-mode-line))))
 
 (defun emagent-chat--operation-active-p ()
   "Return non-nil when the buffer has work Esc-Esc should stop."

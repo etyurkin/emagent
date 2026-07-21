@@ -49,7 +49,7 @@
 
 (require 'emagent-chat-thought)
 
-(declare-function emagent-chat--send-pending-end "emagent-chat")
+(declare-function emagent-chat--send-pending-end "emagent-chat-actions")
 
 (defun emagent-chat--begin-response (&optional at)
   "Open a new emagent response at AT or point.
@@ -173,6 +173,17 @@ the headline exists; otherwise the headline is located by search and cached."
           (setq emagent-chat--response-content-marker (copy-marker (point) nil))
           (cons (point) (cdr bounds)))))))
 
+(defun emagent-chat--response-body-text ()
+  "Return the current `** Response' body text, or nil when unavailable.
+
+Spans from just after the `** Response' headline (the content marker) to
+the end of the open response (the next user heading, or `point-max')."
+  (when-let* ((bounds (emagent-chat--response-body-bounds))
+              (start (car bounds))
+              (end (cdr bounds))
+              ((<= start end)))
+    (buffer-substring-no-properties start end)))
+
 (defun emagent-chat--ensure-response-headline ()
   "Ensure the open response has a `** Response' headline; return its content start."
   (or (car (emagent-chat--response-body-bounds))
@@ -224,14 +235,15 @@ the headline exists; otherwise the headline is located by search and cached."
                           (emagent-chat--map-outside-src-blocks
                            (lambda (s)
                              (let ((case-fold-search nil))
-                               (emagent-chat--convert-markdown-headings
-                                (emagent-chat--convert-inline-code-spans
-                                 (replace-regexp-in-string
-                                  "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*"
+                               (emagent-chat--convert-markdown-tables
+                                (emagent-chat--convert-markdown-headings
+                                 (emagent-chat--convert-inline-code-spans
                                   (replace-regexp-in-string
-                                   "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
-                                   "[[\\2][\\1]]"
-                                   s))))))
+                                   "\\*\\*\\([^*\n]+\\)\\*\\*" "*\\1*"
+                                   (replace-regexp-in-string
+                                    "\\[\\([^][\n]+\\)\\](\\([^)\n]+\\))"
+                                    "[[\\2][\\1]]"
+                                    s)))))))
                            (car result))))
                    (existing (emagent-chat--response-body-bounds))
                    (insert-at
@@ -305,22 +317,34 @@ are batched using `emagent-chat-response-stream-delay'."
   (emagent-chat--insert-user-heading-stub))
 
 (defun emagent-chat--finalize-streamed-assistant (converted)
-  "Replace the `** Response' body with CONVERTED assistant text."
+  "Replace the `** Response' body with CONVERTED assistant text.
+
+When the body text already streamed into the buffer equals CONVERTED,
+trimming trailing whitespace, skip the `delete-region' + reinsert
+entirely so a finish that mirrors the stream does not blank and redraw
+the whole response body."
   ;; Streaming fence state is no longer needed — finalization replaces the
   ;; buffer content with the fully-converted text.
   (setq emagent-chat--response-fence-state nil)
   (when-let ((content-start (or (car (emagent-chat--response-body-bounds))
                                 (emagent-chat--ensure-response-headline))))
-    (let ((body-end (cdr (emagent-chat--open-response-body-bounds))))
-      (when (and body-end (< content-start body-end))
-        (delete-region content-start body-end))
-      (goto-char content-start)
-      (let ((start (point)))
-        (insert converted)
-        (when (string-match-p "|" converted)
-          (ignore-errors
-            (emagent-chat--schedule-align-org-tables start (point))))
-        (setq emagent-chat--assistant-marker (point-marker))))))
+    (let* ((body-end (cdr (emagent-chat--open-response-body-bounds)))
+           (existing (emagent-chat--response-body-text))
+           (unchanged (and existing
+                           (string-equal (string-trim-right existing)
+                                         (string-trim-right converted))))
+           (end (if unchanged
+                    body-end
+                  (progn
+                    (when (and body-end (< content-start body-end))
+                      (delete-region content-start body-end))
+                    (goto-char content-start)
+                    (insert converted)
+                    (point)))))
+      (when (string-match-p "|" (or existing converted))
+        (ignore-errors
+          (emagent-chat--schedule-align-org-tables content-start end)))
+      (setq emagent-chat--assistant-marker (copy-marker end nil)))))
 
 (defvar emagent-chat--finish-close t
   "When non-nil, `emagent-chat-finish-assistant' resets markers and inserts a stub.

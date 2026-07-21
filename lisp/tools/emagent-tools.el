@@ -37,6 +37,7 @@
 (require 'emagent-struct)
 
 (require 'emagent-elisp)
+(require 'emagent-tools-core)
 (require 'emagent-tools-file)
 (require 'emagent-tools-intro)
 (require 'emagent-tools-shell)
@@ -84,37 +85,6 @@ behaviour for non-MCP call sites).")
   "Set project DIRECTORY used by emagent-tool-* when PATH is omitted."
   (setq emagent-tools--project-directory
         (and directory (expand-file-name directory))))
-
-(defun emagent-tools--within-boundary-p (resolved)
-  "Return non-nil when RESOLVED is inside `emagent-tools--root-boundary'.
-
-Compares symlink-resolved truenames so a symlink inside the root that points
-outside it cannot pass the check.  `file-truename' resolves the existing prefix
-of a not-yet-created path, so a symlinked parent directory is caught too."
-  (or (null emagent-tools--root-boundary)
-      (let ((root (file-name-as-directory
-                   (file-truename (expand-file-name emagent-tools--root-boundary))))
-            (true (file-truename resolved)))
-        (or (string-prefix-p root (file-name-as-directory true))
-            (string= (directory-file-name true)
-                     (directory-file-name root))))))
-
-(defun emagent-tools--root-directory (path)
-  "Return PATH resolved against the active emagent session project directory.
-
-A relative PATH is resolved against the session project directory (not the
-process `default-directory'), and an omitted PATH yields that directory.
-Signal an error when the result escapes `emagent-tools--root-boundary' or lands
-in a protected macOS tree (iCloud or another app's container)."
-  (let* ((base (or emagent-tools--project-directory default-directory))
-         (resolved (expand-file-name (or path base) base)))
-    (unless (emagent-tools--within-boundary-p resolved)
-      (user-error "Path %s is outside the session root %s"
-                  resolved emagent-tools--root-boundary))
-    (when (emagent-tools--protected-truename-p (file-truename resolved))
-      (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
-                  resolved))
-    resolved))
 
 (defun emagent-tool-project-directory ()
   "Return the emagent session project directory as a string."
@@ -245,10 +215,6 @@ Arguments: TOOL-NAME."
   "Return symbols from SYMBOLS found anywhere in FORM."
   (emagent-policy-match--symbols-in-form form symbols))
 
-(defun emagent-tools--eval-form-read (form-str)
-  "Return FORM-STR parsed as `(progn ,@forms)'."
-  (read (concat "(progn " (string-trim (or form-str "")) ")")))
-
 (defun emagent-tools--eval-form-dangerous-allowed-p (form-str dangerous)
   "Return non-nil when evaluating FORM-STR is approved with DANGEROUS symbols.
 When `emagent-tools--acp-session-p' is set, return t — ACP handles permission."
@@ -273,27 +239,11 @@ When `emagent-tools--acp-session-p' is set, return t — ACP handles permission.
 `:deny' blocks execution; `:confirm' needs user approval at the ACP gate."
   (emagent-policy-check-elisp form-str))
 
-(defun emagent-tools--eval-form-guard (form-str)
-  "Return nil when FORM-STR passes eval guardrails, else an error string."
-  (emagent-policy-enforce-string (emagent-policy-check-elisp form-str) form-str))
-
 (defun emagent-tools--eval-form-execute (form-str)
   "Evaluate FORM-STR after guardrails; return nil on success or an error string."
   (condition-case err
       (progn (eval (emagent-tools--eval-form-read form-str)) nil)
     (error (error-message-string err))))
-
-(defun emagent-tools--eval-form-safely (form-str)
-  "Evaluate FORM-STR with syntax and symbol guardrails; return a result string."
-  (let ((check-result (emagent-elisp-check-form form-str)))
-    (unless (string= "OK" check-result)
-      (user-error "%s" check-result))
-    (when-let ((err (emagent-tools--eval-form-guard form-str)))
-      (user-error "%s" err))
-    (condition-case err
-        (let ((result (eval (emagent-tools--eval-form-read form-str))))
-          (if (null result) "nil" (prin1-to-string result)))
-      (error (format "Eval error: %s" (error-message-string err))))))
 
 (defcustom emagent-tools-show-written-buffer nil
   "How to reveal a file after emagent writes it.

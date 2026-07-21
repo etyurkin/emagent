@@ -216,36 +216,76 @@ Arguments: REQUEST-LINE, BODY."
                (emagent-mcp--dispatch proc token item)))))))
       (_ (emagent-mcp--respond proc 405 nil "")))))
 
+(defcustom emagent-mcp-drain-yield 0.01
+  "Seconds to wait before draining the next buffered MCP HTTP request.
+
+The process filter only accumulates bytes; parsing and dispatching a
+complete HTTP request runs from a `run-with-timer' tick so a burst of
+pipelined tool calls cannot starve Emacs redisplay and other timers.
+Handling one request per tick mirrors `emagent-acp-message-drain-yield'
+for the ACP wire.  The first buffered request is still drained
+immediately (delay 0)."
+  :type 'number
+  :group 'emagent)
+
+(defun emagent-mcp--drain-one (proc)
+  "Parse and handle one complete HTTP request buffered on PROC.
+Return non-nil when a request was handled."
+  (let* ((buffer (or (process-get proc 'emagent-mcp-data) ""))
+         (sep (string-search "\r\n\r\n" buffer)))
+    (when sep
+      (let* ((head (substring buffer 0 sep))
+             (rest (substring buffer (+ sep 4)))
+             (lines (split-string head "\r\n"))
+             (request-line (car lines))
+             (headers (emagent-mcp--parse-headers (cdr lines)))
+             (content-length (string-to-number
+                              (or (cdr (assoc "content-length" headers)) "0"))))
+        (when (>= (length rest) content-length)
+          (let ((req-body (substring rest 0 content-length)))
+            (process-put proc 'emagent-mcp-data (substring rest content-length))
+            (emagent-mcp--handle-request proc request-line headers req-body)
+            t))))))
+
+(defun emagent-mcp--schedule-drain (proc delay)
+  "Schedule a drain tick for PROC after DELAY seconds.
+A no-op when PROC already has a drain tick pending."
+  (unless (process-get proc 'emagent-mcp-drain-timer)
+    (process-put proc 'emagent-mcp-drain-timer
+                 (run-with-timer (max 0 delay) nil #'emagent-mcp--drain proc))))
+
+(defun emagent-mcp--cancel-drain (proc)
+  "Cancel PROC's pending drain timer, if any."
+  (when-let ((timer (process-get proc 'emagent-mcp-drain-timer)))
+    (cancel-timer timer)
+    (process-put proc 'emagent-mcp-drain-timer nil)))
+
 (defun emagent-mcp--drain (proc)
-  "Parse and handle as many complete HTTP requests as PROC has buffered."
-  (let ((more t))
-    (while more
-      (setq more nil)
-      (let* ((buffer (or (process-get proc 'emagent-mcp-data) ""))
-             (sep (string-search "\r\n\r\n" buffer)))
-        (when sep
-          (let* ((head (substring buffer 0 sep))
-                 (rest (substring buffer (+ sep 4)))
-                 (lines (split-string head "\r\n"))
-                 (request-line (car lines))
-                 (headers (emagent-mcp--parse-headers (cdr lines)))
-                 (content-length (string-to-number
-                                  (or (cdr (assoc "content-length" headers)) "0"))))
-            (when (>= (length rest) content-length)
-              (let ((req-body (substring rest 0 content-length)))
-                (process-put proc 'emagent-mcp-data (substring rest content-length))
-                (emagent-mcp--handle-request proc request-line headers req-body)
-                (setq more t)))))))))
+  "Handle one buffered HTTP request on PROC, then yield before the next.
+
+Runs from a timer instead of the process filter so a burst of pipelined
+requests cannot monopolize the command loop; mirrors the ACP wire's
+timer-yield drain with a batch size of one HTTP request per tick."
+  (process-put proc 'emagent-mcp-drain-timer nil)
+  (when (and (process-live-p proc)
+             (emagent-mcp--drain-one proc)
+             (process-live-p proc)
+             (string-search "\r\n\r\n" (or (process-get proc 'emagent-mcp-data) "")))
+    (emagent-mcp--schedule-drain proc emagent-mcp-drain-yield)))
 
 (defun emagent-mcp--filter (proc data)
-  "Process filter: accumulate DATA on PROC and drain complete requests."
+  "Process filter: accumulate DATA on PROC and schedule a drain tick.
+
+Parsing and dispatch happen later from `emagent-mcp--drain', not here, so
+the filter itself never blocks on JSON-RPC handling."
   (process-put proc 'emagent-mcp-data
                (concat (or (process-get proc 'emagent-mcp-data) "") data))
-  (emagent-mcp--drain proc))
+  (emagent-mcp--schedule-drain proc 0))
 
 (defun emagent-mcp--sentinel (proc _event)
   "Clean up PROC connection state when it closes."
   (unless (process-live-p proc)
+    (emagent-mcp--cancel-drain proc)
     (process-put proc 'emagent-mcp-data nil)))
 
 ;;;; Lifecycle

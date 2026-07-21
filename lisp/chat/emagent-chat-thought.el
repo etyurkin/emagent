@@ -47,7 +47,7 @@
 
 (require 'emagent-chat-reasoning)
 
-(declare-function emagent-chat--send-pending-end "emagent-chat")
+(declare-function emagent-chat--send-pending-end "emagent-chat-actions")
 
 (declare-function emagent-chat--ensure-response-markers "emagent-chat-response")
 

@@ -282,5 +282,53 @@ Bridges the keyword-keyed callback alist wired by the app to typed slots."
     (:cb-status         (setf (emagent-acp-state-cb-status state) value))
     (_ (emagent-log "unknown callback key %S" key))))
 
+(defconst emagent-acp--agent-error-signature-re
+  (concat "RetriableError\\|getaddrinfo\\|ENOTFOUND\\|EAI_AGAIN"
+          "\\|ECONNRESET\\|ECONNREFUSED\\|ConnectionRefused"
+          "\\|ETIMEDOUT\\|EPIPE"
+          "\\|\\[unavailable\\]\\|socket hang up\\|WritableIterable is closed")
+  "Machine-generated markers of a transient error emitted as agent output.
+Deliberately stricter than `emagent-acp--retriable-prompt-error-p': it must
+not match prose such as \"network error\" or \"timeout\" that can legitimately
+appear inside a real answer.")
+
+(defun emagent-acp--turn-did-no-work-p (state)
+  "Return non-nil when STATE's turn did no real work.
+No tool invocations and little text means replaying the prompt is safe."
+  (let ((text (string-trim (or (emagent-acp-state-assistant-text state) "")))
+        (titles (emagent-acp-state-tool-call-titles state)))
+    (and (or (null titles) (zerop (hash-table-count titles)))
+         (< (length text) 400))))
+
+(defun emagent-acp--agent-error-only-response-p (state)
+  "Return non-nil when STATE's finished turn is only a transient agent error.
+
+Some agents (e.g. cursor-agent-acp) accept the prompt, then hit a transient
+network failure and emit the error as the whole turn's output instead of
+failing the request.  Such a turn carries no real content and no tool calls
+\(`emagent-acp--turn-did-no-work-p'), so it is safe for emagent to re-issue the
+prompt with backoff rather than surface the error.  Matching uses
+`emagent-acp--agent-error-signature-re', which only recognises
+machine-generated error markers."
+  (let ((text (string-trim (or (emagent-acp-state-assistant-text state) ""))))
+    (and (not (emagent-acp-state-compress-pending state))
+         (not (emagent-acp-state-quiet-prompt state))
+         (emagent-acp--turn-did-no-work-p state)
+         (not (string-empty-p text))
+         (string-match-p emagent-acp--agent-error-signature-re text))))
+
+(defun emagent-acp--turn-hit-transient-error-p (state)
+  "Return non-nil when STATE's finished turn ended on a transient error marker.
+
+Unlike `emagent-acp--agent-error-only-response-p' this does not require the
+turn to be empty: it is true even when tool calls ran or real content was
+produced.  Such a turn must NOT be replayed (that would repeat side effects
+like commits or pushes); instead emagent resumes it by sending \"continue\",
+mirroring what a user does by hand."
+  (let ((text (or (emagent-acp-state-assistant-text state) "")))
+    (and (not (emagent-acp-state-compress-pending state))
+         (not (emagent-acp-state-quiet-prompt state))
+         (string-match-p emagent-acp--agent-error-signature-re text))))
+
 (provide 'emagent-acp-state)
 ;;; emagent-acp-state.el ends here

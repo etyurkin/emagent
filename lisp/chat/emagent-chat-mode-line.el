@@ -53,6 +53,15 @@
 (defvar emagent-chat--spinner-timer nil
   "Repeating timer that advances the spinner while any session is busy.")
 
+(defun emagent-chat--maybe-force-mode-line-update ()
+  "Refresh this buffer's mode line in every window that displays it.
+
+Updates whenever the buffer is shown in a visible window, not only the selected
+one, so the thinking spinner keeps animating in a side-by-side emagent window
+after focus moves elsewhere."
+  (when (emagent-chat--buffer-displayed-p)
+    (force-mode-line-update)))
+
 (defun emagent-chat--spinner-after-custom-set (sym val)
   "Set SYM to VAL and refresh emagent mode lines."
   (set-default sym val)
@@ -69,8 +78,7 @@
      (lambda (buf)
        (with-current-buffer buf
          (emagent-chat--mode-line-recompute)
-         (when (fboundp 'emagent-chat--maybe-force-mode-line-update)
-           (emagent-chat--maybe-force-mode-line-update))))))
+         (emagent-chat--maybe-force-mode-line-update)))))
   nil)
 
 (defcustom emagent-chat-spinner-interval 0.4
@@ -215,8 +223,6 @@ buffer."
                  (emagent-chat--spinner-animate-p buf))
            (throw 'found t))))
       nil)))
-
-(declare-function emagent-chat--maybe-force-mode-line-update "emagent-chat")
 
 (defun emagent-chat--spinner-stop ()
   "Cancel the spinner timer when no session needs animation."
