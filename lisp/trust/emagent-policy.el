@@ -185,7 +185,7 @@ Return nil when ok, (:deny . REASON), or (:confirm . REASON)."
   "Prompt for runtime confirmation; return non-nil when allowed.
 
 Arguments: REASON, CONTEXT.
-Uses a synchronous completing-read dialog.  The inline button prompt is
+Uses a synchronous `completing-read' dialog.  The inline button prompt is
 asynchronous and cannot drive `emagent-policy-enforce', which must return a
 boolean before tool execution continues."
   (or (emagent-policy--skip-runtime-confirm-p)
