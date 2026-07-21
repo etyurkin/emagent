@@ -44,10 +44,7 @@
 (require 'emagent-chat)
 (require 'emagent-chat-reasoning)
 (require 'emagent-chat-thought)
-
-;; Defined in emagent-acp-prompt.el, which declares this file's functions the
-;; same way; declaring here avoids a require cycle between the two modules.
-(declare-function emagent-acp--cancel-outstanding-permissions "emagent-acp-request")
+(require 'emagent-acp-permission-queue)
 
 (defun emagent-acp-attach-context (text)
   "Attach TEXT to the next prompt in the current buffer."
@@ -411,6 +408,12 @@ finalized."
     (emagent-acp--render-prompt-response state)
     (emagent-acp--refresh-mode-line state)
     t))
+
+;; `emagent-chat-actions' (required by the facade `emagent-chat', which this
+;; file requires) calls this indirectly through
+;; `emagent-chat--on-finalize-in-flight' (set here) so Esc-Esc/btw can stop an
+;; in-flight prompt without requiring this file back.
+(setq emagent-chat--on-finalize-in-flight #'emagent-acp--finalize-in-flight-prompt)
 
 (defun emagent-acp-interrupt ()
   "Interrupt the in-flight prompt and close the response block cleanly.

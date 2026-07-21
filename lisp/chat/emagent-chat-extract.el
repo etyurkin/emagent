@@ -39,9 +39,9 @@
 (require 'bookmark)
 (require 'emagent-log)
 (require 'emagent-chat-mode)
+(require 'emagent-chat-mode-line)
 (require 'emagent-session)
 
-(declare-function emagent-chat-set-model "emagent-chat")
 (defvar emagent-chat-provider)
 (defvar emagent-chat--response-headline-re)
 

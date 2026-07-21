@@ -45,27 +45,9 @@
 (require 'emagent-acp-model)
 (require 'emagent-acp-gate)
 (require 'emagent-acp-send)
-
-(declare-function emagent-acp--new-session "emagent-acp-lifecycle")
-
-(defun emagent-acp--notify-user (_state message)
-  "Append MESSAGE to `emagent-log-buffer-name'."
-  (emagent-log "%s" message))
+(require 'emagent-acp-wire)
 
 (defvar emagent-chat--finish-close)
-(defun emagent-acp--trace (format-string &rest args)
-  "Append a trace line when `emagent-acp-trace' is non-nil.
-
-Arguments: FORMAT-STRING, ARGS."
-  (when emagent-acp-trace
-    (apply #'emagent-log (cons (concat "acp: " format-string) args))))
-
-(defun emagent-acp--progress (state message)
-  "Show init stage MESSAGE in the minibuffer and refresh the mode line.
-
-Arguments: STATE."
-  (emagent-acp--notify-user state (format "emagent: %s" message))
-  (emagent-acp--refresh-mode-line state))
 
 (defun emagent-acp--clear-prompt-watchdog (state)
   "Cancel any pending prompt stall watchdog for STATE."
@@ -206,6 +188,8 @@ the final text is stable."
                          (format "*Context compacted.* Agent session reset; the summary below is its only memory of the prior conversation.\n\n%s"
                                  summary))))
             (emagent-log "compressed session (%d chars)" (length summary))
+            (unless (fboundp 'emagent-acp--new-session)
+              (require 'emagent-acp-lifecycle))
             (emagent-acp--new-session
              :state state
              :compressed-context summary
@@ -260,11 +244,6 @@ the final text is stable."
             ;; Text changed during finish but no newer timer was scheduled.
             (emagent-acp--schedule-prompt-render state)))))))))
 
-(defun emagent-acp--permission-pending-p (state)
-  "Return non-nil when STATE has unanswered permission requests."
-  (or (emagent-acp-state-permission-busy state)
-      (emagent-acp-state-permission-queue state)))
-
 (defun emagent-acp--maybe-complete-deferred-prompt (state)
   "Run a deferred `emagent-acp--complete-prompt' when permissions are clear.
 
@@ -275,7 +254,7 @@ Arguments: STATE."
       (emagent-acp--complete-prompt state response))))
 
 ;; Registered on the leaf `emagent-acp--stall-recovery-functions' hook
-;; (see `emagent-acp-state') rather than called by name from
+;; (see `emagent-acp-usage') rather than called by name from
 ;; `emagent-acp-usage', which this file requires.
 (add-hook 'emagent-acp--stall-recovery-functions
           #'emagent-acp--maybe-complete-deferred-prompt)
@@ -529,26 +508,6 @@ was still working."
             (when-let ((cb (emagent-acp-state-cb-fail state)))
               (funcall cb message))))))
       (emagent-acp--refresh-mode-line state))))
-
-(cl-defun emagent-acp--send-request (&key state request on-success on-failure)
-  
-  "Internal helper for STATE and REQUEST and ON-SUCCESS and ON-FAILURE."
-  (let ((method (map-elt request :method)))
-    (emagent-acp--trace "send %s" method)
-    (emagent-acp-send-request
-     :client (emagent-acp-state-client state)
-     :request request
-     :buffer (emagent-acp--chat-buffer state)
-     :on-success
-     (lambda (response)
-       (emagent-acp--trace "recv %s ok" method)
-       (when on-success (funcall on-success response)))
-     :on-failure
-     (lambda (error raw)
-       (emagent-acp--trace "recv %s error: %s"
-                           method
-                           (or (map-elt error 'message) (format "%s" error)))
-       (when on-failure (funcall on-failure error raw))))))
 
 (provide 'emagent-acp-prompt)
 ;;; emagent-acp-prompt.el ends here

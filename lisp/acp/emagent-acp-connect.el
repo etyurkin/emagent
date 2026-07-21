@@ -45,6 +45,7 @@
 (require 'emagent-chat-ui)
 (require 'emagent-chat)
 (require 'emagent-acp)
+(require 'emagent-acp-send)
 (require 'emagent-cursor)
 (require 'emagent-claude)
 
@@ -99,6 +100,12 @@ the session down and starting over."
                           (:cb-tool-call      . ,#'emagent-chat-show-tool-call)
                           (:cb-permission     . ,#'emagent-chat-permission-prompt)
                           (:cb-status         . ,#'emagent-chat-set-status)))))))
+
+;; `emagent-chat-slash' (required by the facade `emagent-chat', which this
+;; file requires) calls this indirectly through
+;; `emagent-chat--on-ensure-connected' (set here) so `/model' can connect
+;; before applying an override without requiring this file back.
+(setq emagent-chat--on-ensure-connected #'emagent-acp-ensure-connected)
 
 (defun emagent-acp--send-prompt-safe (buffer user-text &optional compress)
   "Send USER-TEXT from BUFFER, logging and surfacing failures in the chat.
@@ -158,6 +165,19 @@ summary prompt rather than ordinary chat input."
                       (when (emagent-chat--send-active-p token)
                         (emagent-acp--send-prompt-safe buf user-text compress)))))
                (emagent-acp--send-prompt-safe buf user-text compress)))))))))
+
+(defun emagent-acp--wire-chat-buffer ()
+  "Attach the ACP send/attach/quit callbacks to the current chat buffer.
+
+`emagent-chat-mode' cannot require this file back (it requires `emagent-chat',
+which this file requires), so the callback slots it declares are wired from
+here instead, on `emagent-mode-hook'."
+  (setq emagent-chat--on-send #'emagent-acp-send
+        emagent-chat--on-attach #'emagent-acp-attach-context
+        emagent-chat--on-quit #'emagent-acp-shutdown-buffer)
+  (add-hook 'kill-buffer-hook #'emagent-acp-shutdown-buffer nil t))
+
+(add-hook 'emagent-mode-hook #'emagent-acp--wire-chat-buffer)
 
 (defun emagent-acp--restore-turn-model ()
   "Restore the session model overridden by `/model' and clear the override.

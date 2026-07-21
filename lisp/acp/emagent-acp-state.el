@@ -37,16 +37,8 @@
 (require 'map)
 (require 'emagent-log)
 (require 'emagent-acp-custom)
-(require 'emagent-acp-protocol)
+(require 'emagent-acp-protocol-client)
 
-(declare-function emagent-acp--refresh-mode-line "emagent-acp-usage")
-
-(defvar emagent-acp--stall-recovery-functions nil
-  "Functions run by `emagent-acp--maybe-recover-stall' on a settled session.
-Each is called with the `emagent-acp-state'.  Populated by `emagent-acp-prompt'
-at load time with `emagent-acp--maybe-complete-deferred-prompt' so
-`emagent-acp-usage' (required by `emagent-acp-prompt') does not have to declare
-a function back into it.")
 
 (defvar-local emagent-acp--session nil
   "ACP session state for the current emagent buffer.")
@@ -142,38 +134,6 @@ Arguments: EMAGENT-ACP-ERROR."
   (or emagent-acp--session
       (error "No active emagent session for this buffer")))
 
-(defun emagent-acp--agent-rss-mb (state)
-  "Return the agent process RSS in MB via `process-attributes', or nil.
-
-Arguments: STATE."
-  (when-let* ((client (emagent-acp-state-client state))
-              (proc (and client (map-elt client :process)))
-              ((processp proc))
-              (pid (process-id proc))
-              ((> pid 0))
-              (attrs (ignore-errors (process-attributes pid)))
-              (rss-kb (alist-get 'rss attrs)))
-    (round (/ (float rss-kb) 1024))))
-
-(defun emagent-acp--start-rss-timer (state)
-  "Start a repeating timer that refreshes :agent-rss in STATE every 15 s."
-  (when-let ((old (emagent-acp-state-agent-rss-timer state)))
-    (cancel-timer old))
-  (setf (emagent-acp-state-agent-rss-timer state)
-            (run-with-timer
-             5 15
-             (lambda ()
-               (if (buffer-live-p (emagent-acp-state-chat-buffer state))
-                   (let ((mb (emagent-acp--agent-rss-mb state)))
-                     (setf (emagent-acp-state-agent-rss state) mb)
-                     (emagent-acp--refresh-mode-line state))
-                 (emagent-acp--stop-rss-timer state))))))
-
-(defun emagent-acp--stop-rss-timer (state)
-  "Cancel the RSS polling timer for STATE."
-  (when-let ((timer (and state (emagent-acp-state-agent-rss-timer state))))
-    (cancel-timer timer)
-    (setf (emagent-acp-state-agent-rss-timer state) nil)))
 
 (defun emagent-acp--turn-phase (state)
   "Return the lifecycle phase of STATE's current turn.
@@ -226,6 +186,11 @@ underlying representation for now."
        (emagent-acp-state-ready emagent-acp--session)
        (let ((client (emagent-acp-state-client emagent-acp--session)))
          (and client (emagent-acp--client-started-p client)))))
+
+(defun emagent-acp--permission-pending-p (state)
+  "Return non-nil when STATE has unanswered permission requests."
+  (or (emagent-acp-state-permission-busy state)
+      (emagent-acp-state-permission-queue state)))
 
 (defun emagent-acp--cancel-wakeup (state)
   "Cancel a pending or armed agent wakeup (ScheduleWakeup) for STATE."

@@ -68,27 +68,10 @@
 (require 'emagent-acp-request)
 (require 'emagent-acp-prompt)
 (require 'emagent-acp-notify)
+(require 'emagent-acp-system-prompt)
 (require 'emagent-acp-lifecycle)
 (require 'emagent-acp-send)
 (require 'emagent-prompts)
-
-(defun emagent-acp--system-prompt ()
-  "Return the system prompt for new ACP sessions."
-  (concat emagent-acp-system-prompt
-          (emagent-mcp-gateway-system-prompt)
-          (when emagent-acp-prefer-emacs
-            (emagent-prompts--prefer-emacs-prompt))
-          (when emagent-acp-prefer-emacs
-            (emagent-prompts--structural-policy))))
-
-(defun emagent-acp--session-system-prompt (&optional compressed-context)
-  "Return the system prompt for session/new, optionally with COMPRESSED-CONTEXT."
-  (let ((summary (string-trim (or compressed-context ""))))
-    (if (string-empty-p summary)
-        (emagent-acp--system-prompt)
-      (concat (emagent-acp--system-prompt)
-              (format "\n\n[Compressed prior conversation context]\n%s"
-                      summary)))))
 
 (defun emagent-acp-prefer-emacs-p ()
   "Return non-nil when emagent instructs the agent to prefer Emacs tools."

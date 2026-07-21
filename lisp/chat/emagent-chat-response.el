@@ -49,7 +49,11 @@
 
 (require 'emagent-chat-thought)
 
-(declare-function emagent-chat--send-pending-end "emagent-chat-actions")
+(require 'emagent-chat-response-state)
+
+(require 'emagent-chat-send-state)
+
+(require 'emagent-chat-view)
 
 (defun emagent-chat--begin-response (&optional at)
   "Open a new emagent response at AT or point.
@@ -141,37 +145,11 @@ Thinking block."
 Nil when outside a fenced block; (lang . body-so-far) while buffering.
 Mirrors emagent-chat--fence-state but tracks the `** Response' stream.")
 
-(defun emagent-chat--ensure-response-markers ()
-  "Set body markers for the open response when they were lost."
-  (unless (and emagent-chat--response-body-start
-               (marker-position emagent-chat--response-body-start)
-               emagent-chat--assistant-marker
-               (marker-position emagent-chat--assistant-marker))
-    (when-let ((bounds (emagent-chat--open-response-body-bounds)))
-      (setq emagent-chat--response-body-start (copy-marker (car bounds) nil)
-            emagent-chat--assistant-marker (copy-marker (cdr bounds) nil)))))
 
 (defun emagent-chat--fail-response-p ()
   "Return non-nil when an emagent response is open and can be closed with error."
   (emagent-chat--open-response-p))
 
-(defun emagent-chat--response-body-bounds ()
-  "Return (CONTENT-START . END) for the `** Response' body, or nil.
-CONTENT-START comes from the owned `emagent-chat--response-content-marker' once
-the headline exists; otherwise the headline is located by search and cached."
-  (if (and emagent-chat--response-content-marker
-           (marker-position emagent-chat--response-content-marker)
-           (emagent-chat--open-response-p))
-      (cons (marker-position emagent-chat--response-content-marker)
-            (emagent-chat--response-region-end
-             (emagent-chat--open-response-begin)))
-    (when-let ((bounds (emagent-chat--open-response-body-bounds)))
-      (save-excursion
-        (goto-char (car bounds))
-        (when (re-search-forward emagent-chat--response-headline-re (cdr bounds) t)
-          (forward-line 1)
-          (setq emagent-chat--response-content-marker (copy-marker (point) nil))
-          (cons (point) (cdr bounds)))))))
 
 (defun emagent-chat--response-body-text ()
   "Return the current `** Response' body text, or nil when unavailable.
@@ -295,8 +273,7 @@ are batched using `emagent-chat-response-stream-delay'."
 (defun emagent-chat-fail-assistant (message)
   "Close the in-flight emagent response with error MESSAGE under `** Response'."
   (emagent-chat--flush-response-pending t)
-  (when (fboundp 'emagent-chat--send-pending-end)
-    (emagent-chat--send-pending-end))
+  (emagent-chat--send-pending-end)
   (emagent-chat--with-stable-view
     (lambda ()
       (with-current-buffer (current-buffer)

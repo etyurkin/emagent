@@ -49,9 +49,6 @@
 (require 'emagent-chat)
 (require 'emagent-cursor)
 
-(declare-function emagent-acp--drain-permission-queue-now "emagent-acp-request")
-(declare-function emagent-acp--tool-call-detail-from-tool-call "emagent-acp-request")
-
 (defun emagent-acp--hydrate-session-permissions (state session-id)
   "Load ~/.emagent session permissions for SESSION-ID into STATE."
   (when (and session-id (not (string-empty-p session-id)))
@@ -60,7 +57,6 @@
     (when (emagent-permissions-session-auto-approve-p session-id)
       (setf (emagent-acp-state-session-auto-approve state) t))))
 
-(declare-function emagent-acp--send-request "emagent-acp-prompt")
 (defun emagent-acp--permission-option-deny-p (opt)
   "Return non-nil when OPT is a deny-type ACP permission option."
   (let ((kind (downcase (or (map-elt opt 'kind) "")))
@@ -348,12 +344,6 @@ Arguments: STATE, TOOL-CALL, VALIDATION, CHAT-BUFFER."
         (string-match-p "allow" id)
         (string-match-p "\\`\\(?:allow\\|yes\\|run\\)" name))))
 
-(defconst emagent-acp--tool-call-detail-limit 120
-  "Maximum detail length shown in Executing tool-call lines.")
-
-(defun emagent-acp--update-put (update key value)
-  "Return UPDATE alist with KEY bound to VALUE, replacing any prior binding."
-  (cons (cons key value) (assoc-delete-all key update)))
 
 (defun emagent-acp--tool-call-shell-needs-confirm-p (tool-call)
   "Return non-nil when TOOL-CALL is execute and policy requires confirmation."
@@ -432,25 +422,6 @@ Arguments: TOOL-CALL."
                     (format "** Allow edit\n#+BEGIN_SRC sh\n%s\n#+END_SRC"
                             command))))
              (t nil)))))))
-
-(defun emagent-acp--permission-interactive-p (state)
-  "Return non-nil when ACP permission dialogue may need user input.
-
-Arguments: STATE."
-  (and (not (emagent-acp-state-session-auto-approve state))
-       (not (eq emagent-acp-auto-approve-permissions t))))
-
-(defun emagent-acp--schedule-permission-drain (state)
-  "Run `emagent-acp--drain-permission-queue-now' outside the ACP process filter.
-
-Arguments: STATE."
-  (unless (or (emagent-acp-state-permission-drain-timer state)
-              (emagent-acp-state-permission-busy state))
-    (setf (emagent-acp-state-permission-drain-timer state)
-              (run-at-time 0 nil
-                           (lambda ()
-                             (setf (emagent-acp-state-permission-drain-timer state) nil)
-                             (emagent-acp--drain-permission-queue-now state))))))
 
 (provide 'emagent-acp-permit)
 ;;; emagent-acp-permit.el ends here

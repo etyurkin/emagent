@@ -41,9 +41,6 @@
 (require 'emagent-acp-provider)
 (require 'emagent-session)
 
-(declare-function emagent-acp--permission-pending-p "emagent-acp-prompt")
-(declare-function emagent-acp--drain-permission-queue "emagent-acp-request")
-
 ;;; -------------------------------------------------------------------------
 ;;; Public session state accessors (for use by emagent-chat.el)
 ;;; -------------------------------------------------------------------------
@@ -161,18 +158,39 @@ buffer signals \"Selecting deleted buffer\"."
   ;; The status push from --refresh-mode-line re-renders the model label.
   (emagent-acp--refresh-mode-line state))
 
+(defvar emagent-acp--stall-recovery-functions nil
+  "Functions run by `emagent-acp--maybe-recover-stall' on a settled session.
+Each is called with the `emagent-acp-state'.  Populated at load time by
+`emagent-acp-prompt' and `emagent-acp-permission-queue' so this file need not
+require those modules back.")
+
+(defun emagent-acp--current-model-id (state models)
+  "Return the current model id for STATE.
+
+Prefer the session config-option current value, then MODELS'
+`currentModelId', then the chat buffer's saved model."
+  (or (map-elt
+       (or (seq-find (lambda (option)
+                       (equal "model" (map-elt option :category)))
+                     (emagent-acp-state-config-options state))
+           (seq-find (lambda (option)
+                       (string= (map-elt option :id) "model"))
+                     (emagent-acp-state-config-options state)))
+       :current-value)
+      (and models (map-elt models 'currentModelId))
+      (emagent-acp--saved-model-id state)))
+
 (defun emagent-acp--maybe-recover-stall (state)
   "Unstick a session that finished on the wire but left the buffer open.
 
-Runs `emagent-acp--stall-recovery-functions' (see `emagent-acp-state') instead
-of calling `emagent-acp-prompt' functions by name, since `emagent-acp-prompt'
-requires this file.
+Runs `emagent-acp--stall-recovery-functions' instead of calling prompt or
+permission-queue functions by name, since those modules require this file.
 
 Arguments: STATE."
-  (when (and state (emagent-acp-state-ready state) (not (emagent-acp-state-busy state)))
-    (run-hook-with-args 'emagent-acp--stall-recovery-functions state)
-    (when (emagent-acp-state-permission-queue state)
-      (emagent-acp--drain-permission-queue state))))
+  (when (and state
+             (emagent-acp-state-ready state)
+             (not (emagent-acp-state-busy state)))
+    (run-hook-with-args 'emagent-acp--stall-recovery-functions state)))
 
 (defun emagent-acp--status-snapshot (state)
   "Return a mode-line status plist computed from STATE.
@@ -188,11 +206,15 @@ layer (see `emagent-chat-set-status')."
           :tool (emagent-acp-state-current-tool state)
           :tool-kind (emagent-acp-state-current-tool-kind state)
           :rss (emagent-acp-state-agent-rss state)
+          :model-id (and (emagent-acp-state-ready state)
+                         (emagent-acp--current-model-id state nil))
           :ctx-usage (when-let ((used (and usage (map-elt usage :context-used)))
                                 (size (map-elt usage :context-size)))
                        (cons used size))
-          :ctx-unavailable (and (or (emagent-acp-state-busy state) (emagent-acp-state-ready state))
-                                (emagent-acp--provider-context-usage-unavailable-p state)))))
+          :ctx-unavailable (and (or (emagent-acp-state-busy state)
+                                    (emagent-acp-state-ready state))
+                                (emagent-acp--provider-context-usage-unavailable-p
+                                 state)))))
 
 (defun emagent-acp--refresh-mode-line (state)
   
@@ -203,6 +225,39 @@ layer (see `emagent-chat-set-status')."
     (let ((snapshot (emagent-acp--status-snapshot state)))
       (with-current-buffer buffer
         (funcall cb snapshot)))))
+
+(defun emagent-acp--agent-rss-mb (state)
+  "Return the agent process RSS in MB via `process-attributes', or nil.
+
+Arguments: STATE."
+  (when-let* ((client (emagent-acp-state-client state))
+              (proc (and client (map-elt client :process)))
+              ((processp proc))
+              (pid (process-id proc))
+              ((> pid 0))
+              (attrs (ignore-errors (process-attributes pid)))
+              (rss-kb (alist-get 'rss attrs)))
+    (round (/ (float rss-kb) 1024))))
+
+(defun emagent-acp--start-rss-timer (state)
+  "Start a repeating timer that refreshes :agent-rss in STATE every 15 s."
+  (when-let ((old (emagent-acp-state-agent-rss-timer state)))
+    (cancel-timer old))
+  (setf (emagent-acp-state-agent-rss-timer state)
+        (run-with-timer
+         5 15
+         (lambda ()
+           (if (buffer-live-p (emagent-acp-state-chat-buffer state))
+               (let ((mb (emagent-acp--agent-rss-mb state)))
+                 (setf (emagent-acp-state-agent-rss state) mb)
+                 (emagent-acp--refresh-mode-line state))
+             (emagent-acp--stop-rss-timer state))))))
+
+(defun emagent-acp--stop-rss-timer (state)
+  "Cancel the RSS polling timer for STATE."
+  (when-let ((timer (and state (emagent-acp-state-agent-rss-timer state))))
+    (cancel-timer timer)
+    (setf (emagent-acp-state-agent-rss-timer state) nil)))
 
 ;;; -------------------------------------------------------------------------
 ;;; Usage tracking

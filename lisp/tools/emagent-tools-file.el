@@ -36,30 +36,11 @@
 (require 'emagent-log)
 (require 'emagent-elisp)
 (require 'emagent-struct)
+(require 'emagent-tools-core)
 (require 'emagent-tools-shell)
 
 (defvar auto-insert)
 (defvar emagent-tools-show-written-buffer)
-
-(declare-function emagent-tools--root-directory "emagent-tools-core")
-(declare-function magit-toplevel "ext:magit-git")
-(defconst emagent-tools--icloud-dir
-  (expand-file-name "~/Library/Mobile Documents/"))
-
-(defconst emagent-tools--containers-dir
-  (expand-file-name "~/Library/Containers/"))
-
-(defconst emagent-tools--group-containers-dir
-  (expand-file-name "~/Library/Group Containers/"))
-
-(defun emagent-tools--protected-truename-p (truename)
-  "Return non-nil when TRUENAME is in a protected macOS tree.
-TRUENAME is an absolute, symlink-resolved path (iCloud or another app
-container).  Pure predicate with no session resolution, so
-`emagent-tools--root-directory' can call it safely."
-  (or (string-prefix-p emagent-tools--icloud-dir truename)
-      (string-prefix-p emagent-tools--containers-dir truename)
-      (string-prefix-p emagent-tools--group-containers-dir truename)))
 
 (defun emagent-tools--protected-fs-path-p (path)
   "Return non-nil when PATH must not be accessed via Emacs on macOS."

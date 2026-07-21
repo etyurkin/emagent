@@ -32,11 +32,6 @@
 ;;; Code:
 
 (require 'json)
-(declare-function emagent-trust-cursor-trusted-p "emagent-trust-cursor" (directory))
-
-(declare-function emagent-trust-claude-trusted-p "emagent-trust-claude" (directory))
-(declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
-(declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
 
 (defgroup emagent-trust nil
   "Workspace trust integration for emagent."
@@ -157,8 +152,10 @@ Loads lazily so `require' is not recursive at top level."
   "Return non-nil when PROVIDER considers DIRECTORY trusted on disk."
   (emagent-trust--ensure-provider-features)
   (pcase provider
-    ('claude (emagent-trust-claude-trusted-p directory))
-    ('cursor (emagent-trust-cursor-trusted-p directory))
+    ('claude (and (fboundp 'emagent-trust-claude-trusted-p)
+                  (emagent-trust-claude-trusted-p directory)))
+    ('cursor (and (fboundp 'emagent-trust-cursor-trusted-p)
+                  (emagent-trust-cursor-trusted-p directory)))
     (_ t)))
 
 (defun emagent-trust--record-trust-if-needed (provider directory)
@@ -167,8 +164,10 @@ Loads lazily so `require' is not recursive at top level."
     (let ((dir (emagent-trust--normalize-dir directory)))
       (condition-case err
           (pcase provider
-            ('claude (emagent-trust-claude-record-trust dir))
-            ('cursor (emagent-trust-cursor-record-trust dir)))
+            ('claude (and (fboundp 'emagent-trust-claude-record-trust)
+                          (emagent-trust-claude-record-trust dir)))
+            ('cursor (and (fboundp 'emagent-trust-cursor-record-trust)
+                          (emagent-trust-cursor-record-trust dir))))
         (error (signal (car err) (cdr err)))))))
 
 (defun emagent-trust--configure (provider project-dir)

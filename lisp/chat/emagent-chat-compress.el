@@ -39,9 +39,8 @@
 (require 'emagent-session-store)
 (require 'emagent-chat-input)
 (require 'emagent-chat-response)
+(require 'emagent-chat-response-state)
 
-(declare-function emagent-chat--with-stable-view "emagent-chat")
-(declare-function emagent-chat--find-open-response-begin "emagent-chat")
 (defun emagent-chat--bare-slash-command-p (text)
   "Return non-nil when TEXT is a single-line slash command."
   (let ((trimmed (string-trim text)))

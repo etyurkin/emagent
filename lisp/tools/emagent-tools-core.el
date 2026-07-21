@@ -37,13 +37,30 @@
 (require 'subr-x)
 (require 'emagent-elisp)
 (require 'emagent-policy)
-(require 'emagent-tools-file)
 
 ;; Bound by the MCP dispatcher and by `emagent-tools-set-project-directory'
 ;; (both in `emagent-tools', which requires this file); forward-declared
 ;; here rather than required back to avoid a cycle.
 (defvar emagent-tools--project-directory)
 (defvar emagent-tools--root-boundary)
+
+(defconst emagent-tools--icloud-dir
+  (expand-file-name "~/Library/Mobile Documents/"))
+
+(defconst emagent-tools--containers-dir
+  (expand-file-name "~/Library/Containers/"))
+
+(defconst emagent-tools--group-containers-dir
+  (expand-file-name "~/Library/Group Containers/"))
+
+(defun emagent-tools--protected-truename-p (truename)
+  "Return non-nil when TRUENAME is in a protected macOS tree.
+TRUENAME is an absolute, symlink-resolved path (iCloud or another app
+container).  Pure predicate with no session resolution, so
+`emagent-tools--root-directory' can call it safely."
+  (or (string-prefix-p emagent-tools--icloud-dir truename)
+      (string-prefix-p emagent-tools--containers-dir truename)
+      (string-prefix-p emagent-tools--group-containers-dir truename)))
 
 (defun emagent-tools--within-boundary-p (resolved)
   "Return non-nil when RESOLVED is inside `emagent-tools--root-boundary'.

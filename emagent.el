@@ -93,9 +93,6 @@ target BUFFER (hence the two-argument signature)."
 (require 'emagent-trust)
 (require 'project)
 
-(declare-function emagent-trust-claude-record-trust "emagent-trust-claude" (directory))
-(declare-function emagent-trust-cursor-record-trust "emagent-trust-cursor" (directory))
-
 ;; Optional integrations — loaded only when the dependency is present.
 (require 'emagent-consult nil t)
 (require 'emagent-embark nil t)
@@ -361,8 +358,10 @@ trust use `emagent-trust-claude-reconnect' in this buffer (or clear
       (user-error "Remote directories are not supported: %s" dir))
     (dolist (p providers)
       (pcase p
-        ('claude (emagent-trust-claude-record-trust dir))
-        ('cursor (emagent-trust-cursor-record-trust dir))))
+        ('claude (and (fboundp 'emagent-trust-claude-record-trust)
+                      (emagent-trust-claude-record-trust dir)))
+        ('cursor (and (fboundp 'emagent-trust-cursor-record-trust)
+                      (emagent-trust-cursor-record-trust dir)))))
     (message "Recorded trust for %s (%s).%s"
              (mapconcat #'symbol-name providers ", ")
              dir
@@ -400,7 +399,6 @@ also re-seeded so TAB completion stays populated during reconnect."
   (interactive)
   (unless (derived-mode-p 'emagent-mode)
     (user-error "Turn on emagent-mode in this buffer first"))
-  (emagent-chat--wire-buffer)
   (emagent-chat-seed-cursor-slash-commands)
   (emagent-acp-ensure-connected
    :on-ready
