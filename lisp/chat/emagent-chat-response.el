@@ -299,7 +299,11 @@ are batched using `emagent-chat-response-stream-delay'."
 When the body text already streamed into the buffer equals CONVERTED,
 trimming trailing whitespace, skip the `delete-region' + reinsert
 entirely so a finish that mirrors the stream does not blank and redraw
-the whole response body."
+the whole response body.
+
+Org tables are aligned synchronously here.  An idle timer is unreliable:
+ACP/MCP process output keeps resetting Emacs idle, so deferred align
+often never ran and left pipe tables unaligned until a manual TAB."
   ;; Streaming fence state is no longer needed — finalization replaces the
   ;; buffer content with the fully-converted text.
   (setq emagent-chat--response-fence-state nil)
@@ -318,9 +322,12 @@ the whole response body."
                     (goto-char content-start)
                     (insert converted)
                     (point)))))
-      (when (string-match-p "|" (or existing converted))
-        (ignore-errors
-          (emagent-chat--schedule-align-org-tables content-start end)))
+      (when (and end (string-match-p "|" converted))
+        (let ((was-modified (buffer-modified-p)))
+          (unwind-protect
+              (ignore-errors
+                (emagent-chat--align-org-tables-in-region content-start end))
+            (set-buffer-modified-p was-modified))))
       (setq emagent-chat--assistant-marker (copy-marker end nil)))))
 
 (defvar emagent-chat--finish-close t

@@ -29,9 +29,10 @@
 ;;; Commentary:
 
 ;; ACP request dispatch: enqueue session/request_permission and route
-;; other session requests (fs/*).  Dialog UI lives in
-;; `emagent-acp-permission-dialog'; queue drain in
-;; `emagent-acp-permission-queue'.
+;; other session requests (fs/*, cursor/create_plan, cursor/ask_question).
+;; Dialog UI lives in `emagent-acp-permission-dialog'; queue drain in
+;; `emagent-acp-permission-queue'; Cursor extensions in
+;; `emagent-acp-cursor-ext'.
 
 ;;; Code:
 
@@ -42,6 +43,7 @@
 (require 'emagent-acp-file)
 (require 'emagent-acp-permission-queue)
 (require 'emagent-acp-permission-dialog)
+(require 'emagent-acp-cursor-ext)
 
 (cl-defun emagent-acp--on-permission (&key state emagent-acp-request)
   
@@ -51,8 +53,12 @@
   (emagent-acp--drain-permission-queue state))
 
 (cl-defun emagent-acp--on-request (&key state emagent-acp-request)
-  
-  "Internal helper for STATE and EMAGENT-ACP-REQUEST."
+  "Dispatch an inbound ACP request for STATE.
+
+Handles fs/*, session/request_permission, and Cursor extension methods
+cursor/create_plan and cursor/ask_question (blocking).
+
+Arguments: EMAGENT-ACP-REQUEST."
   (pcase (map-elt emagent-acp-request 'method)
     ("fs/read_text_file"
      (emagent-acp--on-fs-read :state state :emagent-acp-request emagent-acp-request))
@@ -60,6 +66,10 @@
      (emagent-acp--on-fs-write :state state :emagent-acp-request emagent-acp-request))
     ("session/request_permission"
      (emagent-acp--on-permission :state state :emagent-acp-request emagent-acp-request))
+    ("cursor/create_plan"
+     (emagent-acp--on-create-plan :state state :emagent-acp-request emagent-acp-request))
+    ("cursor/ask_question"
+     (emagent-acp--on-ask-question :state state :emagent-acp-request emagent-acp-request))
     (_
      (emagent-acp-send-response
       :client (emagent-acp-state-client state)

@@ -214,6 +214,27 @@ Arguments: REQUEST-ID."
                               `((outcome  . "selected")
                                 (optionId . ,option-id))))))))
 
+(cl-defun emagent-acp-make-cursor-create-plan-response (&key request-id outcome reason plan-uri)
+  "Build a Cursor cursor/create_plan response.
+
+OUTCOME is a string: accepted, rejected, or cancelled.  REASON is used
+when OUTCOME is rejected.  PLAN-URI is optional when accepting.
+
+Arguments: REQUEST-ID."
+  (unless request-id (error ":request-id is required"))
+  (unless (member outcome '("accepted" "rejected" "cancelled"))
+    (error "Invalid :outcome %S" outcome))
+  (let ((inner (pcase outcome
+                 ("accepted"
+                  (append '((outcome . "accepted"))
+                          (when plan-uri `((planUri . ,plan-uri)))))
+                 ("rejected"
+                  (append '((outcome . "rejected"))
+                          (when reason `((reason . ,reason)))))
+                 (_ '((outcome . "cancelled"))))))
+    `((:request-id . ,request-id)
+      (:result . ((outcome . ,inner))))))
+
 (cl-defun emagent-acp-make-fs-read-text-file-response (&key request-id content error)
   "Build a \"fs/read_text_file\" response with CONTENT or ERROR.
 

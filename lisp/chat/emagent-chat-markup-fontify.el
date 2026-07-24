@@ -152,16 +152,23 @@ Skipped while an ACP turn is still in flight so settle happens once."
           emagent-chat--table-align-end nil)
     (set-marker start nil)
     (set-marker end nil)
-    (let ((was-modified (buffer-modified-p)))
+    (let ((was-modified (buffer-modified-p))
+          (inhibit-read-only t))
       (unwind-protect
-          (save-excursion
-            (emagent-chat--align-org-tables-in-region s e))
+          (progn
+            (when (fboundp 'emagent-chat--writable)
+              (emagent-chat--writable))
+            (save-excursion
+              (emagent-chat--align-org-tables-in-region s e)))
         (set-buffer-modified-p was-modified)))))
 
 (defun emagent-chat--schedule-align-org-tables (start end)
-  "Schedule one idle alignment of org tables between START and END.
+  "Schedule alignment of org tables between START and END.
 
-Replaces any previous pending region for this buffer.  Never runs from
+Uses `run-at-time' (not an idle timer): continuous ACP/MCP process I/O
+resets Emacs idle, so `run-with-idle-timer' deferred aligns often never
+fired.  Finish prefers a synchronous align; this helper remains for
+callers that must not block the current filter.  Never runs from
 redisplay/`window-configuration-change-hook' — that path hung Emacs on
 large chats via `org-element' parses."
   (when (and (integer-or-marker-p start)
@@ -173,7 +180,7 @@ large chats via `org-element' parses."
           emagent-chat--table-align-end (copy-marker end nil))
     (let ((buf (current-buffer)))
       (setq emagent-chat--table-align-timer
-            (run-with-idle-timer
+            (run-at-time
              0 nil
              (lambda ()
                (when (buffer-live-p buf)
