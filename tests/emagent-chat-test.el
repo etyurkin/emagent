@@ -379,14 +379,15 @@ session present (the UI no longer pulls from the ACP layer)."
            (should (= flushed 1))))))))
 
 (ert-deftest emagent-chat-test-schedule-align-org-tables-region-only ()
-  "Schedule one idle align of the response region; never full-buffer from hooks.
+  "Schedule one deferred align of the response region via `run-at-time'.
 
 Regression: spinner `redisplay' + window-configuration-change-hook scanned
-the whole buffer with `org-at-table-p'/`org-element-at-point' and pegged CPU."
+the whole buffer with `org-at-table-p'/`org-element-at-point' and pegged CPU.
+Idle timers were abandoned: ACP process I/O resets idle and starved aligns."
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
      (let* ((aligned-bounds nil)
-            (idle-fns nil))
+            (timer-fns nil))
        (with-current-buffer buffer
          (insert "| a | b |\n|---+---|\n| 1 | 2 |\n")
          (let ((start (point-min))
@@ -395,18 +396,18 @@ the whole buffer with `org-at-table-p'/`org-element-at-point' and pegged CPU."
                (((symbol-function 'emagent-chat--align-org-tables-in-region)
                  (lambda (s e &rest _)
                    (push (cons s e) aligned-bounds)))
-                ((symbol-function 'run-with-idle-timer)
+                ((symbol-function 'run-at-time)
                  (lambda (_secs _repeat fn &rest _args)
-                   (push fn idle-fns)
+                   (push fn timer-fns)
                    'fake-timer)))
              (emagent-chat--schedule-align-org-tables start end)
              (should (markerp emagent-chat--table-align-start))
              (should (markerp emagent-chat--table-align-end))
              (should (= (marker-position emagent-chat--table-align-start) start))
              (should (= (marker-position emagent-chat--table-align-end) end))
-             (should (= (length idle-fns) 1))
+             (should (= (length timer-fns) 1))
              (should-not aligned-bounds)
-             (funcall (car idle-fns))
+             (funcall (car timer-fns))
              (should-not emagent-chat--table-align-start)
              (should-not emagent-chat--table-align-end)
              (should (= (length aligned-bounds) 1))
@@ -1861,6 +1862,27 @@ replacement text when agent output contains paths like C:\\Users."
           (let ((text (substring-no-properties (buffer-string))))
             (should (string-match-p "^|-" text))
             (should-not (string-match-p "Loading data" text)))))))))
+
+(ert-deftest emagent-chat-test-finish-aligns-org-tables-synchronously ()
+  "Finish must align pipe tables without waiting for an idle timer.
+
+Regression: deferred idle align never fired under continuous ACP I/O, so
+tables stayed ragged until the user hit TAB."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-finish-assistant
+           "| a | bb |
+| --- | --- |
+| 1 | 2 |
+")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p (regexp-quote "| 1 |  2 |") text))
+            (should (string-match-p (regexp-quote "|---+----|") text)))))))))
 
 (ert-deftest emagent-chat-test-finish-keeps-tools-in-reasoning ()
   (emagent-test--with-emagent-buffer
