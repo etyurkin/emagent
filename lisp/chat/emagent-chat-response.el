@@ -64,6 +64,9 @@ line actually arrives, so responses without reasoning never show an empty
 Thinking block."
   (let ((inhibit-read-only t))
     (emagent-chat--writable)
+    ;; Pin follow for this turn; cleared if the user scrolls the live end
+    ;; off-screen or moves point into earlier history.
+    (setq emagent-chat--follow-output t)
     (goto-char (or at (point)))
     (unless (bolp)
       (insert "\n"))
