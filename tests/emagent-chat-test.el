@@ -624,7 +624,7 @@ Idle timers were abandoned: ACP process I/O resets idle and starved aligns."
       (should (= 1 (window-start win))))))
 
 (ert-deftest emagent-chat-test-window-at-bottom-requires-point-at-eob ()
-  "Follow only when window-point is at EOB, not merely when EOB is visible.
+  "Follow only on the live tail, not merely when EOB is visible.
 
 Short chats fit in the window, so visibility alone used to keep yanking the
 cursor back to the end on every thought chunk."
@@ -635,7 +635,30 @@ cursor back to the end on every thought chunk."
       (goto-char (point-max))
       (should (emagent-chat--window-at-bottom-p win))
       (goto-char (point-min))
-      (should-not (emagent-chat--window-at-bottom-p win)))))
+      (should-not (emagent-chat--window-at-bottom-p win))
+      (should-not emagent-chat--follow-output))))
+
+(ert-deftest emagent-chat-test-window-at-bottom-follows-live-prompt ()
+  "After send, point on the prompt must still follow streamed output."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (let ((win (selected-window)))
+            (set-window-buffer win buffer)
+            (goto-char (point-max))
+            (let ((prompt-start (point)))
+              (insert (emagent-chat--user-heading-prefix) "hello
+")
+              (emagent-chat--begin-response (point))
+              (insert emagent-chat-preparing-headline "
+")
+              ;; Leave point on the prompt while output sits after it.
+              (goto-char prompt-start)
+              (set-window-point win (point))
+              (should emagent-chat--follow-output)
+              (should (emagent-chat--window-at-bottom-p win))))))))))
 
 (ert-deftest emagent-chat-test-streaming-view-keeps-point-when-not-at-eob ()
   "Thought streaming must not yank point when the user left EOB."

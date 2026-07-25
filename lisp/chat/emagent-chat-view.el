@@ -40,16 +40,70 @@
 
 (require 'cl-lib)
 
-(defun emagent-chat--window-at-bottom-p (window)
-  "Return non-nil when WINDOW's point is at the end of the current buffer.
+(defvar-local emagent-chat--follow-output nil
+  "Non-nil when this buffer should keep the live response in view.
 
-Used to decide whether streaming inserts should follow.  Checking only whether
-`point-max' is visible is wrong for short chats: the whole buffer fits in the
-window, so the end stays visible even after the user moves point earlier to
-read, and every thought chunk would jump the cursor back to EOB."
+Set when the user sends a prompt or the window sits on the live tail;
+cleared when they scroll so the follow position is off-screen or move
+point into earlier history.")
+
+(defun emagent-chat--follow-output-pos ()
+  "Return the buffer position streaming output should keep in view."
+  (or (when (fboundp 'emagent-chat--open-response-body-bounds)
+        (when-let ((bounds (emagent-chat--open-response-body-bounds)))
+          (cdr bounds)))
+      (point-max)))
+
+(defun emagent-chat--live-tail-start ()
+  "Return start of the live exchange (prompt + open response), or nil."
+  (when (and (fboundp 'emagent-chat--open-response-begin)
+             (fboundp 'emagent-chat--user-heading-re))
+    (when-let ((begin (emagent-chat--open-response-begin)))
+      (save-excursion
+        (goto-char begin)
+        (if (re-search-backward (emagent-chat--user-heading-re) nil t)
+            (line-beginning-position)
+          begin)))))
+
+(defun emagent-chat--window-at-bottom-p (window)
+  "Return non-nil when WINDOW should follow newly inserted chat output.
+
+Follow when the follow position is visible and point is on the live
+prompt/response (or sticky follow is still armed).  Exact `point-max'
+alone is not enough: after send, point often remains on the prompt while
+the Preparing/Thinking scaffold grows past it, so a strict EOB check
+stops following immediately.  Visibility of the end alone is also wrong
+for short chats — the whole buffer fits, so earlier point must not
+re-arm follow.
+
+Scrolling so the follow position leaves the window clears sticky follow."
   (and window (window-live-p window)
        (eq (window-buffer window) (current-buffer))
-       (= (window-point window) (point-max))))
+       (let* ((wp (window-point window))
+              (follow-pos (emagent-chat--follow-output-pos))
+              (tail (emagent-chat--live-tail-start))
+              (end-visible (or noninteractive
+                              (pos-visible-in-window-p follow-pos window)))
+              (in-live-tail (if tail (>= wp tail) (= wp (point-max)))))
+         (cond
+          ((not end-visible)
+           (when (eq window (selected-window))
+             (setq emagent-chat--follow-output nil))
+           nil)
+          ((not in-live-tail)
+           (when (eq window (selected-window))
+             (setq emagent-chat--follow-output nil))
+           nil)
+          ((= wp follow-pos)
+           (setq emagent-chat--follow-output t)
+           t)
+          ((= wp (point-max))
+           (setq emagent-chat--follow-output t)
+           t)
+          (emagent-chat--follow-output t)
+          (t
+           (setq emagent-chat--follow-output t)
+           t)))))
 
 (defun emagent-chat--save-window-views ()
   "Return saved scroll state for windows displaying the current buffer."
@@ -64,15 +118,16 @@ read, and every thought chunk would jump the cursor back to EOB."
 (defun emagent-chat--restore-window-views (views)
   "Restore scroll state from VIEWS returned by `emagent-chat--save-window-views'.
 
-Windows that were at the buffer end keep following newly inserted text by
-moving their `window-point' to `point-max', matching `emagent-log'."
+Windows marked for follow keep newly inserted text in view by moving
+their `window-point' to `emagent-chat--follow-output-pos'."
   (dolist (view views)
     (let ((win (plist-get view :window)))
       (when (window-live-p win)
         (if (plist-get view :at-bottom)
-            (progn
-              (set-window-point win (point-max))
+            (let ((pos (emagent-chat--follow-output-pos)))
+              (set-window-point win pos)
               (with-selected-window win
+                (goto-char pos)
                 (recenter -1)))
           (set-window-start win (plist-get view :start) t))))))
 
