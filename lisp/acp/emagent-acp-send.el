@@ -315,6 +315,7 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
   ;; not arm after an unrelated prompt, and a pending timer must not fire
   ;; into the middle of this turn's conversation.
   (emagent-acp--cancel-wakeup state)
+  (emagent-acp--cancel-plan-build state)
   (emagent-acp--provider-reset-tool-resolve state)
   (emagent-acp--reset-permission-gate state)
   (emagent-acp--cancel-prompt-render state)
@@ -386,6 +387,7 @@ finalized."
     (emagent-acp--cancel-prompt-render state)
     ;; Interrupt/stop must not leave a ScheduleWakeup to arm later.
     (emagent-acp--cancel-wakeup state)
+    (emagent-acp--cancel-plan-build state)
     (emagent-acp--flush-thought-buffer state)
     (when (and stop-notice (not (string-empty-p stop-notice)))
       (let* ((text (or (emagent-acp-state-assistant-text state) ""))

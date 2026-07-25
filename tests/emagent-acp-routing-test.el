@@ -131,6 +131,25 @@ calls it keeps going); the pending request is still cleared."
     (should (equal (alist-get :method request) "session/new"))
     (should (equal result '((ok . t))))))
 
+(ert-deftest emagent-acp-routing-test-history-replay-wire-line-p ()
+  "Detect history chunks; leave commands/result lines alone."
+  (should (emagent-acp--history-replay-wire-line-p
+           "{\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"agent_message_chunk\"}}}"))
+  (should (emagent-acp--history-replay-wire-line-p
+           "{\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"tool_call\"}}}"))
+  (should-not (emagent-acp--history-replay-wire-line-p
+               "{\"method\":\"session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"available_commands_update\"}}}"))
+  (should-not (emagent-acp--history-replay-wire-line-p
+               "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"sessionId\":\"x\"}}"))
+  (should-not (emagent-acp--history-replay-wire-line-p nil)))
+
+(ert-deftest emagent-acp-routing-test-set-suppress-history-updates ()
+  (let ((client (emagent-test--make-test-client)))
+    (emagent-acp--set-suppress-history-updates client t)
+    (should (eq t (map-elt client :suppress-history-updates)))
+    (emagent-acp--set-suppress-history-updates client nil)
+    (should (null (map-elt client :suppress-history-updates)))))
+
 (provide 'emagent-acp-routing-test)
 
 ;;; emagent-acp-routing-test.el ends here

@@ -120,16 +120,27 @@ calls render but nothing fires."
   :type 'boolean
   :group 'emagent)
 
-(defcustom emagent-acp-auto-accept-plans 'permissions
-  "When to auto-accept Cursor `cursor/create_plan' requests without prompting.
+(defcustom emagent-acp-auto-accept-plans nil
+  "When to auto-accept Cursor `cursor/create_plan' without prompting.
 
-nil — always show Accept/Reject buttons
+nil — always show the plan with Accept/Reject (default; matches Cursor IDE)
 t — always accept
 permissions — accept when the session is Allow-all or
-`emagent-acp-auto-approve-permissions' is t (also in batch tests)"
+`emagent-acp-auto-approve-permissions' is t
+
+Batch/noninteractive sessions always auto-accept so ERT does not hang."
   :type '(choice (const :tag "Always prompt" nil)
                  (const :tag "Always accept" t)
                  (const :tag "Follow permission auto-approve" permissions))
+  :group 'emagent)
+
+(defcustom emagent-acp-auto-build-plans t
+  "When non-nil, accept of `cursor/create_plan' queues a Build turn.
+
+Cursor ends the planning turn after create_plan; the IDE's Build button
+is a separate follow-up.  Emagent mirrors that by sending an execute
+prompt (and switching to agent mode) once the current turn finishes."
+  :type 'boolean
   :group 'emagent)
 
 (defcustom emagent-acp-stream-to-buffer nil
