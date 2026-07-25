@@ -91,7 +91,9 @@ Arguments: RAW."
                              (when-let ((v (map-elt tool-call 'kind)))
                                (cons 'kind v))
                              (when-let ((v (map-elt tool-call 'status)))
-                               (cons 'status v)))))))
+                               (cons 'status v))
+                             (when-let ((v (map-elt tool-call 'content)))
+                               (cons 'content v)))))))
 
 (defun emagent-acp--tool-call-truncate (string)
   "Return STRING truncated for tool-call display."

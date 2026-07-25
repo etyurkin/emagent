@@ -119,6 +119,36 @@ so the request is cancelled (fail-closed) rather than escalated to allow_always.
   "Return a deny optionId from OPTIONS, or nil."
   (map-elt (seq-find #'emagent-acp--permission-option-deny-p options) 'optionId))
 
+(defun emagent-acp--switch-mode-choices (options)
+  "Return (NAME . OPTION-ID) pairs from switch_mode OPTIONS."
+  (let (choices)
+    (dolist (opt (append options nil))
+      (when-let* ((id (map-elt opt 'optionId))
+                  ((and (stringp id) (not (string-empty-p id))))
+                  (name (or (map-elt opt 'name) id))
+                  ((stringp name)))
+        (push (cons name id) choices)))
+    (nreverse choices)))
+
+(defun emagent-acp--switch-mode-plan-text (tool-call)
+  "Return plan text from switch_mode TOOL-CALL content blocks, or nil."
+  (when-let ((blocks (append (map-elt tool-call 'content) nil)))
+    (let (parts)
+      (dolist (block blocks)
+        (let* ((inner (or (map-elt block 'content) block))
+               (text (or (map-elt inner 'text)
+                         (map-elt block 'text)
+                         (and (stringp inner) inner))))
+          (when (and (stringp text) (not (string-empty-p (string-trim text))))
+            (push (string-trim text) parts))))
+      (when parts
+        (string-join (nreverse parts) "\n\n")))))
+
+(defun emagent-acp--switch-mode-preamble (tool-call)
+  "Return an org quote preamble for switch_mode TOOL-CALL plan text."
+  (when-let ((text (emagent-acp--switch-mode-plan-text tool-call)))
+    (concat "#+begin_quote\n" text "\n#+end_quote\n")))
+
 (defconst emagent-acp--subcommand-programs
   '("git" "npm" "npx" "pnpm" "yarn" "docker" "docker-compose" "kubectl"
     "cargo" "go" "pip" "pip3" "gh" "brew" "apt" "apt-get" "systemctl"

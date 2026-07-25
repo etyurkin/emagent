@@ -97,8 +97,9 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
   cb-chunk cb-thought cb-finish cb-fail cb-slash-commands
   cb-tool-call cb-permission cb-status
   ;; After cursor/create_plan accept: follow-up Build turn
-  ;; Kept last so hot-reloads do not shift callback slot indices.
-  plan-build-prompt plan-build-timer)
+  plan-build-prompt plan-build-timer
+  ;; Session mode (ACP modes / current_mode_update); kept last for hot-reload.
+  session-mode-id available-modes)
 
 (defun emagent-acp--strip-pino-colors (string)
   "Remove literal pino color tokens like [32m from STRING."

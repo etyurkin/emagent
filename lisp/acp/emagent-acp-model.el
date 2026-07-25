@@ -329,6 +329,20 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
                             (or (map-elt error 'message) (format "%s" error))))
                    (when on-failure (funcall on-failure))))))
 
+
+(defun emagent-acp--save-session-modes (state response)
+  "Store available modes and current mode id from session RESPONSE in STATE."
+  (when-let ((modes (or (map-elt response 'modes) (map-elt response :modes))))
+    (when-let ((available (or (map-elt modes 'availableModes)
+                              (map-elt modes :availableModes))))
+      (setf (emagent-acp-state-available-modes state) (append available nil)))
+    (when-let ((mode-id (or (map-elt modes 'currentModeId)
+                            (map-elt modes :currentModeId)
+                            (map-elt modes 'modeId)
+                            (map-elt modes :modeId))))
+      (when (and (stringp mode-id) (not (string-empty-p mode-id)))
+        (setf (emagent-acp-state-session-mode-id state) mode-id)))))
+
 (defun emagent-acp--finish-configure-model (state session-id on-ready resumed)
   
   "Internal helper for STATE and SESSION-ID and ON-READY and RESUMED."
@@ -345,6 +359,7 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
   "Internal helper for STATE and SESSION-ID and RESPONSE and ON-READY and RESUMED."
   (emagent-acp--progress state "selecting model…")
   (emagent-acp--save-config-options state (map-elt response 'configOptions))
+  (emagent-acp--save-session-modes state response)
   (let* ((models (emagent-acp--models-from-response response))
          (current (emagent-acp--current-model-id state models))
          (choice (emagent-acp--resolve-model-id state models

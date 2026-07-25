@@ -214,7 +214,8 @@ layer (see `emagent-chat-set-status')."
           :ctx-unavailable (and (or (emagent-acp-state-busy state)
                                     (emagent-acp-state-ready state))
                                 (emagent-acp--provider-context-usage-unavailable-p
-                                 state)))))
+                                 state))
+          :mode-id (emagent-acp-state-session-mode-id state))))
 
 (defun emagent-acp--refresh-mode-line (state)
   

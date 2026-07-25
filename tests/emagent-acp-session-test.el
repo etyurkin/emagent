@@ -1649,6 +1649,111 @@ project directory rather than opening up unconfined access."
         (should scheduled)
         (should (null (emagent-acp-state-permission-queue state)))))))
 
+
+
+(ert-deftest emagent-acp-session-test-switch-mode-returns-exact-option-id ()
+  "ExitPlanMode-shaped switch_mode returns the selected mode optionId."
+  (let* ((state (emagent-test--make-acp-state))
+         (options [((optionId . "auto")
+                    (name . "Yes, and use auto mode")
+                    (kind . "allow_always"))
+                   ((optionId . "default")
+                    (name . "Yes, and manually approve edits")
+                    (kind . "allow_once"))
+                   ((optionId . "plan")
+                    (name . "No, keep planning")
+                    (kind . "reject_once"))])
+         (tool-call `((toolCallId . "exit1")
+                      (kind . "switch_mode")
+                      (title . "Ready to code?")
+                      (content . [((type . "content")
+                                   (content . ((type . "text")
+                                               (text . "Do the thing"))))])))
+         (request `((id . "req-exit-plan")
+                    (params . ((title . "Ready to code?")
+                               (options . ,options)
+                               (toolCall . ,tool-call)))))
+         (sent-id nil)
+         (seen-choices nil)
+         (seen-preamble nil))
+    (let ((emagent-acp-auto-approve-permissions t))
+      (emagent-test--with-mocks
+          (((symbol-function 'emagent-chat--open-response-p) (lambda () nil))
+           ((symbol-function 'emagent-tools--buttons-prompt)
+            (emagent-test--mock-buttons-prompt
+             "default"
+             (lambda (args)
+               (setq seen-choices (nth 1 args)
+                     seen-preamble (nth 4 args)))))
+           ((symbol-function 'emagent-acp-send-response)
+            (cl-function
+             (lambda (&key response &allow-other-keys)
+               (setq sent-id (map-nested-elt response '(:result outcome optionId)))))))
+        (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
+        (should (string= "default" sent-id))
+        (should (equal (mapcar #'cdr seen-choices) '("auto" "default" "plan")))
+        (should (string-match-p "Do the thing" (or seen-preamble "")))))))
+
+(ert-deftest emagent-acp-session-test-switch-mode-stay-plan-option ()
+  "Selecting keep-planning returns optionId plan."
+  (let* ((state (emagent-test--make-acp-state))
+         (options [((optionId . "default")
+                    (name . "Yes")
+                    (kind . "allow_once"))
+                   ((optionId . "plan")
+                    (name . "No, keep planning")
+                    (kind . "reject_once"))])
+         (request `((id . "req-stay")
+                    (params . ((options . ,options)
+                               (toolCall . ((toolCallId . "exit2")
+                                            (kind . "switch_mode")
+                                            (title . "Ready to code?")))))))
+         (sent-id nil))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-tools--buttons-prompt)
+          (emagent-test--mock-buttons-prompt "plan"))
+         ((symbol-function 'emagent-acp-send-response)
+          (cl-function
+           (lambda (&key response &allow-other-keys)
+             (setq sent-id (map-nested-elt response '(:result outcome optionId)))))))
+      (emagent-acp--handle-one-permission :state state :emagent-acp-request request)
+      (should (string= "plan" sent-id)))))
+
+(ert-deftest emagent-acp-session-test-switch-mode-label-rewrites-unknown ()
+  (let ((update '((kind . "switch_mode")
+                  (title . "Switch Mode: unknown")
+                  (rawInput . ((targetModeId . "plan")))))
+        )
+    (should (string= "Switch to plan"
+                     (emagent-acp--switch-mode-display-title update)))
+    (should (string= "Switch to plan"
+                     (emagent-acp--tool-call-label update))))
+  (let ((update '((kind . "switch_mode")
+                  (title . "Switch Mode: unknown")
+                  (rawInput . ((explanation . "Need ask mode for this")))))
+        )
+    (should (string-match-p "Need ask mode"
+                            (emagent-acp--switch-mode-display-title update)))
+    (should-not (string-match-p "unknown"
+                                (emagent-acp--switch-mode-display-title update)))))
+
+(ert-deftest emagent-acp-session-test-current-mode-update-sets-state ()
+  (let ((state (emagent-test--make-acp-state)))
+    (emagent-acp--on-notification
+     :state state
+     :emagent-acp-notification
+     '((method . "session/update")
+       (params . ((update . ((sessionUpdate . "current_mode_update")
+                             (currentModeId . "plan")))))))
+    (should (string= "plan" (emagent-acp-state-session-mode-id state)))
+    (emagent-acp--on-notification
+     :state state
+     :emagent-acp-notification
+     '((method . "session/update")
+       (params . ((update . ((sessionUpdate . "current_mode_update")
+                             (modeId . "agent")))))))
+    (should (string= "agent" (emagent-acp-state-session-mode-id state)))))
+
 (provide 'emagent-acp-session-test)
 
 ;;; emagent-acp-session-test.el ends here
