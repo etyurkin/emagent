@@ -62,6 +62,49 @@ because generic names like `grep' collide with agent-native tools."
              (string-match-p "\\bemagent\\b" title)
              t))))
 
+(defun emagent-acp--switch-mode-tool-p (tool-call)
+  "Return non-nil when TOOL-CALL is an ACP mode-switch permission/tool."
+  (when tool-call
+    (let ((kind (downcase (or (map-elt tool-call 'kind) "")))
+          (title (string-trim (or (map-elt tool-call 'title) ""))))
+      (or (string= kind "switch_mode")
+          (string-match-p "\\`ExitPlanMode\\'" title)
+          (string-match-p "\\`Ready to code[?]\\'" title)))))
+
+(defun emagent-acp--switch-mode-target-id (tool-call)
+  "Return target mode id from TOOL-CALL rawInput, or nil."
+  (when-let* ((raw (or (map-elt tool-call 'rawInput)
+                       (map-elt tool-call 'arguments)))
+              (data (emagent-acp--tool-call-normalize-data raw)))
+    (let ((target (or (emagent-acp--tool-call-data-get data 'targetModeId)
+                      (emagent-acp--tool-call-data-get data 'target_mode_id))))
+      (when (and (stringp target) (not (string-empty-p (string-trim target))))
+        (string-trim target)))))
+
+(defun emagent-acp--switch-mode-display-title (tool-call)
+  "Return a user-facing title for switch_mode TOOL-CALL.
+
+Never leaves bare `unknown' (Cursor titles SwitchMode that way when
+targetModeId is missing)."
+  (let* ((title (string-trim (or (map-elt tool-call 'title) "")))
+         (raw (or (map-elt tool-call 'rawInput) (map-elt tool-call 'arguments)))
+         (data (and raw (emagent-acp--tool-call-normalize-data raw)))
+         (target (emagent-acp--switch-mode-target-id tool-call))
+         (explanation (and data (emagent-acp--tool-call-data-get data 'explanation)))
+         (explanation (and (stringp explanation)
+                           (let ((e (string-trim explanation)))
+                             (unless (string-empty-p e) e))))
+         (bad (or (string-empty-p title)
+                  (string-match-p "\\`unknown\\'" title)
+                  (string-match-p ":\\s-*unknown\\s-*\\'" title))))
+    (cond
+     ((and (not bad) (not (string-empty-p title))) title)
+     (target (format "Switch to %s" target))
+     (explanation
+      (format "Switch mode: %s"
+              (truncate-string-to-width explanation 60 nil nil "...")))
+     (t "Switch mode"))))
+
 
 (defun emagent-acp--ingest-tool-call-request (state tool-call)
   "Merge TOOL-CALL from session/request_permission and refresh display.
@@ -131,10 +174,12 @@ Arguments: STATE, ID, KIND, MERGED, STATUS."
 
 A scoped approval (`:allow-session' etc.) renders as `(Allow: Session)'; a
 generic approval (`:allow', used for policy/auto-trust) renders as `(Allow)';
-`:deny' renders as `(Denied)'."
+`:deny' renders as `(Denied)'.  A string CHOICE (switch_mode optionId) is
+shown as-is."
   (pcase choice
     ('nil base-label)
     (:deny (format "%s (Denied)" base-label))
+    ((pred stringp) (format "%s (%s)" base-label choice))
     (_ (if-let ((suffix (emagent-acp--permission-choice-label choice)))
            (format "%s (Allow: %s)" base-label suffix)
          (format "%s (Allow)" base-label)))))
@@ -160,7 +205,12 @@ Arguments: STATE."
   "Return a display label for ACP tool-call UPDATE."
   (let* ((title (string-trim (or (map-elt update 'title) "tool")))
          (title (if (string-match-p "\\`MCP:? *tool\\'" title) "MCP" title))
-         (detail (emagent-acp--tool-call-detail update)))
+         (switch-mode (emagent-acp--switch-mode-tool-p update))
+         (title (if switch-mode
+                    (emagent-acp--switch-mode-display-title update)
+                  title))
+         (detail (and (not switch-mode)
+                      (emagent-acp--tool-call-detail update))))
     (cond
      ((and detail (not (string-empty-p detail))
            (not (string-match-p (regexp-quote detail) title))

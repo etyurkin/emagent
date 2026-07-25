@@ -328,8 +328,8 @@ Skips silently when the buffer is gone or a prompt is already running
           (emagent-chat--begin-response response-pos))
         (funcall emagent-chat--on-send text))))))
 
-(defun emagent-acp--ensure-agent-mode (state)
-  "Best-effort `session/set_mode' to agent for STATE before Build."
+(defun emagent-acp--set-session-mode (state mode-id)
+  "Best-effort `session/set_mode' to MODE-ID for STATE."
   (when-let ((session-id (emagent-acp-state-session-id state)))
     (unless (fboundp 'emagent-acp--send-request)
       (require 'emagent-acp-wire))
@@ -337,11 +337,20 @@ Skips silently when the buffer is gone or a prompt is already running
      :state state
      :request (emagent-acp-make-session-set-mode-request
                :session-id session-id
-               :mode-id "agent")
+               :mode-id mode-id)
+     :on-success
+     (lambda (_response)
+       (setf (emagent-acp-state-session-mode-id state) mode-id)
+       (emagent-acp--refresh-mode-line state))
      :on-failure
      (lambda (err _raw)
-       (emagent-log "session/set_mode agent failed: %s"
+       (emagent-log "session/set_mode %s failed: %s"
+                    mode-id
                     (or (map-elt err 'message) err))))))
+
+(defun emagent-acp--ensure-agent-mode (state)
+  "Best-effort `session/set_mode' to agent for STATE before Build."
+  (emagent-acp--set-session-mode state "agent"))
 
 (defun emagent-acp--fire-plan-build (state text)
   "Send TEXT as the Build follow-up turn for STATE."

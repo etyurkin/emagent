@@ -133,6 +133,16 @@ Arguments: EMAGENT-ACP-NOTIFICATION."
                        (cb (emagent-acp-state-cb-slash-commands state)))
              (with-current-buffer buffer
                (funcall cb commands)))))
+        ("current_mode_update"
+         (let* ((update (map-nested-elt emagent-acp-notification
+                                        '(params update)))
+                (mode-id (or (map-elt update 'currentModeId)
+                             (map-elt update 'modeId)
+                             (map-elt update :currentModeId)
+                             (map-elt update :modeId))))
+           (when (and (stringp mode-id) (not (string-empty-p mode-id)))
+             (setf (emagent-acp-state-session-mode-id state) mode-id)
+             (emagent-acp--refresh-mode-line state))))
         (_ nil)))))
 
 (cl-defun emagent-acp--subscribe (&key state)

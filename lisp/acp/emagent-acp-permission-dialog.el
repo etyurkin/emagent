@@ -71,10 +71,17 @@ Arguments: EMAGENT-ACP-REQUEST."
 
 (defun emagent-acp--permission-prompt-title (emagent-acp-request)
   "Return the primary permission question line from EMAGENT-ACP-REQUEST."
-  (when-let ((raw (or (map-nested-elt emagent-acp-request '(params title))
-                       (map-nested-elt emagent-acp-request '(params toolCall title))
-                       "Permission request")))
-    (car (split-string raw "\n" t))))
+  (let* ((tool-call (map-nested-elt emagent-acp-request '(params toolCall)))
+         (raw (or (map-nested-elt emagent-acp-request '(params title))
+                  (map-nested-elt emagent-acp-request '(params toolCall title))
+                  "Permission request"))
+         (title (car (split-string raw "\n" t))))
+    (if (and tool-call (emagent-acp--switch-mode-tool-p tool-call))
+        (emagent-acp--switch-mode-display-title
+         (if (map-elt tool-call 'title)
+             tool-call
+           (cons (cons 'title title) tool-call)))
+      title)))
 
 (defun emagent-acp--permission-prompt-text (emagent-acp-request)
   "Return user-facing permission prompt text for EMAGENT-ACP-REQUEST."
@@ -91,7 +98,11 @@ Arguments: EMAGENT-ACP-REQUEST."
 
 For auto-deny/auto-approve: sends the ACP response synchronously and calls
 ON-COMPLETE immediately.  For interactive prompts: inserts the dialog
-non-blockingly and returns; ON-COMPLETE is called after the user responds."
+non-blockingly and returns; ON-COMPLETE is called after the user responds.
+
+`switch_mode' permissions (Claude ExitPlanMode, Cursor SwitchMode) never
+auto-approve: the agent's optionIds are mode ids and must be returned
+unchanged."
   (let* ((raw-tool-call (map-nested-elt emagent-acp-request '(params toolCall)))
          (tool-call (and raw-tool-call
                          (emagent-acp--permission-tool-call state raw-tool-call)))
@@ -102,28 +113,37 @@ non-blockingly and returns; ON-COMPLETE is called after the user responds."
          (validation (and tool-call (emagent-acp--permission-validate tool-call)))
          (buf (emagent-acp--chat-buffer state))
          (allow-id (emagent-acp--permission-acp-allow-id options))
-         (deny-id (emagent-acp--permission-acp-deny-id options)))
+         (deny-id (emagent-acp--permission-acp-deny-id options))
+         (switch-mode (emagent-acp--switch-mode-tool-p tool-call))
+         (switch-choices (and switch-mode
+                              (emagent-acp--switch-mode-choices options))))
     (when raw-tool-call
       (emagent-acp--ingest-tool-call-request state raw-tool-call))
     (let ((respond
            (lambda (choice)
-             (when (emagent-acp--permission-approved-choice-p choice)
+             (when (and (not switch-mode)
+                        (emagent-acp--permission-approved-choice-p choice))
                (emagent-acp--permission-apply-choice state fingerprint buf choice))
              (let* ((response
                      (cond
-                      ((and validation (eq (car validation) :deny))
+                      ((and (stringp choice) (not (string-empty-p choice)))
+                       (emagent-acp-make-session-request-permission-response
+                        :request-id request-id :option-id choice))
+                      ((and (not switch-mode)
+                            validation (eq (car validation) :deny))
                        (if deny-id
                            (emagent-acp-make-session-request-permission-response
                             :request-id request-id :option-id deny-id)
                          (emagent-acp-make-session-request-permission-response
                           :request-id request-id :cancelled t)))
-                      ((emagent-acp--permission-approved-choice-p choice)
+                      ((and (not switch-mode)
+                            (emagent-acp--permission-approved-choice-p choice))
                        (if allow-id
                            (emagent-acp-make-session-request-permission-response
                             :request-id request-id :option-id allow-id)
                          (emagent-acp-make-session-request-permission-response
                           :request-id request-id :cancelled t)))
-                      ((eq choice :deny)
+                      ((and (not switch-mode) (eq choice :deny))
                        (if deny-id
                            (emagent-acp-make-session-request-permission-response
                             :request-id request-id :option-id deny-id)
@@ -138,6 +158,30 @@ non-blockingly and returns; ON-COMPLETE is called after the user responds."
                (emagent-acp-send-response :client (emagent-acp-state-client state) :response response))
              (when on-complete (funcall on-complete)))))
       (cond
+       (switch-mode
+        (unless (fboundp 'emagent-acp--prepare-interactive-context)
+          (require 'emagent-acp-prompt))
+        (emagent-acp--prepare-interactive-context state)
+        (emagent-acp--clear-prompt-watchdog state)
+        (let ((after-response
+               (lambda (choice)
+                 (when choice
+                   (emagent-acp--show-permission-decision state tool-call choice))
+                 (when (emagent-acp-state-busy state)
+                   (unless (fboundp 'emagent-acp--schedule-prompt-watchdog)
+                     (require 'emagent-acp-prompt))
+                   (emagent-acp--schedule-prompt-watchdog state))
+                 (emagent-acp--refresh-mode-line state)
+                 (funcall respond (or choice :cancel))))
+              (choices (or switch-choices
+                           '(("Cancel" . :cancel))))
+              (prompt (or (and tool-call
+                               (emagent-acp--switch-mode-display-title tool-call))
+                          question))
+              (preamble (emagent-acp--switch-mode-preamble
+                         (or raw-tool-call tool-call))))
+          (emagent-tools--buttons-prompt
+           prompt choices buf after-response preamble)))
        ((and validation (eq (car validation) :deny))
         (emagent-log "permission denied by emagent gate: %s — %s" question (cdr validation))
         (emagent-acp--show-permission-decision state tool-call :deny)
