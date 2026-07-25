@@ -96,6 +96,26 @@ modify each outgoing JSON-RPC request before it is sent."
   (and (map-elt client :process)
        (process-live-p (map-elt client :process))))
 
+(defconst emagent-acp--history-replay-update-re
+  (concat "\"sessionUpdate\"[[:space:]]*:[[:space:]]*\""
+          "\\(?:agent_message_chunk\\|agent_thought_chunk\\|"
+          "tool_call\\|tool_call_update\\)\"")
+  "Match compact/spaced ACP history `sessionUpdate' types on one wire line.")
+
+(defun emagent-acp--history-replay-wire-line-p (json)
+  "Return non-nil when JSON is a history-replay `session/update' wire line.
+
+Used during `session/load' to drop transcript replay chunks before they enter
+the message queue.  The org chat buffer already holds the conversation; parsing
+thousands of chunks at `emagent-acp-message-drain-batch-size' 1 makes resume
+appear hung."
+  (and (stringp json)
+       (string-match-p emagent-acp--history-replay-update-re json)))
+
+(defun emagent-acp--set-suppress-history-updates (client suppress)
+  "Set CLIENT `:suppress-history-updates' to SUPPRESS (non-nil to drop replay)."
+  (map-put! client :suppress-history-updates (and suppress t)))
+
 (cl-defun emagent-acp--start-client (&key client)
   "Start the CLIENT process with a cooperative, timer-driven message queue.
 
@@ -179,7 +199,9 @@ redisplay are not starved during heavy agent output."
                ;; a non-local exit that escapes the loop entirely.
                (unwind-protect
                    (let ((batch 0)
-                         (limit (max 1 emagent-acp-message-drain-batch-size)))
+                         (limit (max 1 (if (map-elt client :suppress-history-updates)
+                                        256
+                                      emagent-acp-message-drain-batch-size))))
                      (while (and message-queue (< batch limit))
                        (setq batch (1+ batch))
                        (let ((item (car message-queue)))
@@ -195,7 +217,10 @@ redisplay are not starved during heavy agent output."
                  (when (and message-queue (not drain-pending))
                    (setq drain-pending t)
                    (run-with-timer
-                    (max 0 emagent-acp-message-drain-yield) nil
+                    (if (map-elt client :suppress-history-updates)
+                        0
+                      (max 0 emagent-acp-message-drain-yield))
+                    nil
                     (lambda () (drain)))))))
            (enqueue (json-line)
              (let ((cell (list json-line)))
@@ -225,8 +250,14 @@ redisplay are not starved during heavy agent output."
                     (let ((start 0) pos)
                       (while (setq pos (string-search "\n" pending-input start))
                         (let ((json (substring pending-input start pos)))
-                          (emagent-acp--log client "INCOMING LINE" "%s" json)
-                          (enqueue json))
+                          (if (and (map-elt client :suppress-history-updates)
+                                   (emagent-acp--history-replay-wire-line-p json))
+                              (emagent-acp--log
+                               client "INCOMING LINE"
+                               "(suppressed history) %s"
+                               (truncate-string-to-width json 120 nil nil t))
+                            (emagent-acp--log client "INCOMING LINE" "%s" json)
+                            (enqueue json)))
                         (setq start (1+ pos)))
                       (setq pending-input (substring pending-input start))))
                   :sentinel

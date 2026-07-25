@@ -118,8 +118,8 @@ nil or dead, calling CALLBACK with the chosen value."
               (dolist (choice choices)
                 (let* ((v (cdr choice))
                        (key (cond
-                             ((memq v '(yes :allow-once)) "y")
-                             ((memq v '(no :deny))        "n")
+                             ((memq v '(yes :allow-once :accept)) "y")
+                             ((memq v '(no :deny :reject))      "n")
                              ((eq v :allow-session)       "s")
                              ((eq v :allow-always)        "w")
                              ((memq v '(all :allow-all))  "a")

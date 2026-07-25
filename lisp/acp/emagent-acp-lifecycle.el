@@ -161,6 +161,8 @@ Arguments: STATE, ON-READY."
   "Resume SESSION-ID for STATE, falling back to session/new on failure."
   (emagent-acp--progress state "resuming session…")
   (setf (emagent-acp-state-replaying-history state) t)
+  (emagent-acp--set-suppress-history-updates
+   (emagent-acp-state-client state) t)
   (emagent-acp--send-request
    :state state
    :request (emagent-acp-make-session-load-request
@@ -170,6 +172,8 @@ Arguments: STATE, ON-READY."
                                                        (emagent-acp--chat-buffer state))
              :meta `((systemPrompt . ((append . ,(emagent-acp--system-prompt))))))
    :on-success (lambda (response)
+                 (emagent-acp--set-suppress-history-updates
+                  (emagent-acp-state-client state) nil)
                  (setf (emagent-acp-state-replaying-history state) nil)
                  (unless (fboundp 'emagent-acp--configure-model)
                    (require 'emagent-acp-model))
@@ -180,6 +184,8 @@ Arguments: STATE, ON-READY."
                   :on-ready on-ready
                   :resumed t))
    :on-failure (lambda (error _raw)
+                 (emagent-acp--set-suppress-history-updates
+                  (emagent-acp-state-client state) nil)
                  (setf (emagent-acp-state-replaying-history state) nil)
                  (emagent-log "session/load failed for %s: %s"
                               session-id

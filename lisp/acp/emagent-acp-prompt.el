@@ -285,7 +285,8 @@ Arguments: STATE."
       (emagent-acp--save-usage-from-response state (map-elt response 'usage)))
     (emagent-acp--refresh-mode-line state)
     (emagent-acp--schedule-prompt-render state)
-    (emagent-acp--arm-wakeup state))))
+    (emagent-acp--arm-wakeup state)
+    (emagent-acp--arm-plan-build state))))
 
 (defun emagent-acp--arm-wakeup (state)
   "Start the ScheduleWakeup timer for STATE after this turn completes.
@@ -326,6 +327,39 @@ Skips silently when the buffer is gone or a prompt is already running
         (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
           (emagent-chat--begin-response response-pos))
         (funcall emagent-chat--on-send text))))))
+
+(defun emagent-acp--ensure-agent-mode (state)
+  "Best-effort `session/set_mode' to agent for STATE before Build."
+  (when-let ((session-id (emagent-acp-state-session-id state)))
+    (unless (fboundp 'emagent-acp--send-request)
+      (require 'emagent-acp-wire))
+    (emagent-acp--send-request
+     :state state
+     :request (emagent-acp-make-session-set-mode-request
+               :session-id session-id
+               :mode-id "agent")
+     :on-failure
+     (lambda (err _raw)
+       (emagent-log "session/set_mode agent failed: %s"
+                    (or (map-elt err 'message) err))))))
+
+(defun emagent-acp--fire-plan-build (state text)
+  "Send TEXT as the Build follow-up turn for STATE."
+  (setf (emagent-acp-state-plan-build-timer state) nil)
+  (emagent-acp--fire-wakeup state text))
+
+(defun emagent-acp--arm-plan-build (state)
+  "Arm a Build turn when create_plan queued one on STATE."
+  (when-let ((text (emagent-acp-state-plan-build-prompt state)))
+    (setf (emagent-acp-state-plan-build-prompt state) nil)
+    (when-let ((timer (emagent-acp-state-plan-build-timer state)))
+      (when (timerp timer) (cancel-timer timer))
+      (setf (emagent-acp-state-plan-build-timer state) nil))
+    (emagent-log "cursor/create_plan: arming Build turn")
+    (emagent-acp--ensure-agent-mode state)
+    (setf (emagent-acp-state-plan-build-timer state)
+          (run-with-timer 0.35 nil
+                          #'emagent-acp--fire-plan-build state text))))
 
 (defun emagent-acp--log-thought-line (mode text)
   "Log one thought TEXT line according to MODE."
@@ -488,6 +522,7 @@ was still working."
     (when (or in-flight force)
       ;; Do not arm a ScheduleWakeup captured during a failed/aborted turn.
       (emagent-acp--cancel-wakeup state)
+      (emagent-acp--cancel-plan-build state)
       (when in-flight
         (emagent-acp--clear-prompt-watchdog state)
         (emagent-acp--cancel-prompt-render state)

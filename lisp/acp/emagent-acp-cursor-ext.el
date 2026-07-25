@@ -50,14 +50,17 @@
   (or (map-elt request 'params) (map-elt request :params)))
 
 (defun emagent-acp--cursor-auto-accept-plan-p (state)
-  "Return non-nil when STATE should accept `cursor/create_plan' without prompting."
-  (pcase emagent-acp-auto-accept-plans
-    ('t t)
-    ('nil nil)
-    (_
-     (or (emagent-acp-state-session-auto-approve state)
-         (eq emagent-acp-auto-approve-permissions t)
-         noninteractive))))
+  "Return non-nil when STATE should accept `cursor/create_plan' without prompting.
+
+Noninteractive sessions always auto-accept.  Interactively, honor
+`emagent-acp-auto-accept-plans' (default nil = prompt)."
+  (or noninteractive
+      (pcase emagent-acp-auto-accept-plans
+        ('t t)
+        ('nil nil)
+        (_
+         (or (emagent-acp-state-session-auto-approve state)
+             (eq emagent-acp-auto-approve-permissions t))))))
 
 (defun emagent-acp--format-create-plan-text (params)
   "Return display text for a `cursor/create_plan' PARAMS alist."
@@ -87,6 +90,12 @@
           (push (concat "Todos:\n" (string-join lines "\n")) parts))))
     (string-join (nreverse parts) "\n\n")))
 
+(defun emagent-acp--create-plan-preamble (text)
+  "Return an org quote block wrapping plan TEXT for approval."
+  (concat "#+begin_quote\n"
+          (string-trim text)
+          "\n#+end_quote\n"))
+
 (defun emagent-acp--insert-create-plan-thought (state text)
   "Append plan TEXT into STATE's chat Thinking section when possible."
   (when-let* ((buf (emagent-acp--chat-buffer state))
@@ -100,9 +109,59 @@
           (emagent-chat-append-thought (concat "\n\n" trimmed "\n"))
           (emagent-chat--flush-thought-pending t))))))
 
-(defun emagent-acp--send-create-plan-outcome (state request-id outcome &optional reason)
+(defun emagent-acp--persist-create-plan (state params)
+  "Write create_plan PARAMS under ~/.cursor/plans/; return file:// URI.
+
+Arguments: STATE."
+  (let* ((dir (expand-file-name "~/.cursor/plans"))
+         (raw-name (or (map-elt params 'name) "Plan"))
+         (slug (replace-regexp-in-string
+                "[^a-zA-Z0-9-_ ]" "" (format "%s" raw-name)))
+         (slug (string-trim (substring slug 0 (min 50 (length slug)))))
+         (slug (if (string-empty-p slug) "Plan" slug))
+         (sid (or (emagent-acp-state-session-id state) "session"))
+         (suffix (substring sid 0 (min 8 (length sid))))
+         (file (expand-file-name
+                (format "%s-%s.plan.md" slug suffix) dir))
+         (plan (or (map-elt params 'plan) ""))
+         (overview (map-elt params 'overview))
+         (parts (list (format "<!-- %s -->" sid)))
+         (body nil))
+    (when (and (stringp overview)
+               (not (string-empty-p (string-trim overview))))
+      (setq parts (append parts (list (string-trim overview)))))
+    (when (and (stringp plan) (not (string-empty-p plan)))
+      (setq parts (append parts (list plan))))
+    (setq body (concat (string-join parts "\n\n") "\n"))
+    (make-directory dir t)
+    (with-temp-file file (insert body))
+    (concat "file://" (expand-file-name file))))
+
+(defun emagent-acp--plan-build-prompt (plan-uri params)
+  "Return the follow-up Build prompt for PLAN-URI and PARAMS."
+  (let ((name (or (map-elt params 'name) "the approved plan")))
+    (format
+     (concat "Build the approved plan %S (%s). Execute its todos now; "
+             "do not stop after planning - implement and verify.")
+     name plan-uri)))
+
+(defun emagent-acp--queue-plan-build (state plan-uri params)
+  "Queue a Build follow-up on STATE after create_plan accept.
+
+PLAN-URI and PARAMS feed the execute prompt text."
+  (when emagent-acp-auto-build-plans
+    (setf (emagent-acp-state-plan-build-prompt state)
+          (emagent-acp--plan-build-prompt plan-uri params))
+    (emagent-log "cursor/create_plan: queued Build turn")))
+
+(defun emagent-acp--send-create-plan-outcome (state request-id outcome
+                                                     &optional reason
+                                                     plan-uri)
   "Reply to `cursor/create_plan' REQUEST-ID for STATE with OUTCOME.
-OUTCOME is a string: accepted, rejected, or cancelled.  REASON is optional."
+OUTCOME is a string: accepted, rejected, or cancelled.  REASON is
+optional.  PLAN-URI is sent when accepting.
+
+Arguments: STATE, REQUEST-ID."
   (emagent-log "cursor/create_plan response: %s%s"
                outcome
                (if reason (format " (%s)" reason) ""))
@@ -111,13 +170,24 @@ OUTCOME is a string: accepted, rejected, or cancelled.  REASON is optional."
    :response (emagent-acp-make-cursor-create-plan-response
               :request-id request-id
               :outcome outcome
-              :reason reason)))
+              :reason reason
+              :plan-uri plan-uri)))
+
+(defun emagent-acp--accept-create-plan (state request-id params)
+  "Accept create_plan for STATE: persist plan, queue Build, reply.
+
+Arguments: REQUEST-ID, PARAMS."
+  (let ((plan-uri (emagent-acp--persist-create-plan state params)))
+    (emagent-acp--queue-plan-build state plan-uri params)
+    (emagent-acp--send-create-plan-outcome
+     state request-id "accepted" nil plan-uri)))
 
 (cl-defun emagent-acp--on-create-plan (&key state emagent-acp-request)
   "Handle blocking Cursor `cursor/create_plan' for STATE.
 
-Inserts the plan into Thinking, then accepts automatically or prompts with
-Accept/Reject buttons.  The agent blocks until this returns an outcome.
+Shows the plan for approval (default) or auto-accepts when configured.
+Accept persists a plan file, returns planUri, and queues a Build
+follow-up turn (see `emagent-acp-auto-build-plans').
 
 Arguments: EMAGENT-ACP-REQUEST."
   (let* ((request-id (map-elt emagent-acp-request 'id))
@@ -130,15 +200,19 @@ Arguments: EMAGENT-ACP-REQUEST."
     (emagent-acp--insert-create-plan-thought state text)
     (cond
      ((emagent-acp--cursor-auto-accept-plan-p state)
-      (emagent-acp--send-create-plan-outcome state request-id "accepted"))
+      (emagent-acp--accept-create-plan state request-id params))
      (t
       (unless (fboundp 'emagent-acp--prepare-interactive-context)
         (require 'emagent-acp-prompt))
       (emagent-acp--prepare-interactive-context state)
       (emagent-acp--clear-prompt-watchdog state)
       (emagent-tools--buttons-prompt
-       "Accept this plan?"
-       '(("Accept" . :accept) ("Reject" . :reject))
+       (if emagent-acp-auto-build-plans
+           "Accept and build this plan?"
+         "Accept this plan?")
+       (if emagent-acp-auto-build-plans
+           '(("Accept & Build" . :accept) ("Reject" . :reject))
+         '(("Accept" . :accept) ("Reject" . :reject)))
        buf
        (lambda (choice)
          (when (emagent-acp-state-busy state)
@@ -148,13 +222,16 @@ Arguments: EMAGENT-ACP-REQUEST."
          (emagent-acp--refresh-mode-line state)
          (pcase choice
            (:accept
-            (emagent-acp--send-create-plan-outcome state request-id "accepted"))
+            (emagent-acp--accept-create-plan state request-id params))
            (:reject
+            (emagent-acp--cancel-plan-build state)
             (emagent-acp--send-create-plan-outcome
              state request-id "rejected" "User rejected the plan"))
            (_
+            (emagent-acp--cancel-plan-build state)
             (emagent-acp--send-create-plan-outcome
-             state request-id "cancelled")))))))))
+             state request-id "cancelled"))))
+       (emagent-acp--create-plan-preamble text))))))
 
 (defun emagent-acp--ask-question-default-answers (params)
   "Return default answered outcome payload for ask_question PARAMS."
