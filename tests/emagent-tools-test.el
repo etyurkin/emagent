@@ -145,6 +145,53 @@ relative paths and does not cross directory boundaries on `*'."
       (should-not (string-match-p "Allow compile?" (buffer-string)))
       (should-not (string-match-p "\\[Allow\\]" (buffer-string))))))
 
+(ert-deftest emagent-tools-test-buttons-prompt-yn-shortcuts ()
+  "Accept/reject dialogs expose Y/N labels and uppercase key bindings."
+  (with-temp-buffer
+    (insert "plan\n")
+    (let ((buf (current-buffer))
+          (result nil))
+      (emagent-tools--buttons-prompt
+       "Accept and build this plan?"
+       '(("Accept & Build" . :accept) ("Reject" . :reject))
+       buf
+       (lambda (v) (setq result v)))
+      (should (string-match-p "\\[Accept & Build (y)\\]" (buffer-string)))
+      (should (string-match-p "\\[Reject (n)\\]" (buffer-string)))
+      (with-current-buffer buf
+        (emagent-tools--goto-first-button (point-min))
+        (let ((map (get-text-property (point) 'keymap)))
+          (should (commandp (lookup-key map (kbd "y"))))
+          (should (commandp (lookup-key map (kbd "Y"))))
+          (should (commandp (lookup-key map (kbd "n"))))
+          (should (commandp (lookup-key map (kbd "N"))))
+          (call-interactively (lookup-key map (kbd "Y")))))
+      (should (eq result :accept))
+      (should-not (string-match-p "Accept and build" (buffer-string))))))
+
+(ert-deftest emagent-tools-test-buttons-prompt-before-user-stub ()
+  "Dialog inserts above a trailing user stub, not after it."
+  (with-temp-buffer
+    (insert "thought\n* etyurkin> \n")
+    (let ((buf (current-buffer))
+          (result nil))
+      (cl-letf (((symbol-function 'emagent-chat--user-zone-start)
+                 (lambda ()
+                   (save-excursion
+                     (goto-char (point-min))
+                     (search-forward "* etyurkin>")
+                     (line-beginning-position)))))
+        (emagent-tools--buttons-prompt
+         "Accept and build this plan?"
+         '(("Accept & Build" . :accept) ("Reject" . :reject))
+         buf
+         (lambda (v) (setq result v)))
+        (should (< (string-match "Accept and build" (buffer-string))
+                   (string-match "\\* etyurkin>" (buffer-string))))
+        (emagent-test--push-first-button buf)
+        (should (eq result :accept))
+        (should (string-match-p "\\* etyurkin>" (buffer-string)))))))
+
 ;;;; Elisp syntax check
 
 (ert-deftest emagent-tools-test-check-elisp ()

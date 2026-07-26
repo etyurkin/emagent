@@ -131,6 +131,7 @@ partial response, and sends `btw, TEXT' as a new prompt."
     (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
       (emagent-chat--begin-response response-pos))
     (when emagent-chat--on-send
+      (emagent-chat--send-pending-begin)
       (funcall emagent-chat--on-send text))))
 
 (defun emagent-chat--dispatch-compress ()

@@ -326,6 +326,9 @@ Skips silently when the buffer is gone or a prompt is already running
         (emagent-log "wakeup: %s" (emagent-log-truncate-line text 80))
         (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
           (emagent-chat--begin-response response-pos))
+        ;; emagent-acp-send drops the turn unless a send token is armed
+        ;; (manual C-c C-c calls send-pending-begin; Build/wakeup must too).
+        (emagent-chat--send-pending-begin)
         (funcall emagent-chat--on-send text))))))
 
 (defun emagent-acp--set-session-mode (state mode-id)
@@ -353,9 +356,25 @@ Skips silently when the buffer is gone or a prompt is already running
   (emagent-acp--set-session-mode state "agent"))
 
 (defun emagent-acp--fire-plan-build (state text)
-  "Send TEXT as the Build follow-up turn for STATE."
+  "Send TEXT as the Build follow-up for STATE without a user heading.
+
+Build instructions are agent-internal: open Thinking/Response for the
+work, but do not invent a synthetic `* user>' line in the transcript."
   (setf (emagent-acp-state-plan-build-timer state) nil)
-  (emagent-acp--fire-wakeup state text))
+  (when-let ((buffer (emagent-acp--chat-buffer state)))
+    (with-current-buffer buffer
+      (cond
+       ((emagent-acp-state-busy state)
+        (emagent-log "plan-build: skipped — a prompt is already running"))
+       ((not emagent-chat--on-send)
+        (emagent-log "plan-build: skipped — chat send unavailable"))
+       (t
+        (emagent-log "plan-build: %s" (emagent-log-truncate-line text 80))
+        ;; Keep any trailing * user> stub empty for the human; open the
+        ;; Build response above it so agent output still streams normally.
+        (emagent-chat--begin-response (emagent-chat--user-zone-start))
+        (emagent-chat--send-pending-begin)
+        (funcall emagent-chat--on-send text))))))
 
 (defun emagent-acp--arm-plan-build (state)
   "Arm a Build turn when create_plan queued one on STATE."

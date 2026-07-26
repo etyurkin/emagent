@@ -726,9 +726,13 @@ Continuation uses `run-at-time'; pump those timers iteratively."
 (ert-deftest emagent-acp-session-test-wakeup-fire-sends-prompt ()
   "Firing a wakeup inserts a user turn and calls the buffer's send callback."
   (let ((state (emagent-acp--state-create))
-        (sent nil))
+        (sent nil)
+        (token nil))
     (with-temp-buffer
-      (setq-local emagent-chat--on-send (lambda (text) (setq sent text)))
+      (setq-local emagent-chat--on-send
+                  (lambda (text)
+                    (setq sent text
+                          token emagent-chat--send-token)))
       (emagent-test--with-mocks
           (((symbol-function 'emagent-acp--chat-buffer)
             (lambda (_) (current-buffer)))
@@ -737,7 +741,12 @@ Continuation uses `run-at-time'; pump those timers iteratively."
            ((symbol-function 'emagent-chat--begin-response)
             (lambda (&rest _) nil)))
         (emagent-acp--fire-wakeup state "check the run again")
-        (should (equal "check the run again" sent))))))
+        (should (equal "check the run again" sent))
+        ;; Regression: without send-pending-begin, emagent-acp-send's
+        ;; send-active-p gate silently drops Build/wakeup turns.
+        (should emagent-chat--send-pending)
+        (should token)
+        (should (emagent-chat--send-active-p token))))))
 
 (ert-deftest emagent-acp-session-test-wakeup-fire-skips-when-busy ()
   "Firing a wakeup does nothing when a prompt is already running."
@@ -751,6 +760,36 @@ Continuation uses `run-at-time'; pump those timers iteratively."
             (lambda (_) (current-buffer))))
         (emagent-acp--fire-wakeup state "should not send")
         (should-not sent)))))
+
+(ert-deftest emagent-acp-session-test-plan-build-fire-sends-quietly ()
+  "Plan Build sends to the agent without inventing a * user> heading."
+  (let ((state (emagent-acp--state-create))
+        (sent nil)
+        (token nil)
+        (headed nil)
+        (began nil))
+    (with-temp-buffer
+      (setq-local emagent-chat--on-send
+                  (lambda (text)
+                    (setq sent text
+                          token emagent-chat--send-token)))
+      (emagent-test--with-mocks
+          (((symbol-function 'emagent-acp--chat-buffer)
+            (lambda (_) (current-buffer)))
+           ((symbol-function 'emagent-chat--insert-user-heading-with-text)
+            (lambda (text) (setq headed text) (point)))
+           ((symbol-function 'emagent-chat--user-zone-start)
+            (lambda () (point-max)))
+           ((symbol-function 'emagent-chat--begin-response)
+            (lambda (&rest _) (setq began t))))
+        (emagent-acp--fire-plan-build
+         state "Build the approved plan \"X\" (file:///tmp/x.plan.md).")
+        (should (string-match-p "Build the approved plan" sent))
+        (should-not headed)
+        (should began)
+        (should emagent-chat--send-pending)
+        (should token)
+        (should (emagent-chat--send-active-p token))))))
 
 (ert-deftest emagent-acp-session-test-wakeup-abort-clears ()
   "Aborting a turn drops a captured ScheduleWakeup so it cannot arm later."

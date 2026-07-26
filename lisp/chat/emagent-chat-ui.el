@@ -74,12 +74,26 @@ Shortcuts then work anywhere on that line, including at line beginning."
         (with-current-buffer chat-buffer
           (emagent-tools--goto-first-button pos))))))
 
+(defun emagent-tools--choice-shortcut (value)
+  "Return a single-character keyboard shortcut for VALUE, or nil."
+  (cond
+   ((memq value '(yes :allow-once :accept)) "y")
+   ((memq value '(no :deny :reject)) "n")
+   ((eq value :allow-session) "s")
+   ((eq value :allow-always) "w")
+   ((memq value '(all :allow-all)) "a")
+   (t nil)))
+
 (defun emagent-tools--buttons-prompt (prompt choices chat-buffer callback &optional preamble)
   "Insert optional PREAMBLE, PROMPT, and CHOICES as buttons in CHAT-BUFFER.
 CHOICES is a list of (LABEL . VALUE) pairs.  Non-blocking: inserts the dialog
 and returns immediately.  CALLBACK is called with the VALUE when a button is
 clicked.  Falls back to `completing-read' (synchronous) when CHAT-BUFFER is
-nil or dead, calling CALLBACK with the chosen value."
+nil or dead, calling CALLBACK with the chosen value.
+
+Accept/reject choices bind both lower- and upper-case Y/N.  Labels show the
+shortcut in parentheses.  The dialog is inserted at the user-zone start when
+available so it stays above any trailing `* user>' stub."
   (if (not (and chat-buffer (buffer-live-p chat-buffer)))
       (let* ((labels (mapcar #'car choices))
              (label (completing-read (concat prompt " ") labels nil t)))
@@ -103,7 +117,19 @@ nil or dead, calling CALLBACK with the chosen value."
           (let ((inhibit-read-only t))
             (when (fboundp 'emagent-chat--writable)
               (funcall #'emagent-chat--writable))
-            (goto-char (point-max))
+            (goto-char
+             ;; Only park above a real trailing * user> stub.  Bare
+             ;; user-zone-start can be point-min when no response exists
+             ;; yet, which would put the dialog at the buffer head.
+             (let ((zone (and (fboundp 'emagent-chat--user-zone-start)
+                              (emagent-chat--user-zone-start))))
+               (if (and zone
+                        (fboundp 'emagent-chat--user-heading-at-point-p)
+                        (save-excursion
+                          (goto-char zone)
+                          (emagent-chat--user-heading-at-point-p)))
+                   zone
+                 (point-max))))
             (unless (bolp) (insert "\n"))
             (setq start-mark (copy-marker (point) nil))
             (when preamble (insert preamble))
@@ -116,25 +142,25 @@ nil or dead, calling CALLBACK with the chosen value."
               (set-keymap-parent btn-keymap button-map)
               ;; First pass: define all shortcuts in btn-keymap
               (dolist (choice choices)
-                (let* ((v (cdr choice))
-                       (key (cond
-                             ((memq v '(yes :allow-once :accept)) "y")
-                             ((memq v '(no :deny :reject))      "n")
-                             ((eq v :allow-session)       "s")
-                             ((eq v :allow-always)        "w")
-                             ((memq v '(all :allow-all))  "a")
-                             (t nil))))
-                  (when key
-                    (define-key btn-keymap (kbd key)
-                                (let ((vv v))
-                                  (lambda () (interactive) (funcall do-respond vv)))))))
+                (when-let ((key (emagent-tools--choice-shortcut (cdr choice))))
+                  (let ((handler
+                         (let ((vv (cdr choice)))
+                           (lambda ()
+                             (interactive)
+                             (funcall do-respond vv)))))
+                    (define-key btn-keymap (kbd key) handler)
+                    (define-key btn-keymap (kbd (upcase key)) handler))))
               ;; Second pass: insert buttons with btn-keymap as their keymap
               (dolist (choice choices)
-                (let ((v (cdr choice)))
+                (let* ((v (cdr choice))
+                       (key (emagent-tools--choice-shortcut v))
+                       (label (if key
+                                  (format "[%s (%s)]" (car choice) key)
+                                (concat "[" (car choice) "]"))))
                   (unless first-button
                     (setq first-button (copy-marker (point) nil)))
                   (insert-button
-                   (concat "[" (car choice) "]")
+                   label
                    'keymap btn-keymap
                    'action (lambda (_b) (funcall do-respond v))
                    'follow-link t)
