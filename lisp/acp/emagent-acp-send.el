@@ -411,12 +411,6 @@ finalized."
     (emagent-acp--refresh-mode-line state)
     t))
 
-;; `emagent-chat-actions' (required by the facade `emagent-chat', which this
-;; file requires) calls this indirectly through
-;; `emagent-chat--on-finalize-in-flight' (set here) so Esc-Esc/btw can stop an
-;; in-flight prompt without requiring this file back.
-(setq emagent-chat--on-finalize-in-flight #'emagent-acp--finalize-in-flight-prompt)
-
 (defun emagent-acp-interrupt ()
   "Interrupt the in-flight prompt and close the response block cleanly.
 
