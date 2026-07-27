@@ -369,6 +369,57 @@ Once it runs (in_progress), its permission was granted and the tag applies."
        state "ss1" 'edit merged "substitute: foo.el" "in_progress")
       (should (string= "substitute: foo.el (Allow: Emacs)" shown)))))
 
+(ert-deftest emagent-acp-session-test-merge-keeps-raw-input-across-status ()
+  "Empty rawInput on in_progress must not wipe a stored web-search query."
+  (let* ((state (emagent-test--make-acp-state))
+         (id "web1")
+         (with-query `((toolCallId . ,id)
+                       (title . "Web Search")
+                       (status . "pending")
+                       (rawInput . ((searchTerm . "Swift SIGABRT")))))
+         (status-only `((toolCallId . ,id)
+                        (title . "Web Search")
+                        (status . "in_progress")
+                        (rawInput . nil))))
+    (let ((merged1 (emagent-acp--merged-tool-call-update state with-query)))
+      (should (string-match-p "Swift SIGABRT"
+                              (or (emagent-acp--tool-call-detail merged1) "")))
+      (should (string-match-p "Swift SIGABRT"
+                              (emagent-acp--tool-call-label merged1))))
+    (let ((merged2 (emagent-acp--merged-tool-call-update state status-only)))
+      (should (string-match-p "Swift SIGABRT"
+                              (or (emagent-acp--tool-call-detail merged2) "")))
+      (should (string-match-p "Swift SIGABRT"
+                              (emagent-acp--tool-call-label merged2))))))
+
+(ert-deftest emagent-acp-session-test-emit-keeps-richer-web-search-label ()
+  "in_progress Allow tag must not drop a previously shown search query."
+  (let* ((state (emagent-test--make-acp-state))
+         (merged '((toolCallId . "web2") (title . "Web Search")))
+         (shown nil))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-chat-show-tool-call)
+          (lambda (_id label &rest _) (setq shown label)))
+         ((symbol-function 'emagent-acp--detect-external-refusal-in-text)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--notify-user) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--schedule-prompt-watchdog)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--chat-buffer)
+          (lambda (_) (current-buffer)))
+         ((symbol-function 'emagent-acp--tool-call-block-spec)
+          (lambda (&rest _) nil)))
+      (emagent-acp--emit-tool-call-display
+       state "web2" 'search merged
+       "Web search: Swift \"Object was retained too many times\" SIGABRT"
+       "pending")
+      (should (string-match-p "Swift" shown))
+      (emagent-acp--emit-tool-call-display
+       state "web2" 'search merged "Web Search" "in_progress")
+      (should (string-match-p "Swift" shown))
+      (should (string-match-p "(Allow: Agent)" shown)))))
+
 (ert-deftest emagent-acp-session-test-agent-tool-not-tagged-emacs ()
   "Native agent tools (no emagent MCP origin) are tagged (Allow: Agent), not Emacs.
 A completed tool that never hit the ACP permission path was allowed by the
@@ -726,9 +777,13 @@ Continuation uses `run-at-time'; pump those timers iteratively."
 (ert-deftest emagent-acp-session-test-wakeup-fire-sends-prompt ()
   "Firing a wakeup inserts a user turn and calls the buffer's send callback."
   (let ((state (emagent-acp--state-create))
-        (sent nil))
+        (sent nil)
+        (token nil))
     (with-temp-buffer
-      (setq-local emagent-chat--on-send (lambda (text) (setq sent text)))
+      (setq-local emagent-chat--on-send
+                  (lambda (text)
+                    (setq sent text
+                          token emagent-chat--send-token)))
       (emagent-test--with-mocks
           (((symbol-function 'emagent-acp--chat-buffer)
             (lambda (_) (current-buffer)))
@@ -737,7 +792,12 @@ Continuation uses `run-at-time'; pump those timers iteratively."
            ((symbol-function 'emagent-chat--begin-response)
             (lambda (&rest _) nil)))
         (emagent-acp--fire-wakeup state "check the run again")
-        (should (equal "check the run again" sent))))))
+        (should (equal "check the run again" sent))
+        ;; Regression: without send-pending-begin, emagent-acp-send's
+        ;; send-active-p gate silently drops Build/wakeup turns.
+        (should emagent-chat--send-pending)
+        (should token)
+        (should (emagent-chat--send-active-p token))))))
 
 (ert-deftest emagent-acp-session-test-wakeup-fire-skips-when-busy ()
   "Firing a wakeup does nothing when a prompt is already running."
@@ -751,6 +811,48 @@ Continuation uses `run-at-time'; pump those timers iteratively."
             (lambda (_) (current-buffer))))
         (emagent-acp--fire-wakeup state "should not send")
         (should-not sent)))))
+
+(ert-deftest emagent-acp-session-test-plan-build-fire-sends-quietly ()
+  "Plan Build sends to the agent without inventing a * user> heading."
+  (let ((state (emagent-acp--state-create))
+        (sent nil)
+        (token nil)
+        (headed nil)
+        (began nil)
+        (scrolled nil))
+    (with-temp-buffer
+      (setq-local emagent-chat--on-send
+                  (lambda (text)
+                    (setq sent text
+                          token emagent-chat--send-token)))
+      (setq-local emagent-chat--defer-user-stub t)
+      (setq-local emagent-chat--follow-output nil)
+      (emagent-test--with-mocks
+          (((symbol-function 'emagent-acp--chat-buffer)
+            (lambda (_) (current-buffer)))
+           ((symbol-function 'emagent-chat--insert-user-heading-with-text)
+            (lambda (text) (setq headed text) (point)))
+           ((symbol-function 'emagent-chat--user-zone-start)
+            (lambda () (point-max)))
+           ((symbol-function 'emagent-chat--begin-response)
+            (lambda (&rest _)
+              (setq began t
+                    emagent-chat--follow-output t)))
+           ((symbol-function 'emagent-chat--ensure-follow-window)
+            (lambda (&rest _)
+              (setq scrolled t
+                    emagent-chat--follow-output t))))
+        (emagent-acp--fire-plan-build
+         state "Build the approved plan \"X\" (file:///tmp/x.plan.md).")
+        (should (string-match-p "Build the approved plan" sent))
+        (should-not headed)
+        (should began)
+        (should scrolled)
+        (should emagent-chat--follow-output)
+        (should-not emagent-chat--defer-user-stub)
+        (should emagent-chat--send-pending)
+        (should token)
+        (should (emagent-chat--send-active-p token))))))
 
 (ert-deftest emagent-acp-session-test-wakeup-abort-clears ()
   "Aborting a turn drops a captured ScheduleWakeup so it cannot arm later."

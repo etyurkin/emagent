@@ -638,6 +638,49 @@ cursor back to the end on every thought chunk."
       (should-not (emagent-chat--window-at-bottom-p win))
       (should-not emagent-chat--follow-output))))
 
+(ert-deftest emagent-chat-test-ensure-follow-window-after-send-scaffold ()
+  "After Preparing scaffold, sticky follow must stay armed with end in view."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (let ((win (selected-window)))
+            (set-window-buffer win buffer)
+            (goto-char (point-max))
+            (insert (emagent-chat--user-heading-prefix) "hello\n")
+            (emagent-chat--begin-response (point))
+            (insert emagent-chat-preparing-headline "\n")
+            ;; Simulate the post-send pin (without calling emagent-chat-send).
+            (emagent-chat--ensure-follow-window)
+            (should emagent-chat--follow-output)
+            (should (emagent-chat--window-at-bottom-p win))
+            (should (= (window-point win)
+                       (emagent-chat--follow-output-pos))))))))))
+
+(ert-deftest emagent-chat-test-window-at-bottom-no-rearm-mid-live ()
+  "Point mid live exchange with sticky follow off must not re-arm follow.
+
+Regression: the catch-all branch re-armed whenever EOB was visible, so plan
+dialogs (and short chats) kept yanking point to the end on every chunk."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (let ((win (selected-window)))
+            (set-window-buffer win buffer)
+            (goto-char (point-max))
+            (insert (emagent-chat--user-heading-prefix) "hello\n")
+            (emagent-chat--begin-response (point))
+            (insert emagent-chat-preparing-headline "\nmore\n")
+            (setq emagent-chat--follow-output nil)
+            (goto-char (point-min))
+            (search-forward "Preparing")
+            (set-window-point win (point))
+            (should-not (emagent-chat--window-at-bottom-p win))
+            (should-not emagent-chat--follow-output))))))))
+
 (ert-deftest emagent-chat-test-window-at-bottom-follows-live-prompt ()
   "After send, point on the prompt must still follow streamed output."
   (emagent-test--with-emagent-buffer
@@ -2200,6 +2243,23 @@ tables stayed ragged until the user hit TAB."
                (when (fboundp 'org-phscroll-mode)
                  (should (bound-and-true-p org-phscroll-mode)))))))
       (remove-hook 'org-mode-hook disable-visual 50))))
+
+(ert-deftest emagent-chat-test-defer-user-stub-skips-insert ()
+  "Queued plan Build must not flash an empty * user> stub on finish."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (insert (emagent-chat--user-heading-prefix) "plan\n")
+       (emagent-chat--begin-response (point))
+       (insert "** Thinking\n")
+       (emagent-chat--reset-response-state)
+       (setq emagent-chat--defer-user-stub t)
+       (let ((before (buffer-substring-no-properties (point-min) (point-max))))
+         (emagent-chat--insert-user-heading-stub)
+         (should (equal before
+                        (buffer-substring-no-properties
+                         (point-min) (point-max)))))))))
 
 (ert-deftest emagent-chat-test-insert-user-heading-replaces-stub ()
   (with-temp-buffer

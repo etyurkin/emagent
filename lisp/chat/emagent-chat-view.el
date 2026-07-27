@@ -54,6 +54,23 @@ point into earlier history.")
           (cdr bounds)))
       (point-max)))
 
+(defun emagent-chat--ensure-follow-window (&optional buffer)
+  "Arm sticky follow and scroll BUFFER's window to the live output end.
+
+Call after opening a response (send or quiet Build).  Preparing/Thinking
+are inserted without `emagent-chat--with-streaming-view', so without this
+the first stream chunk can see the follow position off-screen and clear
+sticky follow before any recenter runs."
+  (let ((buf (or buffer (current-buffer))))
+    (with-current-buffer buf
+      (setq emagent-chat--follow-output t)
+      (let ((pos (emagent-chat--follow-output-pos)))
+        (goto-char pos)
+        (when-let ((win (get-buffer-window buf 'visible)))
+          (set-window-point win pos)
+          (when (eq win (selected-window))
+            (recenter -1)))))))
+
 (defun emagent-chat--live-tail-start ()
   "Return start of the live exchange (prompt + open response), or nil."
   (when (and (fboundp 'emagent-chat--open-response-begin)
@@ -68,15 +85,14 @@ point into earlier history.")
 (defun emagent-chat--window-at-bottom-p (window)
   "Return non-nil when WINDOW should follow newly inserted chat output.
 
-Follow when the follow position is visible and point is on the live
-prompt/response (or sticky follow is still armed).  Exact `point-max'
-alone is not enough: after send, point often remains on the prompt while
-the Preparing/Thinking scaffold grows past it, so a strict EOB check
-stops following immediately.  Visibility of the end alone is also wrong
-for short chats — the whole buffer fits, so earlier point must not
-re-arm follow.
+Follow when point is on the live prompt/response and either sticky follow
+is armed or the window sits on the live end.  Exact `point-max' alone is
+not enough: after send, point often remains on the prompt while the
+Preparing/Thinking scaffold grows past it.
 
-Scrolling so the follow position leaves the window clears sticky follow."
+Sticky follow survives the end briefly leaving the window (Preparing is
+inserted outside streaming-view).  It clears when point leaves the live
+exchange.  Mid-buffer points without sticky do not re-arm follow."
   (and window (window-live-p window)
        (eq (window-buffer window) (current-buffer))
        (let* ((wp (window-point window))
@@ -86,24 +102,21 @@ Scrolling so the follow position leaves the window clears sticky follow."
                               (pos-visible-in-window-p follow-pos window)))
               (in-live-tail (if tail (>= wp tail) (= wp (point-max)))))
          (cond
-          ((not end-visible)
-           (when (eq window (selected-window))
-             (setq emagent-chat--follow-output nil))
-           nil)
           ((not in-live-tail)
            (when (eq window (selected-window))
              (setq emagent-chat--follow-output nil))
            nil)
+          ;; Sticky send/Build follow: keep tracking even if the end left
+          ;; the window before the first recenter could run.
+          (emagent-chat--follow-output t)
+          ((not end-visible) nil)
           ((= wp follow-pos)
            (setq emagent-chat--follow-output t)
            t)
           ((= wp (point-max))
            (setq emagent-chat--follow-output t)
            t)
-          (emagent-chat--follow-output t)
-          (t
-           (setq emagent-chat--follow-output t)
-           t)))))
+          (t nil)))))
 
 (defun emagent-chat--save-window-views ()
   "Return saved scroll state for windows displaying the current buffer."

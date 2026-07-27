@@ -68,6 +68,8 @@ because generic names like `grep' collide with agent-native tools."
     (let ((kind (downcase (or (map-elt tool-call 'kind) "")))
           (title (string-trim (or (map-elt tool-call 'title) ""))))
       (or (string= kind "switch_mode")
+          (string-match-p "\\`switch[_-]?mode\\'" kind)
+          (string-match-p "\\`switch\\s-+mode\\b" title)
           (string-match-p "\\`ExitPlanMode\\'" title)
           (string-match-p "\\`Ready to code[?]\\'" title)))))
 
@@ -96,7 +98,8 @@ targetModeId is missing)."
                              (unless (string-empty-p e) e))))
          (bad (or (string-empty-p title)
                   (string-match-p "\\`unknown\\'" title)
-                  (string-match-p ":\\s-*unknown\\s-*\\'" title))))
+                  (string-match-p ":\\s-*unknown\\s-*\\'" title)
+                  (string-match-p "\\`switch\\s-+mode\\'" title))))
     (cond
      ((and (not bad) (not (string-empty-p title))) title)
      (target (format "Switch to %s" target))
@@ -113,6 +116,34 @@ Arguments: STATE."
   (when-let ((update (emagent-acp--tool-call-update-from-request tool-call)))
     (emagent-acp--on-tool-call state update)))
 
+(defun emagent-acp--tool-call-base-label (label)
+  "Return LABEL without a trailing Allow/Denied annotation."
+  (if (and (stringp label)
+           (string-match " ?\\((Allow: [^)]+)\\|(Allow)\\|(Denied)\\)\\'" label))
+      (string-trim (substring label 0 (match-beginning 0)))
+    label))
+
+(defun emagent-acp--tool-call-prefer-label (prev next)
+  "Return PREV when it is a richer tool label than NEXT, else NEXT.
+
+Keeps query/path detail when a later status tick only carries the tool title."
+  (let* ((prev-base (emagent-acp--tool-call-base-label prev))
+         (next-base (emagent-acp--tool-call-base-label next))
+         (prev-l (and (stringp prev-base) (downcase prev-base)))
+         (next-l (and (stringp next-base) (downcase next-base))))
+    (if (and prev-l next-l
+             (not (string-empty-p prev-l))
+             (not (string-empty-p next-l))
+             (> (length prev-l) (length next-l))
+             (or (string-prefix-p next-l prev-l)
+                 (string-prefix-p (concat next-l ":") prev-l)))
+        (let ((ann (and (stringp next)
+                        (string-match
+                         " ?\\((Allow: [^)]+)\\|(Allow)\\|(Denied)\\)\\'" next)
+                        (match-string 0 next))))
+          (if ann (concat prev-base ann) prev-base))
+      next)))
+
 (defun emagent-acp--emit-tool-call-display (state id kind merged label status)
   "Push TOOL-CALL LABEL to the chat buffer and update session UI.
 
@@ -125,15 +156,17 @@ Arguments: STATE, ID, KIND, MERGED, STATUS."
          ;; A running or finished call already had its permission granted;
          ;; a pending call may still be awaiting a permission prompt.
          (granted (or completed (equal status "in_progress")))
-         (display (cond
-                   ((or (null label) (string-empty-p label)) label)
-                   (decision (emagent-acp--permission-decision-label label decision))
-                   ((and granted (emagent-acp--tool-call-emagent-tool-p merged))
-                    (format "%s (Allow: Emacs)" label))
-                   ;; Tool runs without ACP permission: the agent's own
-                   ;; allow-list permitted it directly — infer the decision.
-                   (granted (format "%s (Allow: Agent)" label))
-                   (t label)))
+         (display (emagent-acp--tool-call-prefer-label
+                   prev
+                   (cond
+                    ((or (null label) (string-empty-p label)) label)
+                    (decision (emagent-acp--permission-decision-label label decision))
+                    ((and granted (emagent-acp--tool-call-emagent-tool-p merged))
+                     (format "%s (Allow: Emacs)" label))
+                    ;; Tool runs without ACP permission: the agent's own
+                    ;; allow-list permitted it directly — infer the decision.
+                    (granted (format "%s (Allow: Agent)" label))
+                    (t label))))
          (label-changed (and display (not (string-empty-p display))
                              (or (null prev) (not (string= prev display))))))
     (when label
@@ -226,27 +259,38 @@ Arguments: STATE."
      (t title))))
 
 (defun emagent-acp--merged-tool-call-update (state update)
-  "Return UPDATE merged with stored title/rawInput for STATE."
+  "Return UPDATE merged with stored title/rawInput for STATE.
+
+Empty or placeholder rawInput on a later status tick must not wipe a
+previously stored query/path: Cursor often sends the args once, then
+`in_progress' updates with an empty rawInput, which used to erase the
+detail from the Thinking arrow line."
   (let* ((id (map-elt update 'toolCallId))
          (titles (emagent-acp-state-tool-call-titles state))
          (inputs (emagent-acp-state-tool-call-inputs state))
          (stored-title (and id titles (gethash id titles)))
          (stored-input (and id inputs (gethash id inputs)))
          (title (or (map-elt update 'title) stored-title))
-         (raw-input (or (map-elt update 'rawInput)
-                        (map-elt update 'arguments)
-                        stored-input))
+         (incoming (or (map-elt update 'rawInput)
+                       (map-elt update 'arguments)))
+         (raw-input
+          (cond
+           ((and incoming
+                 (not (emagent-acp--tool-call-raw-input-empty-p incoming)))
+            incoming)
+           ((and stored-input
+                 (not (emagent-acp--tool-call-raw-input-empty-p stored-input)))
+            stored-input)
+           (t incoming)))
          (merged update))
     (when (and id title)
       (puthash id title titles))
-    (when (and id raw-input)
-      (puthash id raw-input inputs))
     (when title
       (setq merged (emagent-acp--update-put merged 'title title)))
-    (when (and raw-input (not (emagent-acp--tool-call-raw-input-empty-p raw-input)))
-      (setq merged (emagent-acp--update-put merged 'rawInput raw-input)))
-    (when (and id (map-elt merged 'rawInput))
-      (puthash id (map-elt merged 'rawInput) inputs))
+    (when (and raw-input
+               (not (emagent-acp--tool-call-raw-input-empty-p raw-input)))
+      (setq merged (emagent-acp--update-put merged 'rawInput raw-input))
+      (when id (puthash id raw-input inputs)))
     merged))
 
 (defun emagent-acp--wakeup-tool-p (title)
