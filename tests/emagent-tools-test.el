@@ -172,25 +172,27 @@ relative paths and does not cross directory boundaries on `*'."
 (ert-deftest emagent-tools-test-buttons-prompt-before-user-stub ()
   "Dialog inserts above a trailing user stub, not after it."
   (with-temp-buffer
-    (insert "thought\n* etyurkin> \n")
-    (let ((buf (current-buffer))
-          (result nil))
-      (cl-letf (((symbol-function 'emagent-chat--user-zone-start)
-                 (lambda ()
-                   (save-excursion
-                     (goto-char (point-min))
-                     (search-forward "* etyurkin>")
-                     (line-beginning-position)))))
-        (emagent-tools--buttons-prompt
-         "Accept and build this plan?"
-         '(("Accept & Build" . :accept) ("Reject" . :reject))
-         buf
-         (lambda (v) (setq result v)))
-        (should (< (string-match "Accept and build" (buffer-string))
-                   (string-match "\\* etyurkin>" (buffer-string))))
-        (emagent-test--push-first-button buf)
-        (should (eq result :accept))
-        (should (string-match-p "\\* etyurkin>" (buffer-string)))))))
+    (let* ((stub (emagent-chat--user-heading-prefix))
+           (stub-re (regexp-quote (string-trim-right stub))))
+      (insert "thought\n" stub "\n")
+      (let ((buf (current-buffer))
+            (result nil))
+        (cl-letf (((symbol-function 'emagent-chat--user-zone-start)
+                   (lambda ()
+                     (save-excursion
+                       (goto-char (point-min))
+                       (re-search-forward (emagent-chat--user-heading-re))
+                       (line-beginning-position)))))
+          (emagent-tools--buttons-prompt
+           "Accept and build this plan?"
+           '(("Accept & Build" . :accept) ("Reject" . :reject))
+           buf
+           (lambda (v) (setq result v)))
+          (should (< (string-match "Accept and build" (buffer-string))
+                     (string-match stub-re (buffer-string))))
+          (emagent-test--push-first-button buf)
+          (should (eq result :accept))
+          (should (string-match-p stub-re (buffer-string))))))))
 
 ;;;; Elisp syntax check
 
