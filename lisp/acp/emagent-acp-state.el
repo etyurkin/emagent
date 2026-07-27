@@ -204,11 +204,25 @@ underlying representation for now."
   (setf (emagent-acp-state-wakeup-request state) nil))
 
 (defun emagent-acp--cancel-plan-build (state)
-  "Cancel a pending post-create_plan Build turn for STATE."
+  "Cancel a pending post-create_plan Build turn for STATE.
+
+Clears deferred user-stub suppression and inserts a stub when the chat
+response is already closed so the buffer is not left without a prompt."
   (when-let ((timer (emagent-acp-state-plan-build-timer state)))
     (when (timerp timer) (cancel-timer timer)))
   (setf (emagent-acp-state-plan-build-timer state) nil)
-  (setf (emagent-acp-state-plan-build-prompt state) nil))
+  (setf (emagent-acp-state-plan-build-prompt state) nil)
+  (when (fboundp 'emagent-acp--chat-buffer)
+    (when-let ((buf (emagent-acp--chat-buffer state)))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (when (and (boundp 'emagent-chat--defer-user-stub)
+                     emagent-chat--defer-user-stub)
+            (setq emagent-chat--defer-user-stub nil)
+            (when (and (fboundp 'emagent-chat--open-response-p)
+                       (not (emagent-chat--open-response-p))
+                       (fboundp 'emagent-chat--insert-user-heading-stub))
+              (emagent-chat--insert-user-heading-stub))))))))
 
 (defun emagent-acp--cancel-state-timers (state)
   "Cancel every timer stored in STATE and clear its slot.

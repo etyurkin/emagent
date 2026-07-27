@@ -72,7 +72,14 @@ Arguments: RAW."
            (let ((trimmed (string-trim raw)))
              (or (string-empty-p trimmed)
                  (member trimmed '("{}" "[]" "null")))))
-      (and (listp raw) (null raw))
+      (and (listp raw)
+           (or (null raw)
+               ;; `(())' reads as `(nil)' — a status tick with no args.
+               (null (delq nil (copy-sequence raw)))
+               (and (cl-every #'consp raw)
+                    (null (emagent-acp--tool-call-raw-input-detail-from-data
+                           raw))
+                    (null (emagent-acp--tool-call-compact-arg-summary raw)))))
       (and (hash-table-p raw) (zerop (hash-table-count raw)))))
 
 (defun emagent-acp--tool-call-update-from-request (tool-call)
@@ -125,7 +132,8 @@ Arguments: RAW."
    ((null value) nil)
    ((hash-table-p value)
     (cl-loop for key in '(command path file file_path target_file filename
-                               relativeWorkspacePath url query q search input
+                               relativeWorkspacePath url query q search
+                               searchTerm search_term searchQuery input
                                text pattern glob form directory dir name args)
              for v = (emagent-acp--tool-call-data-get value key)
              when (and (stringp v) (not (string-empty-p (string-trim v))))
@@ -186,7 +194,8 @@ Arguments: RAW."
                                 (emagent-acp--tool-call-data-get data k)))
                              '(path file file_path target_file filename
                                    relativeWorkspacePath url command query q
-                                   search input text pattern glob form
+                                   search searchTerm search_term searchQuery
+                                   input text pattern glob form
                                    directory dir args description))))
     (emagent-acp--tool-call-value-string
      (emagent-acp--tool-call-data-get data key))))
@@ -343,7 +352,7 @@ real parameters live in arguments; prefer arguments when both are present."
         (emagent-acp--tool-call-content-detail (map-elt update 'content)))))
 
 (defconst emagent-acp--tool-call-weak-details
-  '("tool" "Tool" "running" "pending")
+  '("tool" "Tool" "running" "pending" "unknown" "Unknown")
   "ACP tool-call detail strings too generic to display without store.db lookup.")
 
 (defun emagent-acp--human-tool-detail-p (detail)

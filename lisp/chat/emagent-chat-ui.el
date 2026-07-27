@@ -92,8 +92,8 @@ clicked.  Falls back to `completing-read' (synchronous) when CHAT-BUFFER is
 nil or dead, calling CALLBACK with the chosen value.
 
 Accept/reject choices bind both lower- and upper-case Y/N.  Labels show the
-shortcut in parentheses.  The dialog is inserted at the user-zone start when
-available so it stays above any trailing `* user>' stub."
+shortcut in parentheses.  When a trailing `* user>' stub is present, the
+dialog is inserted above it rather than after it."
   (if (not (and chat-buffer (buffer-live-p chat-buffer)))
       (let* ((labels (mapcar #'car choices))
              (label (completing-read (concat prompt " ") labels nil t)))
@@ -171,7 +171,11 @@ available so it stays above any trailing `* user>' stub."
                 (emagent-tools--apply-button-line-keymap
                  (marker-position first-button)
                  (marker-position end-mark)
-                 btn-keymap)))))
+                 btn-keymap))
+              ;; Stop sticky follow so later tool/stream inserts do not
+              ;; yank point off the dialog (Y/N keymap needs point here).
+              (when (boundp 'emagent-chat--follow-output)
+                (setq emagent-chat--follow-output nil)))))
         (emagent-tools--focus-inline-buttons chat-buffer first-button)))))
 
 (provide 'emagent-chat-ui)

@@ -326,6 +326,7 @@ Skips silently when the buffer is gone or a prompt is already running
         (emagent-log "wakeup: %s" (emagent-log-truncate-line text 80))
         (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
           (emagent-chat--begin-response response-pos))
+        (emagent-chat--ensure-follow-window buffer)
         ;; emagent-acp-send drops the turn unless a send token is armed
         ;; (manual C-c C-c calls send-pending-begin; Build/wakeup must too).
         (emagent-chat--send-pending-begin)
@@ -370,9 +371,10 @@ work, but do not invent a synthetic `* user>' line in the transcript."
         (emagent-log "plan-build: skipped — chat send unavailable"))
        (t
         (emagent-log "plan-build: %s" (emagent-log-truncate-line text 80))
-        ;; Keep any trailing * user> stub empty for the human; open the
-        ;; Build response above it so agent output still streams normally.
+        ;; Build owns the next turn; allow a normal stub after it finishes.
+        (setq emagent-chat--defer-user-stub nil)
         (emagent-chat--begin-response (emagent-chat--user-zone-start))
+        (emagent-chat--ensure-follow-window buffer)
         (emagent-chat--send-pending-begin)
         (funcall emagent-chat--on-send text))))))
 

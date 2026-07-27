@@ -130,6 +130,7 @@ partial response, and sends `btw, TEXT' as a new prompt."
     (emagent-log "btw send: %s" (emagent-log-truncate-line text 80))
     (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
       (emagent-chat--begin-response response-pos))
+    (emagent-chat--ensure-follow-window)
     (when emagent-chat--on-send
       (emagent-chat--send-pending-begin)
       (funcall emagent-chat--on-send text))))
@@ -190,6 +191,10 @@ Sending a previous prompt replaces its old response."
             (if emagent-chat--turn-model
                 (emagent-chat--insert-switching-scaffold)
               (emagent-chat--insert-preparing-scaffold)))
+          ;; Preparing is inserted outside streaming-view; pin the window
+          ;; to the live end so the first thought chunk does not clear
+          ;; sticky follow when that end is briefly off-screen.
+          (emagent-chat--ensure-follow-window)
           (when emagent-chat--on-send
             (if (and (emagent-chat--bare-slash-command-p input)
                      (emagent-chat--compress-command-p input))

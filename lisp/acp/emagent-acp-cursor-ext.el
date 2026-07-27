@@ -148,10 +148,15 @@ Arguments: STATE."
 (defun emagent-acp--queue-plan-build (state plan-uri params)
   "Queue a Build follow-up on STATE after create_plan accept.
 
-PLAN-URI and PARAMS feed the execute prompt text."
+PLAN-URI and PARAMS feed the execute prompt text.  Defers the chat
+user-heading stub until Build starts so Accept does not leave an empty
+`* user>' between the plan dialog and agent work."
   (when emagent-acp-auto-build-plans
     (setf (emagent-acp-state-plan-build-prompt state)
           (emagent-acp--plan-build-prompt plan-uri params))
+    (when-let ((buf (emagent-acp--chat-buffer state)))
+      (with-current-buffer buf
+        (setq emagent-chat--defer-user-stub t)))
     (emagent-log "cursor/create_plan: queued Build turn")))
 
 (defun emagent-acp--send-create-plan-outcome (state request-id outcome
