@@ -809,7 +809,7 @@ is tagged (Allow: Emacs) instead of the inferred (Allow: Agent) used for
 agent-native tools.  A pending call stays untagged — it may still be
 awaiting a permission prompt.
 
-Detection relies on the emagent MCP namespace (e.g. `mcp_emagent_read_file'):
+Detection relies on the emagent MCP namespace (e.g. `mcp_emagent_fs'):
 an explicit `emagent-tool' flag set by provider enrichment, or the word
 `emagent' surviving in the title.  Bare tool names are deliberately not matched
 because generic names like `grep' collide with agent-native tools."

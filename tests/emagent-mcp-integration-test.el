@@ -58,10 +58,14 @@
     (should (string-match-p "Method not found" sent))))
 
 (ert-deftest emagent-mcp-integration-test-tools-list-payload ()
-  (let ((payload (emagent-mcp--tools-list-payload)))
-    (should (> (length (alist-get 'tools payload)) 10))
-    (should (string= "read_file"
-                     (alist-get 'name (aref (alist-get 'tools payload) 0))))))
+  (let* ((payload (emagent-mcp--tools-list-payload))
+         (tools (alist-get 'tools payload))
+         (names (mapcar (lambda (tool) (alist-get 'name tool))
+                        (append tools nil))))
+    (should (<= (length tools) 9))
+    (should (member "fs" names))
+    (should (member "search" names))
+    (should (string= "fs" (alist-get 'name (aref tools 0))))))
 
 ;;;; Tool execution
 
@@ -73,7 +77,12 @@
          (let* ((params (make-hash-table :test 'equal))
                 (resp nil)
                 (parsed nil))
-           (puthash "name" "project_directory" params)
+           (puthash "name" "emacs" params)
+           (puthash "arguments"
+                    (let ((args (make-hash-table :test 'equal)))
+                      (puthash "op" "project_directory" args)
+                      args)
+                    params)
            (setq resp (emagent-test--tools-call-sync 3 params token))
            (setq parsed (json-parse-string resp :object-type 'alist))
            (should (string-match-p (regexp-quote dir)
@@ -83,7 +92,12 @@
   (let* ((params (make-hash-table :test 'equal))
          (resp nil)
          (parsed nil))
-    (puthash "name" "project_directory" params)
+    (puthash "name" "emacs" params)
+    (puthash "arguments"
+             (let ((args (make-hash-table :test 'equal)))
+               (puthash "op" "project_directory" args)
+               args)
+             params)
     (setq resp (emagent-test--tools-call-sync 1 params nil))
     (setq parsed (json-parse-string resp :object-type 'alist))
     (should (string-match-p "No emagent session token"
@@ -132,7 +146,7 @@
           (lambda (_proc data) (setq sent (concat (or sent "") data)))))
       (emagent-mcp--dispatch proc "tok" message))
     (should (string-match-p "HTTP/1.1 200" sent))
-    (should (string-match-p "read_file" sent))))
+    (should (string-match-p "\"fs\"" sent))))
 
 (ert-deftest emagent-mcp-integration-test-handle-request-options ()
   (let ((proc (generate-new-buffer " *fake*"))
@@ -163,9 +177,10 @@
         (lambda (token _buffer)
           (let* ((params (make-hash-table :test 'equal))
                  (parsed nil))
-            (puthash "name" "read_file" params)
+            (puthash "name" "fs" params)
             (puthash "arguments"
                      (let ((args (make-hash-table :test 'equal)))
+                       (puthash "op" "read" args)
                        (puthash "path" "readme.txt" args)
                        args)
                      params)
@@ -179,8 +194,8 @@
   (let* ((proc (generate-new-buffer " *fake*"))
          (sent nil)
          (body (json-serialize `((jsonrpc . "2.0") (id . 8) (method . "tools/call")
-                                  (params . ((name . "project_directory")
-                                             (arguments . ()))))))
+                                  (params . ((name . "emacs")
+                                             (arguments . ((op . "project_directory"))))))))
          (content (encode-coding-string body 'utf-8)))
     (emagent-test--with-mocks
         (((symbol-function 'process-live-p) (lambda (p) (eq p proc)))

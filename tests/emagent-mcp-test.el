@@ -50,13 +50,14 @@
   (let* ((token "abc")
          (session (list :root "/proj" :buffer (get-buffer-create "*mcp-test*") :acp t))
          (args (make-hash-table :test 'equal)))
+    (puthash "op" "compile" args)
     (puthash "command" "make test" args)
     (puthash token session emagent-mcp--sessions)
     (unwind-protect
         (emagent-test--with-mocks
             (((symbol-function 'emagent-tool-compile)
               (lambda (&rest _args) "ok")))
-          (should (string= "ok" (emagent-mcp--run-tool "compile" args session))))
+          (should (string= "ok" (emagent-mcp--run-tool "shell" args session))))
       (remhash token emagent-mcp--sessions))))
 
 (ert-deftest emagent-mcp-test-acp-session-skips-eval-dangerous-confirm ()
