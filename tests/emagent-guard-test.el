@@ -4,7 +4,7 @@
 
 (require 'ert)
 (require 'emagent-test-utils)
-(require 'emagent-guard)
+(require 'emagent-acp-file)
 
 (ert-deftest emagent-guard-test-shell-verdict ()
   "Shell operations return the policy verdict, or allow when clean."

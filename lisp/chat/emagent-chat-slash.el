@@ -41,7 +41,7 @@
 (require 'emagent-acp-state)
 (require 'emagent-chat-input)
 (require 'emagent-session)
-(require 'emagent-chat-model-ui)
+(require 'emagent-chat-ui)
 
 (defgroup emagent-chat nil
   "Emagent chat UI."

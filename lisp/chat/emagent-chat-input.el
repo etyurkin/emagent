@@ -36,7 +36,7 @@
 (require 'org)
 (require 'map)
 (require 'emagent-log)
-(require 'emagent-chat-header)
+(require 'emagent-chat-ui)
 (require 'emagent-chat-markup)
 
 (defun emagent-chat--writable ()

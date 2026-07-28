@@ -39,10 +39,9 @@
 (require 'emagent-acp-state)
 (require 'emagent-acp-provider)
 (require 'emagent-acp-protocol)
-(require 'emagent-chat-compress)
+(require 'emagent-chat-response)
 (require 'emagent-acp-usage)
 (require 'emagent-chat)
-(require 'emagent-chat-reasoning)
 (require 'emagent-chat-thought)
 (require 'emagent-acp-permission-queue)
 
