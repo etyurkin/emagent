@@ -29,8 +29,8 @@
 ;;; Commentary:
 
 ;; Resolves the Cursor ACP CLI command name, kept out of `emagent-cursor'
-;; (which requires `emagent-chat') so chat mode `/mcp' can look up and
-;; validate the Cursor command without a load cycle.
+;; (which requires `emagent-chat' and `emagent-acp') so chat `/mcp' can look
+;; up the Cursor command without a load cycle.
 
 ;;; Code:
 

@@ -100,6 +100,8 @@ target BUFFER (hence the two-argument signature)."
 (require 'emagent-chat)
 (require 'emagent-session)
 (require 'emagent-acp)
+(require 'emagent-cursor)
+(require 'emagent-claude)
 (require 'project)
 
 ;; Optional integrations — loaded only when the dependency is present.

@@ -94,7 +94,7 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
 (defvar emagent-acp--provider-specs (make-hash-table :test 'eq)
   "Hash table mapping provider symbol to adapter property list.")
 
-(cl-defun emagent-acp--register-provider (symbol &key detect enrich-tool-call
+(cl-defun emagent-acp--register-provider (symbol &key make-client detect enrich-tool-call
                                                  defer-tool-call-p
                                                  enqueue-tool-resolve
                                                  reset-tool-resolve
@@ -105,12 +105,17 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
                                                  context-usage-unavailable-p)
   "Register provider SYMBOL with adapter hooks.
 
-Arguments: DETECT, ENRICH-TOOL-CALL, DEFER-TOOL-CALL-P,
+MAKE-CLIENT, when set, is called as
+\(funcall MAKE-CLIENT :context-buffer BUF :process-directory DIR)
+from `emagent-acp--make-client'.
+
+Arguments: MAKE-CLIENT, DETECT, ENRICH-TOOL-CALL, DEFER-TOOL-CALL-P,
 ENQUEUE-TOOL-RESOLVE, RESET-TOOL-RESOLVE, TOOL-RESOLVE-ACTIVE-P,
 GENERIC-TITLE-P, EXTERNAL-GATE-REASON, NORMALIZE-SLASH-PROMPT,
 CONTEXT-USAGE-UNAVAILABLE-P."
   (puthash symbol
-           (list :detect detect
+           (list :make-client make-client
+                 :detect detect
                  :enrich-tool-call enrich-tool-call
                  :defer-tool-call-p defer-tool-call-p
                  :enqueue-tool-resolve enqueue-tool-resolve
@@ -290,37 +295,6 @@ Arguments: STATE."
       (emagent-log (concat "emagent: agent output looks like a tool was refused "
                            "outside Emacs (ACP approval alone is not enough); "
                            "check the agent/SDK permission or sandbox settings.")))))
-
-(defun emagent-acp-claude--detect-p (state)
-  "Return non-nil when STATE's agent is claude-agent-acp."
-  (when-let ((launch (emagent-acp--agent-launch-string state)))
-    (string-match-p "claude-agent-acp" launch)))
-
-(defun emagent-acp-claude--enrich-tool-call (_state update)
-  "Normalize Claude ACP tool-call UPDATE before display merging.
-claude-agent-acp echoes rawInput fields as the title on tool_call_update:
-title = rawInput.command for Bash, title = rawInput.description for Agent.
-Strip the redundant title so the stored display name (e.g. \"Terminal\",
-\"Task\") is kept and the rawInput field becomes the visible detail."
-  (let* ((raw (or (map-elt update 'rawInput) (map-elt update 'arguments)))
-         (title (map-elt update 'title)))
-    (if (and title (listp raw)
-             (let ((cmd (alist-get 'command raw))
-                   (desc (alist-get 'description raw)))
-               (or (and cmd (string= title cmd))
-                   (and desc (string= title desc)))))
-        (cons (cons 'title nil) update)
-      update)))
-
-(defun emagent-acp-claude--external-gate-reason (_state)
-  
-  "Internal helper."'claude-agent-sdk)
-
-(emagent-acp--register-provider
- 'claude
- :detect #'emagent-acp-claude--detect-p
- :enrich-tool-call #'emagent-acp-claude--enrich-tool-call
- :external-gate-reason #'emagent-acp-claude--external-gate-reason)
 
 (defun emagent-acp-busy-p ()
   "Return non-nil when the current buffer's ACP session is processing a prompt."
