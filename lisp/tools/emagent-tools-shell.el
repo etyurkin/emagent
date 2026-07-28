@@ -431,7 +431,7 @@ Arguments: WORDS, STRIPPED."
   '(shell-command shell-command-to-string
     call-process call-process-shell-command process-file)
   "Synchronous shell functions blocked in eval.
-These block Emacs until the subprocess exits; use the run_shell_command
+These block Emacs until the subprocess exits; use shell op=run
 tool instead, which runs the process asynchronously."
   :type '(repeat symbol)
   :group 'emagent-policy)
@@ -463,7 +463,7 @@ tool instead, which runs the process asynchronously."
      :match ((any-symbol . ,emagent-policy-elisp-blocked-symbols)))
    `(:id elisp-shell-blocked
      :severity deny
-     :reason "Synchronous shell functions block Emacs. Use the run_shell_command tool instead — it runs the process asynchronously."
+     :reason "Synchronous shell functions block Emacs. Use the shell op=run tool instead — it runs the process asynchronously."
      :match ((any-symbol . ,emagent-policy-elisp-shell-blocked-symbols)))
    `(:id elisp-dangerous
      :severity confirm
@@ -735,10 +735,11 @@ Arguments: VERDICT, CONTEXT."
 WARNING: byte-compiling expands macros, which EXECUTES arbitrary code from the
 validated content — a `(defmacro m () (delete-file …)) (m)' payload runs during
 the check.  Because this validation runs on agent-supplied file content (via
-`check_structural_file' and, with `emagent-elisp-validate-on-write', every .el
-write), enabling it lets a misbehaving or prompt-injected agent run code before
-any permission gate.  Leave nil unless you fully trust the content being
-validated; syntax and paren checks run regardless."
+`structural op=check_file' and, with
+`emagent-elisp-validate-on-write', every .el write), enabling it lets a
+misbehaving or prompt-injected agent run code before any permission gate.
+Leave nil unless you fully trust the content being validated; syntax and
+paren checks run regardless."
   :type 'boolean
   :group 'emagent-elisp)
 
@@ -843,7 +844,7 @@ Arguments: PATH."
          (doc-warn (unless err (emagent-elisp--check-docstrings trimmed))))
     (cond
      (err
-      (format "SYNTAX ERROR -- %s\n\nFix the form and call check_elisp again before eval."
+      (format "SYNTAX ERROR -- %s\n\nFix the form and call elisp op=check again before eval."
               err))
      (doc-warn
       (format "STYLE WARNING -- %s\n\nShorten docstring lines to ≤%d chars."
@@ -858,7 +859,7 @@ Arguments: PATH."
         (doc-warn (emagent-elisp--check-docstrings content)))
     (cond
      (err
-      (format "SYNTAX ERROR -- %s\n\nFix the file and call check_structural_file before writing."
+      (format "SYNTAX ERROR -- %s\n\nFix the file and call structural op=check_file before writing."
               err))
      (doc-warn
       (format "STYLE WARNING -- %s\n\nShorten docstring lines to ≤%d chars."
@@ -1036,7 +1037,7 @@ When SHELL is non-nil, also suggest background execution."
      (concat
       " For genuinely long-running work, use background execution"
       " (append ' > /tmp/out.txt 2>&1 & echo \"PID: $!\"') and read the"
-      " output file later with read_file."))))
+      " output file later with fs op=read."))))
 
 (defun emagent-tools--run-async-sync (async-fn &rest args)
   "Run ASYNC-FN with ARGS and a result callback; block until it finishes.
@@ -1594,7 +1595,7 @@ Arguments: DIRECTORY."
 (defun emagent-tool-compile (command &optional directory)
   "Run COMMAND via `compilation-mode' and return its output as text.
 
-Unlike `run_shell_command', errors appear in a persistent
+Unlike shell op=run, errors appear in a persistent
 `*emagent-compile*' buffer navigable with `next-error' / \\[next-error].
 The buffer fills in the background; set
 `emagent-tools-display-compile-buffer' to show it when a build starts.

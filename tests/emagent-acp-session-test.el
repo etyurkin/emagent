@@ -325,7 +325,7 @@ function must be a cl-defun for its cl-return-from to have an enclosing block."
 (ert-deftest emagent-acp-session-test-emagent-tool-tagged-emacs ()
   "Tools from emagent's own MCP server render with an (Allow: Emacs) tag."
   (let* ((state (emagent-test--make-acp-state))
-         (merged '((toolCallId . "rf1") (title . "mcp_emagent_read_file")))
+         (merged '((toolCallId . "rf1") (title . "mcp_emagent_fs")))
          (shown nil))
     (emagent-test--with-mocks
         (((symbol-function 'emagent-chat-show-tool-call)
@@ -339,8 +339,8 @@ function must be a cl-defun for its cl-return-from to have an enclosing block."
          ((symbol-function 'emagent-acp--chat-buffer)
           (lambda (_) (current-buffer))))
       (emagent-acp--emit-tool-call-display
-       state "rf1" 'read merged "read_file: foo.el" "completed")
-      (should (string= "read_file: foo.el (Allow: Emacs)" shown)))))
+       state "rf1" 'read merged "fs: foo.el" "completed")
+      (should (string= "fs: foo.el (Allow: Emacs)" shown)))))
 
 (ert-deftest emagent-acp-session-test-emagent-tool-pending-untagged ()
   "A pending emagent tool call is untagged: it may await a permission prompt.

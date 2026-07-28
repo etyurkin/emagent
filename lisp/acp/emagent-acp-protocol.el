@@ -975,7 +975,7 @@ enabled so ACP file read/write route through Emacs buffers."
 (defcustom emagent-acp-file-access t
   "Route ACP file read/write through Emacs file tools.
 
-When non-nil (default), agent read_file and write_file calls run
+When non-nil (default), agent fs op=read and fs op=write calls run
 `emagent-tools--read-file-content' and `emagent-tools--write-file-content'
 instead of cursor-agent's own file tools.  That matches agent-shell and
 avoids macOS \"access data from other apps\" prompts on normal project trees.
