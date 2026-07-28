@@ -26,15 +26,25 @@
 ;; SOFTWARE.
 
 ;;; Commentary:
-
-;; MCP tool entries gated by `emagent-struct-available-p'.  Appended to
-;; `emagent-mcp--tools' in emagent-mcp-registry.el.
-
+;;
+;; MCP tool wrappers for structural editing, plus JSON arg accessors
+;; shared with the MCP tool registry.
+;;
 ;;; Code:
 
 (require 'emagent-struct)
 (require 'emagent-tools)
-(require 'emagent-mcp-util)
+
+(defun emagent-mcp--arg (args key &optional default)
+  "Return KEY from ARGS hash-table, or DEFAULT when missing or JSON null."
+  (let ((value (and (hash-table-p args) (gethash key args))))
+    (if (or (null value) (eq value :null))
+        default
+      value)))
+
+(defun emagent-mcp--bool (args key)
+  "Return non-nil when KEY in ARGS is JSON true."
+  (eq (emagent-mcp--arg args key) t))
 
 (defun emagent-mcp--structural-path-prop ()
   "JSON schema property for a structural tool file path."
