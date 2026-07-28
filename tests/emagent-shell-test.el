@@ -62,7 +62,7 @@
 
 (require 'emagent-test-utils)
 (require 'emagent-tools)
-(require 'url)  ;; pre-load so cl-letf mocks aren't overwritten by require inside the function
+(require 'url)  ;; pre-load so cl-letf mocks aren't overwritten by require inside the functio)
 
 (defmacro emagent-shell-test--with-fake-url-retrieve (response &rest body)
   "Run BODY with `url-retrieve' mocked to deliver RESPONSE string.

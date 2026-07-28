@@ -34,9 +34,8 @@
 
 (require 'cl-lib)
 (require 'emagent-log)
-(require 'emagent-elisp)
-(require 'emagent-struct)
 (require 'emagent-tools-core)
+(require 'emagent-struct)
 (require 'emagent-tools-shell)
 
 (defvar auto-insert)

@@ -3,7 +3,7 @@
 ;;; Code:
 
 (require 'ert)
-(require 'emagent-elisp)
+(require 'emagent-tools-core)
 
 (ert-deftest emagent-elisp-test-check-form-ok ()
   (should (string= "OK" (emagent-elisp-check-form "(+ 1 2)"))))

@@ -33,7 +33,6 @@
   (require 'cl-lib))
 
 (require 'cl-lib)
-
 (require 'org)
 (require 'map)
 (require 'bookmark)
@@ -46,7 +45,7 @@
 (require 'emagent-chat-compress)
 (require 'emagent-chat-mcp)
 (require 'emagent-chat-view)
-(require 'emagent-chat-notify)
+(require 'emagent-chat-tools-ui)
 (require 'emagent-chat-response-state)
 (require 'emagent-chat-model-ui)
 (require 'emagent-chat-mode-line)
@@ -57,7 +56,6 @@
 (require 'emagent-chat-reasoning)
 (require 'emagent-chat-thought)
 (require 'emagent-chat-response)
-(require 'emagent-chat-tools-ui)
 (require 'emagent-chat-actions)
 (require 'emagent-chat-mode)
 (require 'emagent-permissions)

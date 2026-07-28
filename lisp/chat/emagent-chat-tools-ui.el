@@ -27,31 +27,116 @@
 ;; SOFTWARE.
 
 ;;; Commentary:
-
-;; Tool-call append/update and permission-prompt UI for the Thinking block.
-;; Format/font-lock helpers live in `emagent-chat-tools-fontify'.
-
+;;
+;; Tool-call UI blocks and desktop/session notifications.
+;;
 ;;; Code:
 
 (require 'cl-lib)
-
 (require 'emagent-chat-header)
-
-(require 'emagent-chat-tools-fontify)
-
 (require 'emagent-chat-reasoning)
-
-(require 'emagent-chat-thought)
-
 (require 'emagent-chat-response-state)
-
-(require 'emagent-chat-view)
-
-(require 'emagent-chat-notify)
-
+(require 'emagent-chat-thought)
+(require 'emagent-chat-tools-fontify)
 (require 'emagent-chat-ui)
-
+(require 'emagent-chat-view)
 (require 'emagent-tools)
+
+(defcustom emagent-chat-inactive-bell t
+  "When non-nil, ring bell when agent output arrives in an inactive buffer."
+  :type 'boolean
+  :group 'emagent-chat)
+
+(defcustom emagent-chat-inactive-bell-cooldown 1.0
+  "Minimum seconds between inactive-buffer bell notifications."
+  :type 'number
+  :group 'emagent-chat)
+
+(defcustom emagent-chat-inactive-osx-notification t
+  "When non-nil on macOS, show a notification for background attention."
+  :type 'boolean
+  :group 'emagent-chat)
+
+(defcustom emagent-chat-inactive-notification-title "emagent needs attention"
+  "Title for macOS background attention notifications."
+  :type 'string
+  :group 'emagent-chat)
+
+(defcustom emagent-chat-macos-activate-bundle-id "org.gnu.Emacs"
+  "Bundle id used by terminal-notifier to foreground Emacs on click.
+
+Only used when terminal-notifier is installed."
+  :type 'string
+  :group 'emagent-chat)
+
+(defvar-local emagent-chat--last-inactive-bell-time 0.0
+  "Last `float-time' when inactive attention notifications were emitted.")
+
+(defvar emagent-chat--emacs-focused-p t
+  "Non-nil when Emacs currently has OS-level input focus.")
+
+(defun emagent-chat--sync-focus-state ()
+  "Update `emagent-chat--emacs-focused-p' from `selected-frame' focus."
+  (setq emagent-chat--emacs-focused-p
+        (if (fboundp 'frame-focus-state)
+            (frame-focus-state)
+          t)))
+
+(condition-case nil
+    (progn
+      (unless (advice-member-p #'emagent-chat--sync-focus-state after-focus-change-function)
+        (add-function :after after-focus-change-function
+                      #'emagent-chat--sync-focus-state))
+      (emagent-chat--sync-focus-state))
+  (error nil))
+
+(defun emagent-chat--inactive-attention-needed-p ()
+  "Return non-nil when background attention notifications should fire."
+  (and (not emagent-chat--emacs-focused-p)
+       (null (get-buffer-window (current-buffer) 0))))
+
+(defun emagent-chat--notify-macos-inactive-update ()
+  "Show a macOS notification for background emagent attention.
+
+Uses terminal-notifier when available (click can activate Emacs),
+otherwise falls back to osascript notifications.  Any launcher error is
+ignored so chat rendering never stalls on OS notifications."
+  (when (and emagent-chat-inactive-osx-notification
+             (eq system-type 'darwin)
+             (not noninteractive))
+    (let* ((title emagent-chat-inactive-notification-title)
+           (message (or (buffer-name) "emagent"))
+           (notifier (executable-find "terminal-notifier"))
+           (osascript (executable-find "osascript")))
+      (condition-case nil
+          (if notifier
+              (start-process
+               "emagent-inactive-notify" nil notifier
+               "-title" title
+               "-message" message
+               "-group" "emagent-attention"
+               "-activate" emagent-chat-macos-activate-bundle-id)
+            (when osascript
+              (start-process
+               "emagent-inactive-notify" nil osascript "-e"
+               (format "display notification %s with title %s"
+                       (prin1-to-string message)
+                       (prin1-to-string title)))))
+        (error nil)))))
+
+(defun emagent-chat--notify-inactive-update ()
+  "Emit throttled attention notifications for background permission dialogue."
+  (when (emagent-chat--inactive-attention-needed-p)
+    (let ((now (float-time)))
+      (when (>= (- now emagent-chat--last-inactive-bell-time)
+                emagent-chat-inactive-bell-cooldown)
+        (setq emagent-chat--last-inactive-bell-time now)
+        (condition-case nil
+            (progn
+              (when emagent-chat-inactive-bell
+                (ding t))
+              (emagent-chat--notify-macos-inactive-update))
+          (error nil))))))
 
 (defvar-local emagent-chat--permission-pending nil
   "Non-nil while a permission dialog is active in the current buffer.

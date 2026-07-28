@@ -27,21 +27,12 @@
 ;; SOFTWARE.
 
 ;;; Commentary:
-
-;; Inline button dialogs used to ask the user for tool/eval/shell permission
-;; inside a chat buffer.  This is UI, not a tool handler and not a policy
-;; decision: `emagent-tools' stays FS/process, `emagent-policy' stays pure
-;; match/decide, and both call into this module to ask the question.
 ;;
-;; Names retain the `emagent-tools--' prefix: they are referenced widely by
-;; tools, policy, and the ACP permission flow, and mocked directly by name in
-;; tests.  Their home is here.
+;; Shared chat UI helpers, send-in-flight state, and buffer utilities.
 ;;
-;; No dependency on `emagent-chat' itself (that would cycle back through
-;; `emagent-chat-tools-ui' -> `emagent-tools' -> here): the optional
-;; `emagent-chat--writable' call below stays behind an `fboundp' check.
-
 ;;; Code:
+
+(require 'cl-lib)
 
 (defun emagent-tools--apply-button-line-keymap (beg end keymap)
   "Attach KEYMAP to the button line spanning BEG through END (exclusive).
@@ -177,6 +168,74 @@ dialog is inserted above it rather than after it."
               (when (boundp 'emagent-chat--follow-output)
                 (setq emagent-chat--follow-output nil)))))
         (emagent-tools--focus-inline-buttons chat-buffer first-button)))))
+
+(defvar-local emagent-chat--send-pending nil
+  "Non-nil from send until `emagent-acp-send-prompt' dispatches the turn.
+
+Covers connecting, per-turn model switches (`/model'), and other pre-dispatch
+work.  The mode line shows a spinner during this window so large resumed
+sessions do not look idle while the agent re-hydrates context for a new model.")
+
+(defvar-local emagent-chat--send-token nil
+  "Token for the in-flight pre-dispatch send; cleared on cancel or dispatch.")
+
+(defun emagent-chat--send-active-p (token)
+  "Return non-nil when TOKEN is still the active pre-dispatch send."
+  (and emagent-chat--send-pending (eq emagent-chat--send-token token)))
+
+(defun emagent-chat--send-pending-begin ()
+  "Mark the buffer as preparing a send and refresh the mode line."
+  (setq emagent-chat--send-pending t
+        emagent-chat--send-token (cl-gensym "emagent-send"))
+  (when (fboundp 'emagent-chat--refresh-mode-line)
+    (emagent-chat--refresh-mode-line))
+  (when (fboundp 'emagent-chat--spinner-ensure-running)
+    (emagent-chat--spinner-ensure-running)))
+
+(defun emagent-chat--send-pending-end ()
+  "Clear the pre-dispatch send marker and refresh the mode line."
+  (when emagent-chat--send-pending
+    (setq emagent-chat--send-pending nil
+          emagent-chat--send-token nil)
+    (when (fboundp 'emagent-chat--refresh-mode-line)
+      (emagent-chat--refresh-mode-line))))
+
+(defvar emagent-chat--live-buffers (make-hash-table :weakness 'key :test 'eq)
+  "Weak set of live `emagent-mode' buffers.
+
+Used by focus/spinner refresh paths instead of scanning `buffer-list'.")
+
+(defun emagent-chat--register-live-buffer (&optional buffer)
+  "Register BUFFER (default current) as a live emagent chat buffer."
+  (puthash (or buffer (current-buffer)) t emagent-chat--live-buffers))
+
+(defun emagent-chat--unregister-live-buffer (&optional buffer)
+  "Unregister BUFFER (default current) from the live emagent set."
+  (remhash (or buffer (current-buffer)) emagent-chat--live-buffers))
+
+(defun emagent-chat--map-live-buffers (fn)
+  "Call FN with each live registered emagent buffer."
+  (maphash (lambda (buf _)
+             (when (buffer-live-p buf)
+               (funcall fn buf)))
+           emagent-chat--live-buffers))
+
+(defun emagent-chat--buffer-active-p (&optional buffer)
+  "Return non-nil when BUFFER is displayed in the selected window."
+  (let ((buf (or buffer (current-buffer))))
+    (and (window-live-p (selected-window))
+         (eq buf (window-buffer (selected-window))))))
+
+(defalias 'emagent-chat--buffer-visible-p 'emagent-chat--buffer-active-p)
+
+(defun emagent-chat--buffer-displayed-p (&optional buffer)
+  "Return non-nil when BUFFER is shown in a window on a visible frame.
+
+Unlike `emagent-chat--buffer-active-p', this is true even when the buffer is
+not in the selected window (e.g. side-by-side with another buffer, or while
+Emacs itself is unfocused).  It is nil only when no visible frame displays
+the buffer (every window hidden or the frame iconified)."
+  (and (get-buffer-window-list (or buffer (current-buffer)) nil 'visible) t))
 
 (provide 'emagent-chat-ui)
 ;;; emagent-chat-ui.el ends here

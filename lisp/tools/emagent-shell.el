@@ -34,7 +34,6 @@
 (require 'emagent-policy)
 (require 'emagent-tools-file)
 (require 'emagent-tools-shell)
-(require 'emagent-tools-process)
 
 (defvar emagent-acp-prefer-emacs)
 
