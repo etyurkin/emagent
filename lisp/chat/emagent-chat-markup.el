@@ -37,7 +37,7 @@
 (require 'seq)
 (require 'org)
 (require 'emagent-acp-usage)
-(require 'emagent-chat-buffer)
+(require 'emagent-chat-ui)
 
 (defun emagent-chat--lang-from-filename (file)
   "Return an org babel language tag for FILE, or nil when unknown."

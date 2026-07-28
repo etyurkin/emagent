@@ -38,7 +38,7 @@
 (require 'emagent-chat-reasoning)
 (require 'cl-lib)
 (require 'emagent-chat-response-state)
-(require 'emagent-chat-send-state)
+(require 'emagent-chat-ui)
 (require 'emagent-chat-input)
 (require 'emagent-chat-view)
 

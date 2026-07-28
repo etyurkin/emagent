@@ -33,9 +33,8 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'emagent-elisp)
-(require 'emagent-struct)
 (require 'emagent-tools-core)
+(require 'emagent-struct)
 (require 'emagent-tools-file)
 
 (defun emagent-tools--structural-sync-path (file)

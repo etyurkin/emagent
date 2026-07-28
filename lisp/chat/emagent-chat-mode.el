@@ -42,7 +42,7 @@
 (require 'emagent-chat-markup)
 (require 'emagent-chat-slash)
 (require 'emagent-log)
-(require 'emagent-chat-buffer)
+(require 'emagent-chat-ui)
 (require 'emagent-chat-header)
 (require 'emagent-chat-actions)
 (require 'emagent-chat-attach)

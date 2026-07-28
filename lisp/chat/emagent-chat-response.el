@@ -50,7 +50,7 @@
 
 (require 'emagent-chat-response-state)
 
-(require 'emagent-chat-send-state)
+(require 'emagent-chat-ui)
 
 (require 'emagent-chat-view)
 

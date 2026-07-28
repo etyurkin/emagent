@@ -47,7 +47,7 @@
 (require 'emagent-chat-compress)
 (require 'emagent-acp-usage)
 (require 'emagent-acp-state)
-(require 'emagent-chat-send-state)
+(require 'emagent-chat-ui)
 (require 'emagent-chat-response-state)
 (require 'emagent-chat-model-ui)
 (require 'emagent-chat-mcp)
