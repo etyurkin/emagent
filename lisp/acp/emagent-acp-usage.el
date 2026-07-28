@@ -179,7 +179,7 @@ Prefer the session config-option current value, then MODELS'
   "Unstick a session that finished on the wire but left the buffer open.
 
 Lazy-loads prompt/permission-queue so this leaf need not require them
-(those modules require this file).
+\(those modules require this file\).
 
 Arguments: STATE."
   (when (and state
