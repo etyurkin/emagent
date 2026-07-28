@@ -405,7 +405,7 @@ Arguments: STATE."
              (emagent-acp-state-ready state)
              (not (emagent-acp-state-busy state)))
     (unless (fboundp 'emagent-acp--maybe-complete-deferred-prompt)
-      (require 'emagent-acp-prompt))
+      (require 'emagent-acp))
     (emagent-acp--maybe-complete-deferred-prompt state)
     (when (emagent-acp-state-permission-queue state)
       (unless (fboundp 'emagent-acp--drain-permission-queue)
@@ -872,7 +872,7 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
   
   "Internal helper for STATE and SESSION-ID and ON-READY and RESUMED."
   (unless (fboundp 'emagent-acp--session-ready)
-    (require 'emagent-acp-lifecycle))
+    (require 'emagent-acp))
   (emagent-acp--session-ready
    :state state
    :session-id session-id

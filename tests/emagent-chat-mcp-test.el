@@ -7,7 +7,7 @@
 (require 'emagent-test-utils)
 (require 'emagent-chat)
 (require 'emagent-acp-protocol)
-(require 'emagent-acp-prompt)
+(require 'emagent-acp)
 
 (ert-deftest emagent-chat-mcp-test-command-p ()
   (should (emagent-chat--mcp-command-p "/mcp"))

@@ -43,7 +43,6 @@
 (require 'emagent-mcp)
 (require 'emagent-session)
 (require 'emagent-tools)
-(require 'emagent-trust)
 
 (defun emagent-chat--org-verbatim-paths (text)
   "Wrap file paths in org =verbatim= to prevent /italic/ and =verbatim= glitches.
@@ -1505,7 +1504,7 @@ Optional COMPRESS is forwarded for `/compress' session reset."
 (defun emagent-chat--acp-quit ()
   "Shut down this buffer's ACP session, loading send on first use."
   (unless (fboundp 'emagent-acp-shutdown-buffer)
-    (require 'emagent-acp-prompt))
+    (require 'emagent-acp))
   (emagent-acp-shutdown-buffer))
 
 (defun emagent-chat--operation-active-p ()
@@ -1546,7 +1545,7 @@ Return non-nil when something was stopped."
     (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
       (progn
         (unless (fboundp 'emagent-acp--finalize-in-flight-prompt)
-          (require 'emagent-acp-prompt))
+          (require 'emagent-acp))
         (emagent-acp--finalize-in-flight-prompt
          "/Stopped — awaiting new instructions./")))
     (emagent-chat--send-pending-end)
@@ -1580,7 +1579,7 @@ partial response, and sends `btw, TEXT' as a new prompt."
     (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
       (progn
         (unless (fboundp 'emagent-acp--finalize-in-flight-prompt)
-          (require 'emagent-acp-prompt))
+          (require 'emagent-acp))
         (emagent-acp--finalize-in-flight-prompt)))
     (emagent-log "btw send: %s" (emagent-log-truncate-line text 80))
     (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
@@ -1689,7 +1688,7 @@ above the user zone, jumps to the end of the buffer first."
 (defun emagent-chat--acp-attach (text)
   "Attach TEXT via `emagent-acp-attach-context', loading send on first use."
   (unless (fboundp 'emagent-acp-attach-context)
-    (require 'emagent-acp-prompt))
+    (require 'emagent-acp))
   (emagent-acp-attach-context text))
 
 (defun emagent-chat-attach-buffer ()

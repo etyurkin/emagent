@@ -216,7 +216,7 @@ an `execute:rm' grant (e.g. from `rm foo.log') cannot auto-run `rm -rf /'."
 
 (ert-deftest emagent-policy-test-shell-run-command-enforce ()
   (require 'cl-lib)
-  (require 'emagent-shell)
+  (require 'emagent-tools)
   (cl-letf (((symbol-function 'emagent-policy--runtime-confirm-p)
              (lambda (&rest _) nil)))
     (should-error (emagent-shell-run-command "rm -rf /tmp/foo"))))
