@@ -616,7 +616,7 @@ structural_insert path: foo.el
 
 (defun emagent-prompts--structural-tool-list ()
   "Return a comma-separated list of lisp-sitter MCP tool names."
-  (require 'emagent-mcp-structural)
+  (require 'emagent-mcp)
   (string-join (mapcar #'car emagent-mcp--structural-tools) ", "))
 
 (defun emagent-prompts--structural-policy ()

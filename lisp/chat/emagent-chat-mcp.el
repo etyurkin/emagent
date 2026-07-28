@@ -41,7 +41,6 @@
 (require 'map)
 (require 'emagent-log)
 (require 'emagent-session)
-(require 'emagent-chat-slash)
 (require 'emagent-mcp)
 (require 'emagent-cursor-command)
 
@@ -329,6 +328,7 @@ health-checks the in-process emagent MCP server."
     (user-error "Turn on emagent-mode in this buffer first"))
   (unless (memq emagent-chat-provider '(cursor claude))
     (user-error "/mcp requires a Claude or Cursor session"))
+  (require 'emagent-chat-mode)
   (when-let ((bounds (emagent-chat--slash-token-bounds)))
     (delete-region (car bounds) (cdr bounds)))
   (emagent-chat--mcp-select-and-act (and text (emagent-chat--mcp-arg text))))

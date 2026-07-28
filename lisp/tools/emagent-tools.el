@@ -37,7 +37,6 @@
 (require 'emagent-log)
 (require 'emagent-policy)
 (require 'emagent-struct)
-(require 'emagent-tools-core)
 (require 'emagent-tools-shell)
 
 (defvar auto-insert)

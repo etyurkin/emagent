@@ -25,24 +25,7 @@
 
 ;;; Commentary:
 ;;
-;; Exposes the `emagent-tool-*' functions to ACP agents as Model Context
-;; Protocol (MCP) tools, served over a localhost HTTP listener hosted inside
-;; the running Emacs.  Tool calls therefore execute in the live Emacs process
-;; itself -- no `emacsclient', no subprocess, no second Emacs.
-;;
-;; The server is a refcounted singleton: started lazily when the first emagent
-;; session connects and torn down only when the last session is gone.  Each
-;; session registers a per-session token mapped to its project root; every
-;; tool call carries that token in the request path
-;; (http://127.0.0.1:PORT/mcp/TOKEN), so a shared, provider-agnostic server
-;; can route each call to the right session and enforce its filesystem root.
-;;
-;; Two ways in, one server:
-;;   - Claude: the token url is passed via `session/new' mcpServers (http).
-;;   - Cursor: the cursor-agent CLI reads ~/.cursor/mcp.json, whose url uses
-;;     ${env:EMAGENT_SESSION_TOKEN}; emagent sets that env var per session.
-;;
-;; Structural MCP tools live in `emagent-mcp-structural'.
+;; In-Emacs MCP server, tool registry/dispatch, and structural MCP tools.
 ;;
 ;;; Code:
 
@@ -51,9 +34,403 @@
 (require 'seq)
 (require 'emagent-acp-custom)
 (require 'emagent-log)
-(require 'emagent-mcp-structural)
 (require 'emagent-session)
+(require 'emagent-struct)
 (require 'emagent-tools)
+
+(defun emagent-mcp--arg (args key &optional default)
+  "Return KEY from ARGS hash-table, or DEFAULT when missing or JSON null."
+  (let ((value (and (hash-table-p args) (gethash key args))))
+    (if (or (null value) (eq value :null))
+        default
+      value)))
+
+(defun emagent-mcp--bool (args key)
+  "Return non-nil when KEY in ARGS is JSON true."
+  (eq (emagent-mcp--arg args key) t))
+
+(defun emagent-mcp--structural-path-prop ()
+  "JSON schema property for a structural tool file path."
+  '(("path" . ((type . "string")
+               (description . "Path to the file, relative to session root.")))))
+
+(defun emagent-mcp--structural-symbol-prop ()
+  "JSON schema property for a top-level form name."
+  '(("symbol" . ((type . "string")
+                 (description . "Top-level form name (defun, defvar, ...).")))))
+
+(defun emagent-mcp--structural-tool (name description properties required handler async-handler)
+  "Build a lisp-sitter MCP tool registry entry.
+
+Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
+  (list name description properties required handler
+        :available #'emagent-struct-available-p
+        :async async-handler))
+
+(defconst emagent-mcp--structural-tools
+  (list
+   (emagent-mcp--structural-tool
+    "check_structural_file"
+    "[lisp-sitter] Validate a whole file (.el, .lisp, .cl, .scm). Returns \"OK\" or a syntax error."
+    (emagent-mcp--structural-path-prop)
+    '("path")
+    (lambda (args)
+      (emagent-tool-check-structural-file (emagent-mcp--arg args "path")))
+    (lambda (args cb)
+      (emagent-tool-check-structural-file-async cb (emagent-mcp--arg args "path"))))
+   (emagent-mcp--structural-tool
+    "check_structural_node"
+    "[lisp-sitter] Validate a complete top-level node without saving."
+    (append (emagent-mcp--structural-path-prop)
+            '(("node" . ((type . "string")
+                         (description . "Complete top-level node text to validate.")))))
+    '("path" "node")
+    (lambda (args)
+      (emagent-tool-check-structural-node (emagent-mcp--arg args "path")
+                                          (emagent-mcp--arg args "node")))
+    (lambda (args cb)
+      (emagent-tool-check-structural-node-async
+       cb (emagent-mcp--arg args "path") (emagent-mcp--arg args "node"))))
+   (emagent-mcp--structural-tool
+    "structural_find_errors"
+    "[lisp-sitter] List MISSING tokens and ERROR nodes in a Lisp file."
+    (emagent-mcp--structural-path-prop)
+    '("path")
+    (lambda (args)
+      (emagent-tool-structural-find-errors (emagent-mcp--arg args "path")))
+    (lambda (args cb)
+      (emagent-tool-structural-find-errors-async cb (emagent-mcp--arg args "path"))))
+   (emagent-mcp--structural-tool
+    "structural_tree"
+    "[lisp-sitter] Outline of top-level forms. Set depth > 1 for sub-form navigation."
+    (append (emagent-mcp--structural-path-prop)
+            '(("depth" . ((type . "integer")
+                          (description . "Outline depth (default 1).")))))
+    '()
+    (lambda (args)
+      (emagent-tool-structural-tree (emagent-mcp--arg args "path")
+                                    (emagent-mcp--arg args "depth")))
+    (lambda (args cb)
+      (emagent-tool-structural-tree-async
+       cb (emagent-mcp--arg args "path") (emagent-mcp--arg args "depth"))))
+   (emagent-mcp--structural-tool
+    "structural_bounds"
+    "[lisp-sitter] Return byte positions START:END for a named top-level form."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop))
+    '("path" "symbol")
+    (lambda (args)
+      (emagent-tool-structural-bounds (emagent-mcp--arg args "path")
+                                      (emagent-mcp--arg args "symbol")))
+    (lambda (args cb)
+      (emagent-tool-structural-bounds-async
+       cb (emagent-mcp--arg args "path") (emagent-mcp--arg args "symbol"))))
+   (emagent-mcp--structural-tool
+    "structural_get"
+    "[lisp-sitter] Return the full text of a named top-level form."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop))
+    '("path" "symbol")
+    (lambda (args)
+      (emagent-tool-structural-get (emagent-mcp--arg args "path")
+                                   (emagent-mcp--arg args "symbol")))
+    (lambda (args cb)
+      (emagent-tool-structural-get-async
+       cb (emagent-mcp--arg args "path") (emagent-mcp--arg args "symbol"))))
+   (emagent-mcp--structural-tool
+    "structural_context"
+    "[lisp-sitter] Return outline, bounds, and full text of each top-level form."
+    (emagent-mcp--structural-path-prop)
+    '("path")
+    (lambda (args)
+      (emagent-tool-structural-context (emagent-mcp--arg args "path")))
+    (lambda (args cb)
+      (emagent-tool-structural-context-async cb (emagent-mcp--arg args "path"))))
+   (emagent-mcp--structural-tool
+    "structural_replace"
+    "[lisp-sitter] Replace one top-level form with complete new text. Validates before save."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop)
+            '(("new_body" . ((type . "string")
+                             (description . "Complete replacement form text.")))))
+    '("path" "symbol" "new_body")
+    (lambda (args)
+      (emagent-tool-structural-replace (emagent-mcp--arg args "path")
+                                       (emagent-mcp--arg args "symbol")
+                                       (emagent-mcp--arg args "new_body")))
+    (lambda (args cb)
+      (emagent-tool-structural-replace-async
+       cb (emagent-mcp--arg args "path")
+       (emagent-mcp--arg args "symbol")
+       (emagent-mcp--arg args "new_body"))))
+   (emagent-mcp--structural-tool
+    "structural_insert"
+    "[lisp-sitter] Insert a complete top-level form after __start__, __end__, or a symbol name."
+    (append (emagent-mcp--structural-path-prop)
+            '(("after_symbol" . ((type . "string")
+                                 (description . "__start__, __end__, or existing form name.")))
+              ("node" . ((type . "string")
+                         (description . "Complete top-level form text to insert.")))))
+    '("path" "after_symbol" "node")
+    (lambda (args)
+      (emagent-tool-structural-insert (emagent-mcp--arg args "path")
+                                      (emagent-mcp--arg args "after_symbol")
+                                      (emagent-mcp--arg args "node")))
+    (lambda (args cb)
+      (emagent-tool-structural-insert-async
+       cb (emagent-mcp--arg args "path")
+       (emagent-mcp--arg args "after_symbol")
+       (emagent-mcp--arg args "node"))))
+   (emagent-mcp--structural-tool
+    "structural_complete"
+    "[lisp-sitter] Complete an unbalanced s-expression by appending missing closing parens."
+    '(("lang" . ((type . "string")
+                 (description . "elisp, commonlisp, or scheme.")))
+      ("body" . ((type . "string")
+                 (description . "Incomplete form text."))))
+    '("lang" "body")
+    (lambda (args)
+      (emagent-tool-structural-complete (emagent-mcp--arg args "lang")
+                                        (emagent-mcp--arg args "body")))
+    (lambda (args cb)
+      (emagent-tool-structural-complete-async
+       cb (emagent-mcp--arg args "lang") (emagent-mcp--arg args "body"))))
+   (emagent-mcp--structural-tool
+    "structural_format"
+    "[lisp-sitter] Re-indent a file (depth-based). Pass write=true to save."
+    (append (emagent-mcp--structural-path-prop)
+            '(("write" . ((type . "boolean")
+                          (description . "When true, save the formatted file.")))))
+    '("path")
+    (lambda (args)
+      (emagent-tool-structural-format (emagent-mcp--arg args "path")
+                                      (emagent-mcp--bool args "write")))
+    (lambda (args cb)
+      (emagent-tool-structural-format-async
+       cb (emagent-mcp--arg args "path") (emagent-mcp--bool args "write"))))
+   (emagent-mcp--structural-tool
+    "structural_rename"
+    "[lisp-sitter] Rename a top-level form and its call sites."
+    (append (emagent-mcp--structural-path-prop)
+            '(("old" . ((type . "string") (description . "Current form name.")))
+              ("new" . ((type . "string") (description . "New form name.")))
+              ("refs" . ((type . "boolean")
+                         (description . "Also rename quoted references.")))
+              ("no_refs" . ((type . "boolean")
+                            (description . "Rename definition only.")))))
+    '("path" "old" "new")
+    (lambda (args)
+      (emagent-tool-structural-rename (emagent-mcp--arg args "path")
+                                      (emagent-mcp--arg args "old")
+                                      (emagent-mcp--arg args "new")
+                                      (emagent-mcp--bool args "refs")
+                                      (emagent-mcp--bool args "no_refs")))
+    (lambda (args cb)
+      (emagent-tool-structural-rename-async
+       cb (emagent-mcp--arg args "path")
+       (emagent-mcp--arg args "old")
+       (emagent-mcp--arg args "new")
+       (emagent-mcp--bool args "refs")
+       (emagent-mcp--bool args "no_refs"))))
+   (emagent-mcp--structural-tool
+    "structural_wrap"
+    "[lisp-sitter] Wrap the body of a named form in a construct (progn, let, if)."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop)
+            '(("in" . ((type . "string")
+                       (description . "Wrapper: progn, let, let*, if, when, ...")))
+              ("bindings" . ((type . "string")
+                             (description . "let/let* bindings, e.g. ((x 1)).")))
+              ("condition" . ((type . "string")
+                              (description . "Condition for if/when wrappers.")))))
+    '("path" "symbol" "in")
+    (lambda (args)
+      (emagent-tool-structural-wrap (emagent-mcp--arg args "path")
+                                    (emagent-mcp--arg args "symbol")
+                                    (emagent-mcp--arg args "in")
+                                    (emagent-mcp--arg args "bindings")
+                                    (emagent-mcp--arg args "condition")))
+    (lambda (args cb)
+      (emagent-tool-structural-wrap-async
+       cb (emagent-mcp--arg args "path")
+       (emagent-mcp--arg args "symbol")
+       (emagent-mcp--arg args "in")
+       (emagent-mcp--arg args "bindings")
+       (emagent-mcp--arg args "condition"))))
+   (emagent-mcp--structural-tool
+    "structural_remove"
+    "[lisp-sitter] Remove a top-level form (optionally keep call site stubs)."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop)
+            '(("keep_calls" . ((type . "boolean")
+                               (description . "Leave call sites unchanged.")))))
+    '("path" "symbol")
+    (lambda (args)
+      (emagent-tool-structural-remove (emagent-mcp--arg args "path")
+                                      (emagent-mcp--arg args "symbol")
+                                      (emagent-mcp--bool args "keep_calls")))
+    (lambda (args cb)
+      (emagent-tool-structural-remove-async
+       cb (emagent-mcp--arg args "path")
+       (emagent-mcp--arg args "symbol")
+       (emagent-mcp--bool args "keep_calls"))))
+   (emagent-mcp--structural-tool
+    "structural_move"
+    "[lisp-sitter] Move a top-level form after __start__, __end__, or a symbol name."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop)
+            '(("after" . ((type . "string")
+                          (description . "__start__, __end__, or symbol name.")))))
+    '("path" "symbol" "after")
+    (lambda (args)
+      (emagent-tool-structural-move (emagent-mcp--arg args "path")
+                                    (emagent-mcp--arg args "symbol")
+                                    (emagent-mcp--arg args "after")))
+    (lambda (args cb)
+      (emagent-tool-structural-move-async
+       cb (emagent-mcp--arg args "path")
+       (emagent-mcp--arg args "symbol")
+       (emagent-mcp--arg args "after"))))
+   (emagent-mcp--structural-tool
+    "structural_substitute"
+    "[lisp-sitter] Replace a sub-expression inside a named form."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop)
+            '(("pattern" . ((type . "string") (description . "S-expression to replace.")))
+              ("replacement" . ((type . "string")
+                                 (description . "Replacement s-expression.")))))
+    '("path" "symbol" "pattern" "replacement")
+    (lambda (args)
+      (emagent-tool-structural-substitute (emagent-mcp--arg args "path")
+                                          (emagent-mcp--arg args "symbol")
+                                          (emagent-mcp--arg args "pattern")
+                                          (emagent-mcp--arg args "replacement")))
+    (lambda (args cb)
+      (emagent-tool-structural-substitute-async
+       cb (emagent-mcp--arg args "path")
+       (emagent-mcp--arg args "symbol")
+       (emagent-mcp--arg args "pattern")
+       (emagent-mcp--arg args "replacement"))))
+   (emagent-mcp--structural-tool
+    "structural_extract"
+    "[lisp-sitter] Extract a sub-expression into a new function."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop)
+            '(("pattern" . ((type . "string") (description . "Sub-expression to extract.")))
+              ("name" . ((type . "string") (description . "New function name.")))
+              ("params" . ((type . "string")
+                            (description . "Comma-separated parameter names.")))))
+    '("path" "symbol" "pattern" "name")
+    (lambda (args)
+      (emagent-tool-structural-extract (emagent-mcp--arg args "path")
+                                       (emagent-mcp--arg args "symbol")
+                                       (emagent-mcp--arg args "pattern")
+                                       (emagent-mcp--arg args "name")
+                                       (emagent-mcp--arg args "params")))
+    (lambda (args cb)
+      (emagent-tool-structural-extract-async
+       cb (emagent-mcp--arg args "path")
+       (emagent-mcp--arg args "symbol")
+       (emagent-mcp--arg args "pattern")
+       (emagent-mcp--arg args "name")
+       (emagent-mcp--arg args "params"))))
+   (emagent-mcp--structural-tool
+    "structural_callers"
+    "[lisp-sitter] Find all callers of a symbol in a file."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop))
+    '("path" "symbol")
+    (lambda (args)
+      (emagent-tool-structural-callers (emagent-mcp--arg args "path")
+                                       (emagent-mcp--arg args "symbol")))
+    (lambda (args cb)
+      (emagent-tool-structural-callers-async
+       cb (emagent-mcp--arg args "path") (emagent-mcp--arg args "symbol"))))
+   (emagent-mcp--structural-tool
+    "structural_instrument"
+    "[lisp-sitter] Instrument a form with tracing (--with, --at, or --wrap)."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop)
+            '(("with" . ((type . "string") (description . "Tracing form for the body.")))
+              ("at" . ((type . "string") (description . "Sub-expression to instrument.")))
+              ("wrap" . ((type . "string") (description . "Wrapper around sub-expression.")))))
+    '("path" "symbol")
+    (lambda (args)
+      (emagent-tool-structural-instrument (emagent-mcp--arg args "path")
+                                          (emagent-mcp--arg args "symbol")
+                                          (emagent-mcp--arg args "with")
+                                          (emagent-mcp--arg args "at")
+                                          (emagent-mcp--arg args "wrap")))
+    (lambda (args cb)
+      (emagent-tool-structural-instrument-async
+       cb (emagent-mcp--arg args "path")
+       (emagent-mcp--arg args "symbol")
+       (emagent-mcp--arg args "with")
+       (emagent-mcp--arg args "at")
+       (emagent-mcp--arg args "wrap"))))
+   (emagent-mcp--structural-tool
+    "structural_flatten"
+    "[lisp-sitter] Inline all call sites of a function and remove the definition."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop))
+    '("path" "symbol")
+    (lambda (args)
+      (emagent-tool-structural-flatten (emagent-mcp--arg args "path")
+                                       (emagent-mcp--arg args "symbol")))
+    (lambda (args cb)
+      (emagent-tool-structural-flatten-async
+       cb (emagent-mcp--arg args "path") (emagent-mcp--arg args "symbol"))))
+   (emagent-mcp--structural-tool
+    "structural_convert_let"
+    "[lisp-sitter] Convert between let and let* bindings in a form."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop)
+            '(("to" . ((type . "string")
+                       (description . "let or let*.")))))
+    '("path" "symbol" "to")
+    (lambda (args)
+      (emagent-tool-structural-convert-let (emagent-mcp--arg args "path")
+                                           (emagent-mcp--arg args "symbol")
+                                           (emagent-mcp--arg args "to")))
+    (lambda (args cb)
+      (emagent-tool-structural-convert-let-async
+       cb (emagent-mcp--arg args "path")
+       (emagent-mcp--arg args "symbol")
+       (emagent-mcp--arg args "to"))))
+   (emagent-mcp--structural-tool
+    "structural_splice"
+    "[lisp-sitter] Paredit splice: remove a wrapper form, elevating its body."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop)
+            '(("pattern" . ((type . "string")
+                            (description . "Parenthesised list to splice.")))))
+    '("path" "symbol" "pattern")
+    (lambda (args)
+      (emagent-tool-structural-splice (emagent-mcp--arg args "path")
+                                      (emagent-mcp--arg args "symbol")
+                                      (emagent-mcp--arg args "pattern")))
+    (lambda (args cb)
+      (emagent-tool-structural-splice-async
+       cb (emagent-mcp--arg args "path")
+       (emagent-mcp--arg args "symbol")
+       (emagent-mcp--arg args "pattern"))))
+   (emagent-mcp--structural-tool
+    "structural_raise"
+    "[lisp-sitter] Paredit raise: promote a sub-expression over its enclosing list."
+    (append (emagent-mcp--structural-path-prop)
+            (emagent-mcp--structural-symbol-prop)
+            '(("pattern" . ((type . "string")
+                            (description . "Sub-expression to raise.")))))
+    '("path" "symbol" "pattern")
+    (lambda (args)
+      (emagent-tool-structural-raise (emagent-mcp--arg args "path")
+                                     (emagent-mcp--arg args "symbol")
+                                     (emagent-mcp--arg args "pattern")))
+    (lambda (args cb)
+      (emagent-tool-structural-raise-async
+       cb (emagent-mcp--arg args "path")
+       (emagent-mcp--arg args "symbol")
+       (emagent-mcp--arg args "pattern"))))))
 
 (defgroup emagent-mcp nil
   "In-Emacs MCP server for emagent."
@@ -92,8 +469,6 @@ instead; emagent then writes whatever port it gets into the agent config."
 (defvar-local emagent-mcp--token nil
   "Per-buffer MCP session token.")
 
-;;;; Tokens and per-buffer identity
-
 (defun emagent-mcp-make-token ()
   "Return a fresh opaque session token."
   (let ((seed (format "%s-%s-%s-%s"
@@ -110,8 +485,6 @@ instead; emagent then writes whatever port it gets into the agent config."
 
 ;; Defined in emagent-acp.el; declared here to avoid a circular require.
 (defvar emagent-acp-prefer-emacs)
-
-;;;; Tool registry
 
 (defvar emagent-tools--timeout-override)
 
@@ -436,8 +809,6 @@ Only includes tools whose :available predicate passes."
                           (inputSchema . ,(emagent-mcp--tool-schema (nth 2 entry) (nth 3 entry)))))
                       (seq-filter #'emagent-mcp--tool-available-p emagent-mcp--tools))))))
 
-;;;; Tool dispatch (runs in the live Emacs, bound to the session context)
-
 (defun emagent-mcp--session-allowed-tools (buffer)
   "Return BUFFER's persisted tool allow-list, or nil."
   (when (buffer-live-p buffer)
@@ -544,8 +915,6 @@ A nil ID is serialized as JSON null (not an empty object)."
       (capabilities . ((tools . ((listChanged . :false)))))
       (serverInfo . ((name . ,emagent-mcp-server-name)
                      (version . "1.0.2"))))))
-
-;;;; HTTP layer
 
 (defun emagent-mcp--path-token (path)
   "Extract the session token from request PATH like /mcp/TOKEN."
@@ -765,8 +1134,6 @@ the filter itself never blocks on JSON-RPC handling."
     (emagent-mcp--cancel-drain proc)
     (process-put proc 'emagent-mcp-data nil)))
 
-;;;; Lifecycle
-
 (defun emagent-mcp-ensure-server ()
   "Start the MCP server if needed and return its port."
   (unless (process-live-p emagent-mcp--server)
@@ -825,8 +1192,6 @@ Arguments: PREFER-EMACS."
 (defun emagent-mcp-session-url (token)
   "Return the MCP endpoint URL for session TOKEN (and begin the server)."
   (format "http://127.0.0.1:%d/mcp/%s" (emagent-mcp-ensure-server) token))
-
-;;;; Cursor configuration
 
 (defun emagent-mcp--lists-to-vectors (object)
   "Recursively convert JSON arrays (lists) to vectors for `json-serialize'.
@@ -968,8 +1333,6 @@ Returns the approvals file path, or nil when there is nothing to write."
         (emagent-log "wrote Cursor mcp approvals (%s): %s"
                      (length keys) approvals)
         approvals))))
-
-;;;; External MCP server forwarding
 
 (defcustom emagent-acp-extra-mcp-config-file "~/.claude.json"
   "JSON file whose top-level `mcpServers' block is forwarded to ACP agents.

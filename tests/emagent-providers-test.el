@@ -4,7 +4,7 @@
 
 (require 'ert)
 (require 'emagent-test-utils)
-(require 'emagent-claude)
+(require 'emagent-acp-connect)
 (require 'emagent-cursor)
 
 (ert-deftest emagent-providers-test-claude-command ()

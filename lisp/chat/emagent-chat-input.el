@@ -27,17 +27,110 @@
 ;; SOFTWARE.
 
 ;;; Commentary:
-
-;; Chat input region helpers and send plumbing.
-
+;;
+;; Chat input region helpers and in-flight response markers/state.
+;;
 ;;; Code:
 
 (require 'cl-lib)
-(require 'org)
 (require 'map)
-(require 'emagent-log)
+(require 'org)
 (require 'emagent-chat-ui)
-(require 'emagent-chat-markup)
+(require 'emagent-log)
+
+;; The markers below stay defvar-local/defconst in the facade `emagent-chat';
+;; forward-declared here so this leaf never requires it back.
+(defvar emagent-chat--assistant-marker)
+
+(defvar emagent-chat--response-content-marker)
+
+(defvar emagent-chat--response-headline-re)
+
+(defvar-local emagent-chat--response-body-start nil
+  "Start of the in-flight emagent response body.")
+
+(defvar-local emagent-chat--response-end-marker nil
+  "End of the open response region.
+A live marker at the following exchange's user heading (re-evaluating an earlier
+prompt), the symbol `point-max' when the response is last in the buffer, or nil
+before a response is open.  Owning it avoids re-scanning to the next heading on
+every streamed chunk.")
+
+(defun emagent-chat--open-response-p ()
+  "Return non-nil when an emagent response is in flight.
+
+A response is open from `emagent-chat--begin-response' until it is
+finalized or failed; openness is tracked by the live body-start marker."
+  (and emagent-chat--response-body-start
+       (marker-buffer emagent-chat--response-body-start)
+       (marker-position emagent-chat--response-body-start)
+       t))
+
+(defun emagent-chat--open-response-begin ()
+  "Return the buffer position where the in-flight response begins, or nil."
+  (when (emagent-chat--open-response-p)
+    (marker-position emagent-chat--response-body-start)))
+
+(defun emagent-chat--find-open-response-begin ()
+  "Return the start of the in-flight response (the `** Thinking' line), or nil."
+  (emagent-chat--open-response-begin))
+
+(defun emagent-chat--response-region-end (begin)
+  "Return the buffer position that ends the response region starting at BEGIN.
+
+Read from the owned `emagent-chat--response-end-marker' (set once when the
+response is opened): a live marker at the following exchange's user heading, or
+`point-max' when the response is last.  Falls back to a forward scan only when
+the marker was not set (e.g. a re-opened session).  Bounding the region here
+keeps finalizing a mid-buffer response from deleting the exchanges below it."
+  (cond
+   ((markerp emagent-chat--response-end-marker)
+    (marker-position emagent-chat--response-end-marker))
+   ((eq emagent-chat--response-end-marker 'point-max)
+    (point-max))
+   (t
+    (save-excursion
+      (goto-char begin)
+      (if (re-search-forward (emagent-chat--user-heading-re) nil t)
+          (line-beginning-position)
+        (point-max))))))
+
+(defun emagent-chat--open-response-body-bounds ()
+  "Return (BEG . END) for the open response body.
+
+BEG is the response body start; END is the next user heading after it (the next
+exchange), or `point-max' when this is the last exchange.  Returns nil when no
+response is open."
+  (when-let ((begin (emagent-chat--open-response-begin)))
+    (cons begin (emagent-chat--response-region-end begin))))
+
+(defun emagent-chat--ensure-response-markers ()
+  "Set body markers for the open response when they were lost."
+  (unless (and emagent-chat--response-body-start
+               (marker-position emagent-chat--response-body-start)
+               emagent-chat--assistant-marker
+               (marker-position emagent-chat--assistant-marker))
+    (when-let ((bounds (emagent-chat--open-response-body-bounds)))
+      (setq emagent-chat--response-body-start (copy-marker (car bounds) nil)
+            emagent-chat--assistant-marker (copy-marker (cdr bounds) nil)))))
+
+(defun emagent-chat--response-body-bounds ()
+  "Return (CONTENT-START . END) for the `** Response' body, or nil.
+CONTENT-START comes from the owned `emagent-chat--response-content-marker' once
+the headline exists; otherwise the headline is located by search and cached."
+  (if (and emagent-chat--response-content-marker
+           (marker-position emagent-chat--response-content-marker)
+           (emagent-chat--open-response-p))
+      (cons (marker-position emagent-chat--response-content-marker)
+            (emagent-chat--response-region-end
+             (emagent-chat--open-response-begin)))
+    (when-let ((bounds (emagent-chat--open-response-body-bounds)))
+      (save-excursion
+        (goto-char (car bounds))
+        (when (re-search-forward emagent-chat--response-headline-re (cdr bounds) t)
+          (forward-line 1)
+          (setq emagent-chat--response-content-marker (copy-marker (point) nil))
+          (cons (point) (cdr bounds)))))))
 
 (defun emagent-chat--writable ()
   "Remove read-only state left by older emagent chat UIs."

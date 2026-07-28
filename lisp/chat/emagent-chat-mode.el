@@ -27,24 +27,1234 @@
 ;; SOFTWARE.
 
 ;;; Commentary:
-
-;; `emagent-mode': faces/setup, session deferral/activation, keymap,
-;; `define-derived-mode', and open/dispatch helpers.
-
+;;
+;; `emagent-mode', mode-line, slash commands, attach/extract, and actions.
+;;
 ;;; Code:
 
 (require 'cl-lib)
+(require 'map)
 (require 'org)
-(require 'emagent-session)
-(require 'emagent-chat-mode-line)
-(require 'emagent-chat-tools-ui)
-(require 'emagent-chat-markup)
-(require 'emagent-chat-slash)
-(require 'emagent-log)
-(require 'emagent-chat-ui)
-(require 'emagent-chat-actions)
-(require 'emagent-chat-attach)
+(require 'bookmark)
+(require 'emagent-acp-model)
+(require 'emagent-acp-state)
+(require 'emagent-acp-usage)
 (require 'emagent-chat-input)
+(require 'emagent-chat-mcp)
+(require 'emagent-chat-response)
+(require 'emagent-chat-thought)
+(require 'emagent-chat-tools-ui)
+(require 'emagent-chat-ui)
+(require 'emagent-context)
+(require 'emagent-log)
+(require 'emagent-session)
+
+;; Owned by `emagent-chat-mode-line'; read here without requiring it back.
+(defvar emagent-chat--status)
+
+(defgroup emagent-chat nil
+  "Emagent chat UI."
+  :group 'emagent)
+
+(defvar emagent-chat--spinner-timer nil
+  "Repeating timer that advances the spinner while any session is busy.")
+
+(defun emagent-chat--maybe-force-mode-line-update ()
+  "Refresh this buffer's mode line in every window that displays it.
+
+Updates whenever the buffer is shown in a visible window, not only the selected
+one, so the thinking spinner keeps animating in a side-by-side emagent window
+after focus moves elsewhere."
+  (when (emagent-chat--buffer-displayed-p)
+    (force-mode-line-update)))
+
+(defun emagent-chat--spinner-after-custom-set (sym val)
+  "Set SYM to VAL and refresh emagent mode lines."
+  (set-default sym val)
+  (set sym val)
+  (when (and (eq sym 'emagent-chat-spinner-interval)
+             emagent-chat--spinner-timer)
+    (cancel-timer emagent-chat--spinner-timer)
+    (setq emagent-chat--spinner-timer
+          (run-with-timer 0 val #'emagent-chat--spinner-tick)))
+  (emagent-chat--map-live-buffers
+   (lambda (buf)
+     (with-current-buffer buf
+       (when (fboundp 'emagent-chat--mode-line-recompute)
+         (emagent-chat--mode-line-recompute))
+       (emagent-chat--maybe-force-mode-line-update))))
+  nil)
+
+(defcustom emagent-chat-spinner-interval 0.4
+  "Seconds between spinner animation frames."
+  :type 'number
+  :group 'emagent-chat
+  :set #'emagent-chat--spinner-after-custom-set)
+
+(defcustom emagent-chat-spinner-height 1.15
+  "Scale factor for spinner dots or the braille glyph (`height' face property).
+When nil, the spinner inherits the mode-line height."
+  :type '(choice (const :tag "inherit" nil) number)
+  :group 'emagent-chat
+  :set #'emagent-chat--spinner-after-custom-set)
+
+(defcustom emagent-chat-spinner-style 'dots
+  "How to render the busy spinner in the mode line.
+`braille' is one Unicode braille character; `dots' is three horizontal dots."
+  :type '(choice (const :tag "Braille glyph" braille)
+                 (const :tag "Dot grid" dots))
+  :group 'emagent-chat
+  :set #'emagent-chat--spinner-after-custom-set)
+
+(defcustom emagent-chat-spinner-dot-on "●"
+  "Character for a lit spinner dot when `emagent-chat-spinner-style' is `dots'."
+  :type 'string
+  :group 'emagent-chat
+  :set #'emagent-chat--spinner-after-custom-set)
+
+(defcustom emagent-chat-spinner-dot-off "○"
+  "Character for an unlit spinner dot when `emagent-chat-spinner-style' is `dots'."
+  :type 'string
+  :group 'emagent-chat
+  :set #'emagent-chat--spinner-after-custom-set)
+
+(defface emagent-chat-spinner
+  '((t (:inherit (bold mode-line-emphasis))))
+  "Face for the mode-line busy spinner glyph."
+  :group 'emagent-chat)
+
+(defconst emagent-chat--spinner-frames ["⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏"]
+  "Braille spinner frames shown while the agent is busy.")
+
+(defvar emagent-chat--spinner-frame 0
+  "Current spinner frame index into `emagent-chat--spinner-frames'.")
+
+(defvar emagent-chat--spinner-start-time nil
+  "Epoch time when the busy spinner animation started, or nil when idle.")
+
+(defconst emagent-chat--spinner-dot-frames '((t nil nil) (nil t nil) (nil nil t) (nil t nil))
+  "Four-frame chase: @00, 0@0, 00@, 0@0, and so on.")
+
+(defun emagent-chat--spinner-frame-count ()
+  "Return the number of spinner frames for the active style."
+  (pcase emagent-chat-spinner-style
+    ('dots (length emagent-chat--spinner-dot-frames))
+    (_ (length emagent-chat--spinner-frames))))
+
+(defun emagent-chat--spinner-dot-face (lit)
+  "Return the face for spinner dot LIT state."
+  (let ((height emagent-chat-spinner-height))
+    (if lit
+        (if height
+            `(:inherit emagent-chat-spinner :height ,height)
+          'emagent-chat-spinner)
+      (if height
+          `(:inherit shadow :height ,height)
+        'shadow))))
+
+(defun emagent-chat--spinner-dot-char (lit)
+  "Return a propertized on/off dot character.
+
+Arguments: LIT."
+  (propertize (if lit emagent-chat-spinner-dot-on emagent-chat-spinner-dot-off)
+              'face (emagent-chat--spinner-dot-face lit)))
+
+(defun emagent-chat--spinner-dot-grid ()
+  "Return three horizontal dots for the current spinner frame."
+  (let ((pattern (nth emagent-chat--spinner-frame emagent-chat--spinner-dot-frames)))
+    (concat (emagent-chat--spinner-dot-char (nth 0 pattern))
+            (emagent-chat--spinner-dot-char (nth 1 pattern))
+            (emagent-chat--spinner-dot-char (nth 2 pattern)))))
+
+(defun emagent-chat--spinner-braille ()
+  "Return the current frame as one braille character."
+  (let ((face (if emagent-chat-spinner-height
+                  `(:inherit emagent-chat-spinner
+                            :height ,emagent-chat-spinner-height)
+                'emagent-chat-spinner)))
+    (propertize (aref emagent-chat--spinner-frames emagent-chat--spinner-frame)
+                'face face)))
+
+(defun emagent-chat--spinner-sync-frame ()
+  "Update `emagent-chat--spinner-frame' from elapsed time since spinner start."
+  (when emagent-chat--spinner-start-time
+    (let* ((count (emagent-chat--spinner-frame-count))
+           (interval (max 0.05 emagent-chat-spinner-interval)))
+      (setq emagent-chat--spinner-frame
+            (% (floor (/ (- (float-time) emagent-chat--spinner-start-time)
+                         interval))
+               count))
+      t)))
+
+(defun emagent-chat--spinner-string ()
+  "Return the current spinner rendering for the mode line."
+  (emagent-chat--spinner-sync-frame)
+  (pcase emagent-chat-spinner-style
+    ('dots (emagent-chat--spinner-dot-grid))
+    (_ (emagent-chat--spinner-braille))))
+
+(defun emagent-chat--mode-line-spinner-suffix ()
+  "Return the propertized busy spinner suffix for the mode line."
+  (concat " " (emagent-chat--spinner-string)))
+
+(defun emagent-chat--spinner-active-p ()
+  "Return non-nil when the mode-line thinking spinner should animate."
+  (and (or (plist-get emagent-chat--status :busy) emagent-chat--send-pending)
+       (not (plist-get emagent-chat--status :waiting-permission))))
+
+(defun emagent-chat--spinner-animate-p (&optional buffer)
+  "Return non-nil when BUFFER is displayed and should animate the spinner.
+
+The spinner keeps animating whenever the buffer is shown in any visible
+window, including an unselected window (two emagent buffers side by side) or
+while Emacs is unfocused.  It stops only when no visible frame displays the
+buffer."
+  (with-current-buffer (or buffer (current-buffer))
+    (and (emagent-chat--spinner-active-p)
+         (emagent-chat--buffer-displayed-p (current-buffer)))))
+
+(defun emagent-chat--any-spinner-active-p ()
+  "Return non-nil when any active emagent buffer needs spinner animation."
+  (catch 'found
+    (emagent-chat--map-live-buffers
+     (lambda (buf)
+       (when (with-current-buffer buf
+               (emagent-chat--spinner-animate-p buf))
+         (throw 'found t))))
+    nil))
+
+(defun emagent-chat--spinner-stop ()
+  "Cancel the spinner timer when no session needs animation."
+  (when emagent-chat--spinner-timer
+    (cancel-timer emagent-chat--spinner-timer))
+  (setq emagent-chat--spinner-timer nil
+        emagent-chat--spinner-start-time nil))
+
+(defun emagent-chat--spinner-ensure-running ()
+  "Start or stop the spinner timer based on active busy emagent buffers."
+  (if (emagent-chat--any-spinner-active-p)
+      (unless emagent-chat--spinner-timer
+        (setq emagent-chat--spinner-start-time (float-time)
+              emagent-chat--spinner-frame 0)
+        (emagent-chat--spinner-restart-timer))
+    (emagent-chat--spinner-stop)))
+
+(defun emagent-chat--spinner-refresh-buffer (buffer)
+  "Refresh BUFFER's mode line when it is the active busy emagent buffer."
+  (with-current-buffer buffer
+    (when (emagent-chat--spinner-animate-p buffer)
+      (when (fboundp 'emagent-chat--mode-line-recompute)
+        (emagent-chat--mode-line-recompute))
+      (emagent-chat--maybe-force-mode-line-update)
+      t)))
+
+(defun emagent-chat--spinner-refresh-idle ()
+  "Apply the current spinner frame to the active busy emagent buffer.
+
+Uses `force-mode-line-update' only — never `redisplay'.  A forced redisplay
+from this timer re-entered `window-configuration-change-hook' and could run
+deferred org table alignment on the chat buffer until Emacs pegged CPU."
+  (let (active-refreshed)
+    (emagent-chat--map-live-buffers
+     (lambda (buf)
+       (with-current-buffer buf
+         (when (emagent-chat--spinner-refresh-buffer buf)
+           (setq active-refreshed t)))))
+    (when active-refreshed
+      (force-mode-line-update t))
+    (emagent-chat--spinner-ensure-running)))
+
+(defun emagent-chat--spinner-tick ()
+  "Refresh visible busy mode lines for the current spinner frame."
+  (emagent-chat--spinner-sync-frame)
+  (emagent-chat--spinner-refresh-idle))
+
+(defun emagent-chat--spinner-restart-timer ()
+  "Restart the spinner timer using `emagent-chat-spinner-interval'."
+  (when emagent-chat--spinner-timer
+    (cancel-timer emagent-chat--spinner-timer))
+  (setq emagent-chat--spinner-timer
+        (run-with-timer 0 emagent-chat-spinner-interval
+                        #'emagent-chat--spinner-tick)))
+
+(defun emagent-chat--spinner-start ()
+  "Start the spinner timer if not already running."
+  (emagent-chat--spinner-ensure-running)
+  (when (derived-mode-p 'emagent-mode)
+    (when (fboundp 'emagent-chat--mode-line-recompute)
+      (emagent-chat--mode-line-recompute))
+    (emagent-chat--maybe-force-mode-line-update)))
+
+;; Owned by the facade `emagent-chat' (which requires this file); forward
+;; declared here so this file never requires it back.
+(defvar emagent-chat--turn-model)
+
+(defvar-local emagent-chat--mode-line-head nil
+  "Cached mode-line status prefix for the current emagent buffer.")
+
+(defvar-local emagent-chat--mode-line-tail nil
+  "Cached mode-line metadata suffix for the current emagent buffer.")
+
+(defvar-local emagent-chat--mode-line-cache nil
+  "Cached full mode-line string for `emagent-mode-line'.")
+
+(defvar-local emagent-chat--mode-line-stale-p nil
+  "When non-nil, recompute the mode line when this buffer becomes active.")
+
+(defvar-local emagent-chat--status nil
+  "Plist snapshot of ACP session status, pushed by the ACP layer via :cb-status.
+
+Keys: :busy :waiting-permission :ready :prompt-finishing :tool :tool-kind :rss
+:model-id :ctx-usage (a (USED . SIZE) cons or nil) :ctx-unavailable.  The mode
+line renders from this snapshot so the UI never calls up into the ACP runtime.")
+
+(defun emagent-chat--stat (key)
+  "Return status field KEY from the pushed ACP snapshot."
+  (plist-get emagent-chat--status key))
+
+(defun emagent-chat-model-display ()
+  "Return a short model label for the mode line.
+Prefer the pending `/model' target while preparing a send, then the live ACP
+session model pushed via `emagent-chat-set-status' (including transient
+per-turn switches), otherwise the buffer's saved #+EMAGENT_MODEL."
+  (let ((id (cond
+              ((and emagent-chat--send-pending emagent-chat--turn-model)
+               emagent-chat--turn-model)
+              ((emagent-chat--stat :ready)
+               (emagent-chat--stat :model-id))
+              (t (emagent-session-model)))))
+    (when id (emagent-session-model-display id))))
+
+(defun emagent-chat-set-model (model)
+  "Store ACP MODEL id in the current buffer and refresh the mode line."
+  (emagent-session-set-model model)
+  (emagent-chat--refresh-mode-line))
+
+(defun emagent-chat-set-status (status)
+  "Store the ACP STATUS snapshot for this buffer and refresh the mode line.
+This is the ACP layer's downward entry point (wired as :cb-status); it replaces
+the mode line pulling session state back out of the ACP layer."
+  (setq emagent-chat--status status)
+  (when (emagent-chat--stat :busy)
+    (emagent-chat--spinner-ensure-running))
+  (if (emagent-chat--stat :busy)
+      (emagent-chat--refresh-mode-line-soon)
+    (emagent-chat--refresh-mode-line)))
+
+(defun emagent-chat--mode-line-recompute ()
+  "Rebuild cached mode-line strings for the current emagent buffer."
+  (let ((parts (emagent-chat--mode-line-strings)))
+    (setq emagent-chat--mode-line-head (car parts)
+          emagent-chat--mode-line-tail (cdr parts)
+          emagent-chat--mode-line-cache (concat (car parts) (cdr parts))
+          emagent-chat--mode-line-stale-p nil)))
+
+(defvar-local emagent-chat--mode-line-refresh-timer nil
+  "One-shot idle timer that coalesces mode-line recomputes for this buffer.")
+
+(defun emagent-chat--refresh-mode-line ()
+  "Recompute and invalidate the mode line in the current buffer immediately."
+  (when emagent-chat--mode-line-refresh-timer
+    (cancel-timer emagent-chat--mode-line-refresh-timer)
+    (setq emagent-chat--mode-line-refresh-timer nil))
+  (emagent-chat--mode-line-recompute)
+  (emagent-chat--maybe-force-mode-line-update))
+
+(defun emagent-chat--refresh-mode-line-soon ()
+  "Queue a single mode-line recompute for the current buffer."
+  (let ((buf (current-buffer)))
+    (if (emagent-chat--buffer-active-p)
+        (progn
+          (when emagent-chat--mode-line-refresh-timer
+            (cancel-timer emagent-chat--mode-line-refresh-timer))
+          (let ((refresh
+                 (lambda ()
+                   (setq emagent-chat--mode-line-refresh-timer nil)
+                   (when (buffer-live-p buf)
+                     (with-current-buffer buf
+                       (emagent-chat--mode-line-recompute)
+                       (emagent-chat--maybe-force-mode-line-update))))))
+            (setq emagent-chat--mode-line-refresh-timer
+                  (run-with-idle-timer 0 nil refresh))))
+      (progn
+        (setq emagent-chat--mode-line-stale-p t)
+        (when emagent-chat--mode-line-refresh-timer
+          (cancel-timer emagent-chat--mode-line-refresh-timer)
+          (setq emagent-chat--mode-line-refresh-timer nil))))))
+
+(defun emagent-chat--refresh-mode-line-on-focus ()
+  "Recompute a stale or busy mode line after this buffer becomes active."
+  (when (emagent-chat--buffer-active-p)
+    (when (or emagent-chat--mode-line-stale-p
+              (emagent-chat--stat :busy))
+      (emagent-chat--mode-line-recompute)
+      (force-mode-line-update))))
+
+(defun emagent-chat--mode-line-strings ()
+  "Return (HEAD . TAIL) strings for the emagent mode line."
+  (let* ((busy  (emagent-chat--stat :busy))
+         (waiting-permission (emagent-chat--stat :waiting-permission))
+         (ready (emagent-chat--stat :ready))
+         (tool  (emagent-chat--stat :tool))
+         (kind  (emagent-chat--stat :tool-kind))
+         (rss   (emagent-chat--stat :rss))
+         (connected (or busy ready))
+         (spinner (when (emagent-chat--spinner-animate-p)
+                    (emagent-chat--mode-line-spinner-suffix)))
+         (busy-face '(bold mode-line-emphasis))
+         (head (cond
+                (waiting-permission
+                 (propertize "emagent:Allow?" 'face 'warning))
+                ((and (not busy) ready
+                      (emagent-chat--open-response-p)
+                      (not (emagent-chat--stat :prompt-finishing)))
+                 (propertize "emagent:stalled" 'face 'warning))
+                ((and busy tool (member kind '("write" "execute")))
+                 (concat (propertize "Executing" 'face busy-face)
+                         spinner))
+                (emagent-chat--send-pending
+                 (concat (propertize
+                          (if emagent-chat--turn-model "Switching" "Preparing")
+                          'face busy-face)
+                         spinner))
+                (busy
+                 (concat (propertize "Thinking" 'face busy-face)
+                         spinner))
+                (ready (propertize "emagent:Idle" 'face 'success))
+                (connected (propertize "emagent:connecting" 'face 'warning))
+                (t "emagent")))
+         (model (emagent-chat-model-display))
+         (sep (propertize " | " 'face 'shadow))
+         (model-str (when (and model (not (string-empty-p model)))
+                      (propertize model 'face 'shadow)))
+         (mode-id (emagent-chat--stat :mode-id))
+         (mode-str (when (and (stringp mode-id)
+                              (not (string-empty-p mode-id))
+                              (not (member mode-id '("agent" "default"))))
+                     (propertize mode-id 'face 'shadow)))
+         (context (emagent-chat--mode-line-context-usage))
+         (rss-str (when rss
+                    (propertize (format "mem:%dMB" rss)
+                                'face (cond ((>= rss 1000) 'error)
+                                            ((>= rss 500)  'warning)
+                                            (t             'success)))))
+         (tail (concat (when model-str (concat sep model-str))
+                       (when mode-str  (concat sep mode-str))
+                       (when context   (concat sep (string-trim-left context)))
+                       (when rss-str   (concat sep rss-str)))))
+    (cons head tail)))
+
+(defun emagent-chat--mode-line-context-usage ()
+  "Return a propertized context fill string, or nil.
+Shows a percentage when the provider reports context usage, `ctx:n/a' when a
+connected provider (cursor) cannot report it, and nil otherwise."
+  (if-let* ((pair (emagent-chat--stat :ctx-usage))
+            (used (car pair))
+            (size (cdr pair))
+            ((and (numberp used) (numberp size) (> size 0))))
+      (let ((pct (* 100.0 (/ (float used) size))))
+        (propertize (format " ctx:%.0f%%" pct)
+                    'face (cond
+                           ((>= pct 80) 'error)
+                           ((>= pct 50) 'warning)
+                           (t           'success))))
+    (when (emagent-chat--stat :ctx-unavailable)
+      (propertize " ctx:n/a" 'face 'shadow))))
+
+(defun emagent-mode-line ()
+  "Return cached emagent status text for the mode line."
+  (or emagent-chat--mode-line-cache
+      (progn (emagent-chat--mode-line-recompute)
+             emagent-chat--mode-line-cache)))
+
+(defvar emagent-chat--doom-modeline-registered-p nil)
+
+(defun emagent-chat--register-doom-modeline ()
+  "Register emagent segment and modeline layout with doom-modeline."
+  ;; doom-modeline-def-* are macros; eval quoted forms at runtime so
+  ;; byte-compilation of emagent-chat.el does not expand them early.
+  (eval
+   '(progn
+      (doom-modeline-def-segment emagent-ml
+        "Emagent session status."
+        (when (derived-mode-p 'emagent-mode)
+          (when emagent-chat--mode-line-head
+            (concat (doom-modeline-spc)
+                    emagent-chat--mode-line-head
+                    (doom-modeline-display-text emagent-chat--mode-line-tail)))))
+      (unless emagent-chat--doom-modeline-registered-p
+        (setq emagent-chat--doom-modeline-registered-p t)
+        (unless (assoc 'emagent-mode doom-modeline-mode-alist)
+          (add-to-list 'doom-modeline-mode-alist
+                       (cons 'emagent-mode 'emagent-chat)))
+        (unless (fboundp 'doom-modeline-format--emagent-chat)
+          (doom-modeline-def-modeline 'emagent-chat
+            '(matches buffer-info remote-host parrot)
+            '(buffer-position selection-info minor-modes process emagent-ml vcs
+                              input-method buffer-encoding battery misc-info
+                              major-mode)))))
+   t))
+
+(defvar doom-modeline-mode)
+
+(defun emagent-chat--setup-doom-modeline ()
+  "Use the emagent doom-modeline layout when doom-modeline is active."
+  (when (featurep 'doom-modeline)
+    (emagent-chat--register-doom-modeline)
+    (when (and doom-modeline-mode (fboundp 'doom-modeline-set-modeline))
+      (doom-modeline-set-modeline 'emagent-chat))))
+
+;; Apply the emagent doom-modeline layout whenever an emagent buffer is
+;; activated.  `emagent-chat--setup-doom-modeline' registers the format and
+;; no-ops unless doom-modeline is loaded, so no `with-eval-after-load' hook
+;; on the optional dependency is needed.
+(add-hook 'emagent-mode-hook #'emagent-chat--setup-doom-modeline)
+
+(defun emagent-chat--acp-send (text &optional compress)
+  "Send TEXT via `emagent-acp-send', loading connect on first use.
+Optional COMPRESS is forwarded for `/compress' session reset."
+  (unless (fboundp 'emagent-acp-send)
+    (require 'emagent-acp-connect))
+  (emagent-acp-send text compress))
+
+(defun emagent-chat--acp-quit ()
+  "Shut down this buffer's ACP session, loading send on first use."
+  (unless (fboundp 'emagent-acp-shutdown-buffer)
+    (require 'emagent-acp-send))
+  (emagent-acp-shutdown-buffer))
+
+(defun emagent-chat--operation-active-p ()
+  "Return non-nil when the buffer has work Esc-Esc should stop."
+  (or emagent-chat--send-pending
+      (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))))
+
+(defun emagent-chat--abort-open-response ()
+  "Delete the in-flight response scaffold opened before dispatch."
+  (let ((inhibit-read-only t))
+    (emagent-chat--writable)
+    (when (emagent-chat--open-response-p)
+      (when-let* ((beg (emagent-chat--open-response-begin))
+                  (end (emagent-chat--response-region-end beg)))
+        (save-excursion
+          (goto-char beg)
+          (while (and (> (point) (point-min))
+                      (progn (forward-line -1)
+                             (string-empty-p
+                              (buffer-substring-no-properties
+                               (line-beginning-position)
+                               (line-end-position)))))
+            (setq beg (line-beginning-position)))
+          (delete-region beg end)))))
+  (emagent-chat--reset-response-state)
+  (emagent-chat--sync-user-zone-marker))
+
+(defun emagent-chat--stop-operation ()
+  "Stop any in-flight emagent work in the current buffer.
+Return non-nil when something was stopped."
+  (when (emagent-chat--operation-active-p)
+    (when (and emagent-chat--send-pending
+               (not (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))))
+      (setq emagent-chat--send-token nil)
+      (when (fboundp 'emagent-acp--clear-when-connected-queue)
+        (emagent-acp--clear-when-connected-queue))
+      (emagent-chat--abort-open-response))
+    (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
+      (progn
+        (unless (fboundp 'emagent-acp--finalize-in-flight-prompt)
+          (require 'emagent-acp-send))
+        (emagent-acp--finalize-in-flight-prompt
+         "/Stopped — awaiting new instructions./")))
+    (emagent-chat--send-pending-end)
+    (when (fboundp 'emagent-chat--refresh-mode-line)
+      (emagent-chat--refresh-mode-line))
+    (when (fboundp 'emagent-chat--spinner-ensure-running)
+      (emagent-chat--spinner-ensure-running))
+    t))
+
+(defun emagent-chat--insert-user-heading-with-text (text)
+  "Insert TEXT as a complete `* username> TEXT' heading and return point after it."
+  (let ((inhibit-read-only t))
+    (emagent-chat--writable)
+    (goto-char (emagent-chat--user-zone-start))
+    (if (emagent-chat--user-heading-at-point-p)
+        (delete-region (line-beginning-position) (line-end-position))
+      (unless (bolp) (insert "\n")))
+    (insert (emagent-chat--user-heading-prefix) text)
+    (unless (= (char-before) ?\n) (insert "\n"))
+    (point)))
+
+(defun emagent-btw (text)
+  "Send TEXT to the agent immediately as a btw side note (C-c C-e b).
+
+When the agent is still thinking, cancels the in-flight turn, keeps any
+partial response, and sends `btw, TEXT' as a new prompt."
+  (interactive "sBTW: ")
+  (when (string-empty-p (string-trim text))
+    (user-error "BTW message is empty"))
+  (let ((text (format "btw, %s" (string-trim text))))
+    (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
+      (progn
+        (unless (fboundp 'emagent-acp--finalize-in-flight-prompt)
+          (require 'emagent-acp-send))
+        (emagent-acp--finalize-in-flight-prompt)))
+    (emagent-log "btw send: %s" (emagent-log-truncate-line text 80))
+    (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
+      (emagent-chat--begin-response response-pos))
+    (emagent-chat--ensure-follow-window)
+    (emagent-chat--send-pending-begin)
+    (emagent-chat--acp-send text)))
+
+(defun emagent-chat--dispatch-compress ()
+  "Handle a /compress-family slash command from `emagent-chat-send'.
+
+Summarizes the prior conversation and forwards the summary to
+`emagent-acp-send' with the compress flag, so ACP resets the session with
+it once the turn finishes (see `emagent-acp-send-prompt').  With no prior
+conversation, fails the just-opened response instead of dispatching."
+  (let ((history (emagent-chat--conversation-history-text)))
+    (if (string-empty-p history)
+        (emagent-chat-fail-assistant "No conversation to compress")
+      (emagent-chat--acp-send (emagent-chat--compress-prompt-text history) t))))
+
+(defun emagent-chat-send ()
+  "Send the `* user>' prompt at point to the agent (C-c C-c).
+
+Point must be on the prompt's heading line or in its body lines.  The
+prompt is sent as-is (heading prefix stripped); nothing in the buffer
+is rewritten, so text properties like the `/model' stamp survive.
+Sending a previous prompt replaces its old response."
+  (interactive)
+  (let ((bounds (emagent-chat--send-bounds)))
+    (unless bounds
+      (user-error "Not on a user prompt"))
+    (let* ((raw (string-trim (buffer-substring-no-properties
+                              (car bounds) (cdr bounds))))
+           ;; The `/model' link overrides the buffer model for this turn; it
+           ;; is client UI, stripped from what the agent receives.  With no
+           ;; link, keep whatever override is sticky (a prior failure may
+           ;; have chosen to keep one).
+           (input (emagent-chat--strip-model-links
+                   (string-trim (emagent-chat--strip-user-heading raw))))
+           (override (emagent-chat--region-turn-model (car bounds) (cdr bounds))))
+      (when (string-empty-p input)
+        (user-error "Prompt is empty"))
+      ;; Client `/mcp' never goes to the agent (Claude or Cursor).
+      (if (emagent-chat--mcp-command-p input)
+          (emagent-chat--slash-mcp-apply input)
+        (when override
+          (setq emagent-chat--turn-model override))
+        (let ((response-pos
+               (save-excursion
+                 (goto-char (cdr bounds))
+                 (end-of-line)
+                 (if (eobp)
+                     (let ((inhibit-read-only t)) (insert "\n"))
+                   (forward-line 1))
+                 (point))))
+          (emagent-chat--delete-following-response response-pos)
+          (emagent-log "send: %s" (emagent-log-truncate-line input 80))
+          (emagent-chat--send-pending-begin)
+          (emagent-chat--begin-response response-pos)
+          (let ((inhibit-read-only t))
+            (emagent-chat--writable)
+            (if emagent-chat--turn-model
+                (emagent-chat--insert-switching-scaffold)
+              (emagent-chat--insert-preparing-scaffold)))
+          ;; Preparing is inserted outside streaming-view; pin the window
+          ;; to the live end so the first thought chunk does not clear
+          ;; sticky follow when that end is briefly off-screen.
+          (emagent-chat--ensure-follow-window)
+          (if (and (emagent-chat--bare-slash-command-p input)
+                   (emagent-chat--compress-command-p input))
+              (emagent-chat--dispatch-compress)
+            (emagent-chat--acp-send input)))))))
+
+(defun emagent-chat-interrupt ()
+  "Stop any in-flight emagent work (ESC ESC).
+
+Closes a streaming response, cancels a pre-dispatch send, or clears a
+connect/model-switch wait.  When idle, falls through to `keyboard-quit'."
+  (interactive)
+  (if (emagent-chat--stop-operation)
+      (message "emagent: stopped")
+    (keyboard-quit)))
+
+(defun emagent-chat-new-prompt ()
+  "Insert a '* username>' heading at point for a new prompt (C-c C-n).
+
+Useful when the heading stub was accidentally deleted.  If point is
+above the user zone, jumps to the end of the buffer first."
+  (interactive)
+  (let ((inhibit-read-only t)
+        (zone-start (emagent-chat--user-zone-start)))
+    (when (< (point) zone-start)
+      (goto-char (point-max)))
+    (emagent-chat--writable)
+    (unless (bolp) (insert "\n"))
+    (insert (emagent-chat--user-heading-prefix))))
+
+(defun emagent-chat-quit ()
+  "Disconnect this buffer's ACP agent and bury the window."
+  (interactive)
+  (emagent-chat--acp-quit)
+  (bury-buffer))
+
+(eval-when-compile (require 'flymake))
+
+(defun emagent-chat--acp-attach (text)
+  "Attach TEXT via `emagent-acp-attach-context', loading send on first use."
+  (unless (fboundp 'emagent-acp-attach-context)
+    (require 'emagent-acp-send))
+  (emagent-acp-attach-context text))
+
+(defun emagent-chat-attach-buffer ()
+  "Attach a buffer summary to the next prompt."
+  (interactive)
+  (let ((text (emagent-context-buffer-summary)))
+    (emagent-log "attached buffer summary to next prompt")
+    (emagent-chat--acp-attach text)))
+
+(defun emagent-chat-yank (&optional arg)
+  "Yank text or paste a clipboard image.
+
+If the clipboard contains an image, saves it to a temp file under
+`emagent-chat--image-dir' and inserts a [[file:...]] org link at point.
+Otherwise behaves exactly like `yank' (ARG is forwarded)."
+  (interactive "*P")
+  (let ((clip (emagent-chat--clipboard-image)))
+    (if clip
+        (let ((file (emagent-chat--save-clipboard-image (car clip) (cdr clip))))
+          (insert (format "[[file:%s]]" file))
+          (message "emagent: clipboard image → %s" (file-name-nondirectory file)))
+      (yank arg))))
+
+(defvar emagent-chat--image-dir
+  (expand-file-name "emagent/images" (or (getenv "XDG_CACHE_HOME") "~/.cache"))
+  "Directory where clipboard images pasted into emagent buffers are saved.")
+
+(defun emagent-chat--ensure-image-dir ()
+  "Ensure `emagent-chat--image-dir' exists and return its path."
+  (unless (file-directory-p emagent-chat--image-dir)
+    (make-directory emagent-chat--image-dir t))
+  emagent-chat--image-dir)
+
+(defun emagent-chat--clipboard-image ()
+  "Return (MIME-TYPE-STRING . RAW-BYTES) for a clipboard image, or nil.
+
+Tries PNG, JPEG, GIF, WebP in order and returns the first available type."
+  (when (fboundp 'gui-get-selection)
+    (let ((targets (ignore-errors (gui-get-selection 'CLIPBOARD 'TARGETS))))
+      (when targets
+        (let ((target-list (cond ((vectorp targets) (append targets nil))
+                                 ((listp targets)   targets)
+                                 (t                 nil))))
+          (cl-some
+           (lambda (mime)
+             (when (memq (intern mime) target-list)
+               (let ((data (ignore-errors (gui-get-selection 'CLIPBOARD (intern mime)))))
+                 (when (and data (not (equal data "")))
+                   (cons mime data)))))
+           '("image/png" "image/jpeg" "image/gif" "image/webp")))))))
+
+(defun emagent-chat--save-clipboard-image (mime data)
+  "Write clipboard image DATA (raw bytes) of MIME type to a temp file.
+Returns the file path."
+  (let* ((ext (pcase mime
+                ("image/jpeg" "jpg")
+                ("image/gif"  "gif")
+                ("image/webp" "webp")
+                (_            "png")))
+         (file (expand-file-name
+                (format "img-%s.%s" (format-time-string "%Y%m%d-%H%M%S") ext)
+                (emagent-chat--ensure-image-dir))))
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (insert data)
+      (write-region (point-min) (point-max) file nil 'silent))
+    file))
+
+(defun emagent-chat-attach-image ()
+  "Insert an image link at point for the next prompt (C-c C-e i).
+
+If the clipboard contains an image, saves it to a temp file under
+`emagent-chat--image-dir' and inserts a [[file:...]] org link at point.
+Otherwise opens a file picker.
+
+On send, emagent finds all [[file:...]] image links in the heading,
+base64-encodes them, and sends them as multimodal content blocks alongside
+the prompt text."
+  (interactive)
+  (let ((clip (emagent-chat--clipboard-image)))
+    (if clip
+        (let ((file (emagent-chat--save-clipboard-image (car clip) (cdr clip))))
+          (insert (format "[[file:%s]]" file))
+          (message "emagent: clipboard image → %s (C-c C-c to send)"
+                   (file-name-nondirectory file)))
+      (let ((file (expand-file-name
+                   (read-file-name "Attach image: " nil nil t))))
+        (insert (format "[[file:%s]]" file))
+        (message "emagent: %s attached (C-c C-c to send)"
+                 (file-name-nondirectory file))))))
+
+(defun emagent-chat--compilation-error-lines ()
+  "Return error lines from *compilation* buffer using text properties, or nil."
+  (when-let ((buf (get-buffer "*compilation*")))
+    (with-current-buffer buf
+      (let (lines)
+        (save-excursion
+          (goto-char (point-min))
+          (while (not (eobp))
+            (when (get-text-property (point) 'compilation-message)
+              (let ((text (string-trim
+                           (buffer-substring-no-properties
+                            (line-beginning-position) (line-end-position)))))
+                (unless (string-empty-p text)
+                  (push text lines))))
+            (forward-line 1)))
+        (nreverse lines)))))
+
+(defun emagent-chat--flymake-error-lines ()
+  "Return flymake diagnostic lines from all open file-visiting buffers."
+  (when (and (require 'flymake nil t) (fboundp 'flymake-diagnostics))
+    (let (lines)
+      (dolist (buf (buffer-list))
+        (when (and (buffer-file-name buf)
+                   (buffer-local-value 'flymake-mode buf))
+          (let ((diags (with-current-buffer buf (flymake-diagnostics))))
+            (dolist (d diags)
+              (push (format "%s:%s [%s] %s"
+                            (abbreviate-file-name (buffer-file-name buf))
+                            (with-current-buffer buf
+                              (line-number-at-pos
+                               (flymake-diagnostic-beg d)))
+                            (flymake-diagnostic-type d)
+                            (flymake-diagnostic-text d))
+                    lines)))))
+      (nreverse lines))))
+
+(defun emagent-chat-attach-error-context ()
+  "Attach compilation errors and flymake diagnostics to the next prompt.
+
+Scans `*compilation*' for error lines and all open file buffers for
+active flymake diagnostics.  Attaches a combined error context block."
+  (interactive)
+  (let* ((compile-lines (emagent-chat--compilation-error-lines))
+         (flymake-lines (emagent-chat--flymake-error-lines))
+         (all (append compile-lines flymake-lines)))
+    (if all
+        (let ((text (concat "[Error context]\n" (string-join all "\n"))))
+          (emagent-log "attached %d error(s) to next prompt" (length all))
+          (emagent-chat--acp-attach text))
+      (message "emagent: no errors found in compilation buffer or flymake"))))
+
+(defun emagent-chat-attach-files ()
+  "Pick project files and attach summaries to the next prompt.
+
+Presents `completing-read-multiple' over files under
+`emagent-session-project-directory'.  For each chosen file includes its
+relative path, size in lines, and a short content preview."
+  (interactive)
+  (let* ((root (or (emagent-session-project-directory)
+                   default-directory))
+         (all-files (directory-files-recursively root "[^.].*" nil t))
+         (rel-files (seq-filter
+                     (lambda (f)
+                       (not (string-match-p "/\\.git/" f)))
+                     (mapcar (lambda (f) (file-relative-name f root))
+                             all-files)))
+         (chosen (completing-read-multiple
+                  "Attach files (comma-separated): " rel-files nil t))
+         (blocks
+          (mapcar (lambda (rel)
+                    (let* ((abs (expand-file-name rel root))
+                           (size (and (file-exists-p abs)
+                                      (with-temp-buffer
+                                        (insert-file-contents abs nil 0 4096)
+                                        (count-lines (point-min) (point-max))))))
+                      (format "[File: %s (%s lines)]\n%s"
+                              rel (or size "?")
+                              (condition-case nil
+                                  (with-temp-buffer
+                                    (insert-file-contents abs nil 0 2048)
+                                    (buffer-string))
+                                (error "(unreadable)")))))
+                  chosen)))
+    (if blocks
+        (let ((text (string-join blocks "\n\n")))
+          (emagent-log "attached %d file(s) to next prompt" (length blocks))
+          (emagent-chat--acp-attach text))
+      (message "emagent: no files selected"))))
+
+(defgroup emagent-chat nil
+  "Emagent chat UI."
+  :group 'emagent)
+
+(defun emagent-chat-cycle-or-org-cycle ()
+  "Cycle visibility with `org-cycle' (responses fold as native Org subtrees)."
+  (interactive)
+  (org-cycle))
+
+(defconst emagent-chat--client-slash-commands
+  '(((name . "model")
+     (description . "switch model for this turn (marker stripped before send)"))
+    ((name . "mcp")
+     (description . "list/authenticate MCP servers (Claude or Cursor CLI)")))
+  "Slash commands emagent handles itself; never sent to the agent.")
+
+(defun emagent-chat--client-slash-command (name)
+  "Return the client slash-command plist named NAME, or nil."
+  (seq-find (lambda (c) (equal (map-elt c 'name) name))
+            emagent-chat--client-slash-commands))
+
+(defun emagent-chat--slash-model-apply-1 (bounds)
+  "Prompt for a model and replace BOUNDS with the `/model' marker link."
+  (let* ((state emagent-acp--session)
+         (choices (and state (emagent-acp--model-choices state nil))))
+    (cond
+     ((not choices)
+      (message "emagent: no models available yet — M-x emagent-connect"))
+     (t
+      (let* ((selection (completing-read "Model for this turn: "
+                                         (mapcar #'car choices) nil t))
+             (model-id (cdr (assoc-string selection choices))))
+        (when model-id
+          (delete-region (car bounds) (cdr bounds))
+          (goto-char (car bounds))
+          ;; An org link: agent/short-model as text, full id as target
+          ;; (shown on hover).  Org fontifies it, it survives saving the
+          ;; session file, deleting it cancels the override, and send strips
+          ;; it from the outgoing prompt.
+          (insert (emagent-chat--model-link model-id))))))))
+
+(defun emagent-chat--slash-model-apply ()
+  "Prompt for a model and replace the `/model' token with its marker link.
+The `[[emagent://AGENT/MODEL][short]]' link makes the send path switch to
+MODEL for this turn (restoring the buffer model afterward); the link is
+stripped from the text sent to the agent."
+  (unless (derived-mode-p 'emagent-mode)
+    (user-error "Turn on emagent-mode in this buffer first"))
+  (let ((bounds (emagent-chat--slash-token-bounds))
+        (buf (current-buffer)))
+    (unless bounds
+      (user-error "No `/model' token at point"))
+    (if (emagent-acp--connected-p)
+        (emagent-chat--slash-model-apply-1 bounds)
+      (progn
+        (unless (fboundp 'emagent-acp-ensure-connected)
+          (require 'emagent-acp-connect))
+        (emagent-acp-ensure-connected
+         :on-ready
+         (lambda ()
+           (with-current-buffer buf
+             (emagent-chat--slash-model-apply-1
+              (or (emagent-chat--slash-token-bounds) bounds)))))))))
+
+(defun emagent-chat--run-client-slash-command (name)
+  "Run the client slash command NAME (dispatch after completion)."
+  (pcase name
+    ("model" (emagent-chat--slash-model-apply))
+    ("mcp"
+     (unless (fboundp 'emagent-chat--slash-mcp-apply)
+       (require 'emagent-chat-mcp))
+     (emagent-chat--slash-mcp-apply))))
+
+(defvar emagent-chat-provider)
+
+(defvar-local emagent-chat-slash-commands nil
+  "Slash commands for this buffer as plists (:name :description :hint).
+
+Populated from the ACP agent via =available_commands_update= after the session
+connects.  Cursor sessions also seed documented built-ins and custom commands
+from ~/.cursor/commands and .cursor/commands/.")
+
+(defcustom emagent-chat-notify-slash-commands t
+  "When non-nil, show a message after the agent publishes slash commands."
+  :type 'boolean
+  :group 'emagent-chat)
+
+(defun emagent-chat--slash-command-name (name)
+  "Return slash command NAME without a leading \"/\"."
+  (if (and (stringp name) (not (string-empty-p name)) (string-prefix-p "/" name))
+      (substring name 1)
+    name))
+
+(defun emagent-chat--slash-command-plist (name description &optional hint)
+  "Return a slash-command plist for NAME.
+
+Arguments: DESCRIPTION, HINT."
+  `((name . ,(emagent-chat--slash-command-name name))
+    (description . ,(or description ""))
+    (hint . ,(or hint ""))))
+
+(defun emagent-chat--normalize-slash-commands (commands)
+  "Normalize COMMANDS from ACP JSON into slash-command plists."
+  (let ((items (cond
+                ((vectorp commands) (append commands nil))
+                ((listp commands) commands)
+                (t nil))))
+    (mapcar (lambda (cmd)
+              (emagent-chat--slash-command-plist
+               (map-elt cmd 'name)
+               (map-elt cmd 'description)
+               (map-nested-elt cmd '(input hint))))
+            items)))
+
+(defun emagent-chat--merge-slash-commands (base extra)
+  "Merge EXTRA into BASE by command name; EXTRA overrides BASE."
+  (let ((table (make-hash-table :test 'equal)))
+    (dolist (cmd base)
+      (puthash (map-elt cmd 'name) cmd table))
+    (dolist (cmd extra)
+      (puthash (map-elt cmd 'name) cmd table))
+    (let (result)
+      (maphash (lambda (_ cmd) (push cmd result)) table)
+      (sort result (lambda (a b) (string< (map-elt a 'name) (map-elt b 'name)))))))
+
+(defun emagent-chat-clear-slash-commands ()
+  "Clear slash commands until the agent publishes a fresh list."
+  (setq emagent-chat-slash-commands nil))
+
+(defun emagent-chat-seed-cursor-slash-commands ()
+  "Merge Cursor built-in and custom slash commands into the buffer list."
+  (when (and (eq emagent-chat-provider 'cursor)
+             (fboundp 'emagent-cursor-slash-commands))
+    (setq emagent-chat-slash-commands
+          (emagent-chat--merge-slash-commands
+           (emagent-cursor-slash-commands (emagent-session-project-directory))
+           emagent-chat-slash-commands))))
+
+(defun emagent-chat-set-slash-commands (commands)
+  "Merge normalized COMMANDS from the agent into `emagent-chat-slash-commands'."
+  (let ((incoming (emagent-chat--normalize-slash-commands commands)))
+    (setq emagent-chat-slash-commands
+          (if (and (eq emagent-chat-provider 'cursor)
+                   (fboundp 'emagent-cursor-slash-commands))
+              (emagent-chat--merge-slash-commands
+               (emagent-cursor-slash-commands (emagent-session-project-directory))
+               incoming)
+            incoming))
+    (when (and emagent-chat-notify-slash-commands
+               emagent-chat-slash-commands)
+      (emagent-log "%d slash commands from agent"
+                   (length emagent-chat-slash-commands)))))
+
+(defun emagent-chat--command-needle-base (needle)
+  "Return NEEDLE with a trailing colon removed, for skill-name matching."
+  (if (and (not (string-empty-p needle)) (string-suffix-p ":" needle))
+      (substring needle 0 -1)
+    needle))
+
+(defun emagent-chat--command-skill-part (name)
+  "Return the skill segment of slash command NAME (after the first colon)."
+  (if (string-match ":" name)
+      (substring name (match-end 0))
+    name))
+
+(defun emagent-chat--command-matches-needle-p (name needle)
+  "Return non-nil when NEEDLE appears as a substring of NAME or its skill part."
+  (or (string-empty-p needle)
+      (string-match-p (regexp-quote needle) name)
+      (string-match-p (regexp-quote needle)
+                      (emagent-chat--command-skill-part name))))
+
+(defun emagent-chat--slash-token-bounds ()
+  "Return (START . END) for the slash command token at point, or nil.
+
+Detects a `/name' token that point is within, anywhere on the line — at the
+start (after the user heading) or mid-prompt (e.g. `commit, use /model') — so
+long as the `/' is preceded by the heading, the line start, or whitespace."
+  (let ((zone (emagent-chat--user-zone-start))
+        (user-point (point)))
+    (when (>= user-point zone)
+      (save-excursion
+        (let ((floor (line-beginning-position)))
+          ;; Do not scan back into the user heading prefix.
+          (goto-char floor)
+          (when (looking-at (emagent-chat--user-heading-re))
+            (setq floor (match-end 0)))
+          ;; Walk back over the non-whitespace token containing point.
+          (goto-char user-point)
+          (skip-chars-backward "^ \t\n" floor)
+          (when (looking-at "/")
+            (let ((start (point))
+                  (end (progn (goto-char user-point)
+                              (skip-chars-forward "^ \t\n" (line-end-position))
+                              (point))))
+              (when (<= start user-point end)
+                (cons start end)))))))))
+
+(defun emagent-chat-slash-command-completion-at-point ()
+  "Complete agent slash commands at point."
+  (when-let* ((bounds (emagent-chat--slash-token-bounds))
+              (slash-start (car bounds))
+              (end (cdr bounds))
+              (prefix (buffer-substring-no-properties slash-start end))
+              ((string-prefix-p "/" prefix))
+              ;; Client commands (e.g. /model) are always offered; agent
+              ;; commands are merged in once the session publishes them.
+              ;; Cursor built-ins are seeded on mode enable / `emagent-connect'
+              ;; without waiting for a dummy prompt.
+              (commands (append emagent-chat--client-slash-commands
+                                emagent-chat-slash-commands)))
+    ;; Start the completion region AFTER the "/" so the framework sees the
+    ;; bare name (e.g. "relax", "session:relax") as its input.  This lets
+    ;; any completion style (basic, orderless, flex) filter naturally without
+    ;; the leading "/" confusing prefix or substring matching.
+    (list (1+ slash-start) end
+          (mapcar (lambda (cmd) (map-elt cmd 'name)) commands)
+          :annotation-function
+          (lambda (candidate)
+            (concat "  " (or (map-elt (cl-find candidate commands
+                                               :key (lambda (c) (map-elt c 'name))
+                                               :test #'string=)
+                                      'description)
+                             "")))
+          :exit-function
+          (lambda (str status)
+            ;; A client command runs its handler instead of staying as text.
+            (when (and (memq status '(finished sole exact))
+                       (emagent-chat--client-slash-command str))
+              (emagent-chat--run-client-slash-command str)))
+          :exclusive t)))
+
+(defun emagent-chat-tab ()
+  "On a slash-command token, complete or run it; otherwise run `org-cycle'."
+  (interactive)
+  (let* ((bounds (emagent-chat--slash-token-bounds))
+         (name (and bounds
+                    (buffer-substring-no-properties (1+ (car bounds)) (cdr bounds)))))
+    (cond
+     ;; A complete client command (e.g. fully-typed /model) runs directly, since
+     ;; `completion-at-point' would treat an exact sole match as nothing to do
+     ;; and never fire the exit-function.
+     ((and name (emagent-chat--client-slash-command name))
+      (emagent-chat--run-client-slash-command name))
+     ;; Otherwise complete: client commands (/model) are always offered, agent
+     ;; commands merge in once the session publishes them.
+     (bounds
+      (call-interactively #'completion-at-point))
+     (t
+      (call-interactively #'emagent-chat-cycle-or-org-cycle)))))
+
+(defvar emagent-chat-provider)
+
+(defvar emagent-chat--response-headline-re)
+
+(defun emagent-chat--imenu-create-index ()
+  "Return an imenu index of user messages for an emagent buffer."
+  (let (index)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^\\*+ \\(.*\\)$" nil t)
+        (let ((heading (match-string 1)))
+          (unless (string-match-p
+                   "\\`emagent>\\|\\`\\(?:[/#]\\)\\|\\`\\(?:Thinking\\|Response\\|Request permissions\\)\\'"
+                   heading)
+            (push (cons heading (match-beginning 0)) index))))
+      (nreverse index))))
+
+(defun emagent-chat--bookmark-make-record ()
+  "Return a bookmark record for the current emagent buffer."
+  (let* ((session-id (emagent-session-id))
+         (project-dir (emagent-session-project-directory))
+         (model (emagent-session-model))
+         (provider (when emagent-chat-provider (symbol-name emagent-chat-provider))))
+    `(,(buffer-name)
+      (handler . emagent-chat--bookmark-jump)
+      (session-id . ,session-id)
+      (project-dir . ,project-dir)
+      (model . ,model)
+      (provider . ,provider)
+      (position . ,(point)))))
+
+(defun emagent-chat--bookmark-jump (bookmark)
+  "Jump to an emagent BOOKMARK, reopening or reconnecting the session."
+  (let* ((session-id (bookmark-prop-get bookmark 'session-id))
+         (project-dir (bookmark-prop-get bookmark 'project-dir))
+         (model (bookmark-prop-get bookmark 'model))
+         (provider (when-let ((p (bookmark-prop-get bookmark 'provider)))
+                     (intern p)))
+         (pos (bookmark-prop-get bookmark 'position))
+         (buffer (when project-dir
+                   (emagent-chat-open :project-dir project-dir))))
+    (when buffer
+      (with-current-buffer buffer
+        (when model (emagent-chat-set-model model))
+        (when provider (emagent-session-set-agent provider))
+        (when session-id (emagent-session-set-id session-id)))
+      (pop-to-buffer buffer)
+      (when pos (goto-char pos)))))
+
+(defun emagent-chat--last-response-bounds ()
+  "Return (BEG . END) for the last completed `** Response' body, or nil."
+  (save-excursion
+    (goto-char (point-max))
+    (when (re-search-backward emagent-chat--response-headline-re nil t)
+      (forward-line 1)
+      (skip-chars-forward "\n")
+      (let ((beg (point))
+            (end (if (re-search-forward "^\\* " nil t)
+                     (line-beginning-position)
+                   (point-max))))
+        (cons beg end)))))
+
+(defun emagent-chat--collect-src-blocks (beg end)
+  "Return list of (LANG . CODE) for each src block between BEG and END."
+  (let (blocks)
+    (save-excursion
+      (goto-char beg)
+      (while (re-search-forward "^#\\+BEGIN_SRC \\(.*\\)\n" end t)
+        (let* ((lang (string-trim (match-string 1)))
+               (start (point))
+               (block-end (and (re-search-forward "^#\\+END_SRC\\s-*$" end t)
+                               (match-beginning 0))))
+          (when block-end
+            (push (cons lang (buffer-substring-no-properties start block-end))
+                  blocks)))))
+    (nreverse blocks)))
+
+(defun emagent-chat-insert-last-response ()
+  "Insert the last completed agent response into another buffer.
+
+Prompts for a target buffer with `completing-read'."
+  (interactive)
+  (if-let* ((bounds (emagent-chat--last-response-bounds))
+            (text (buffer-substring-no-properties (car bounds) (cdr bounds))))
+      (let* ((others (seq-filter (lambda (b) (not (eq b (current-buffer))))
+                                 (buffer-list)))
+             (choice (completing-read "Insert response into buffer: "
+                                      (mapcar #'buffer-name others) nil t))
+             (target (get-buffer choice)))
+        (with-current-buffer target
+          (insert text))
+        (message "emagent: inserted response into %s" choice))
+    (message "emagent: no completed response found")))
+
+(defun emagent-chat-insert-src-block ()
+  "Pick a src block from the last response and insert it into another buffer."
+  (interactive)
+  (if-let* ((bounds (emagent-chat--last-response-bounds))
+            (blocks (emagent-chat--collect-src-blocks (car bounds) (cdr bounds))))
+      (let* ((choices
+              (cl-loop for (lang . code) in blocks
+                       for i from 1
+                       collect
+                       (cons (format "%d [%s] %s" i lang
+                                     (truncate-string-to-width
+                                      (car (split-string code "\n")) 60 nil nil "…"))
+                             code)))
+             (pick (completing-read "Insert src block: "
+                                    (mapcar #'car choices) nil t))
+             (code (cdr (assoc pick choices)))
+             (others (seq-filter (lambda (b) (not (eq b (current-buffer))))
+                                 (buffer-list)))
+             (target (get-buffer
+                      (completing-read "Into buffer: "
+                                       (mapcar #'buffer-name others) nil t))))
+        (with-current-buffer target
+          (insert code))
+        (message "emagent: inserted src block into %s" (buffer-name target)))
+    (message "emagent: no src blocks found in last response")))
 
 (defvar emagent-default-provider)
 
@@ -449,7 +1659,6 @@ Captured immediately after `define-derived-mode' so the public
 `emagent-mode' defun below can wrap display deferral without `advice-add'.
 Called by `emagent--run-derived-mode' in this file.")
 
-;;;###autoload
 (with-suppressed-warnings ((redefine emagent-mode))
   (defun emagent-mode (&optional arg)
     "Major mode for emagent chat scratch buffers.
@@ -565,5 +1774,4 @@ working inside session buffers."
           (emagent--activate-session-now))))))
 
 (provide 'emagent-chat-mode)
-
 ;;; emagent-chat-mode.el ends here

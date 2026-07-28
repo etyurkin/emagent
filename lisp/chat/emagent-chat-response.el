@@ -36,10 +36,8 @@
 (require 'map)
 (require 'org)
 (require 'emagent-chat-input)
-(require 'emagent-chat-markup)
-(require 'emagent-chat-response-state)
-(require 'emagent-chat-thought)
 (require 'emagent-chat-ui)
+(require 'emagent-chat-thought)
 (require 'emagent-log)
 (require 'emagent-session)
 
