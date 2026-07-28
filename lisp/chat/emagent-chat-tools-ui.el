@@ -29,8 +29,7 @@
 ;;; Commentary:
 
 ;; Tool-call append/update and permission-prompt UI for the Thinking block.
-;; Formatting lives in `emagent-chat-tools-format'; font-lock in
-;; `emagent-chat-tools-fontify'.
+;; Format/font-lock helpers live in `emagent-chat-tools-fontify'.
 
 ;;; Code:
 
