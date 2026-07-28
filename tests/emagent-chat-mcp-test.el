@@ -84,4 +84,84 @@
           (lambda (_secs _repeat fn) (funcall fn) nil)))
       (emagent-chat--mcp-select-and-act)
       (should (equal started '("mcp" "list"))))))
+
+(ert-deftest emagent-chat-mcp-test-reload-session ()
+  "Reload shuts down a live session then ensure-connects."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let (shutdown connected)
+       (with-current-buffer buffer
+         (setq emagent-acp--session (list :dummy t))
+         (emagent-test--with-mocks
+             (((symbol-function 'emagent-acp-shutdown-buffer)
+               (lambda ()
+                 (setq shutdown t)
+                 (setq emagent-acp--session nil)))
+              ((symbol-function 'emagent-acp-ensure-connected)
+               (lambda (&rest args)
+                 (setq connected t)
+                 (when-let ((on-ready (plist-get args :on-ready)))
+                   (funcall on-ready))))
+              ((symbol-function 'emagent-chat-seed-cursor-slash-commands)
+               (lambda () nil)))
+           (emagent-chat--mcp-reload-session buffer "sentry"))
+         (should shutdown)
+         (should connected))))))
+
+(ert-deftest emagent-chat-mcp-test-login-claude-reloads ()
+  "Claude MCP login success reconnects the ACP session."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let ((reloaded nil)
+           (emagent-chat-provider 'claude))
+       (with-current-buffer buffer
+         (emagent-test--with-mocks
+             (((symbol-function 'emagent-chat--mcp-cli)
+               (lambda () (cons "claude" default-directory)))
+              ((symbol-function 'emagent-chat--mcp-start)
+               (lambda (_program _directory args on-done &optional _pty)
+                 (should (equal args '("mcp" "login" "sentry")))
+                 (when on-done (funcall on-done 0 ""))
+                 nil))
+              ((symbol-function 'emagent-chat--mcp-reload-session)
+               (lambda (buf name)
+                 (setq reloaded (list buf name))))
+              ((symbol-function 'run-at-time)
+               (lambda (&rest _) nil)))
+           (emagent-chat--mcp-login "sentry" 'claude))
+         (should (equal reloaded (list buffer "sentry"))))))))
+
+(ert-deftest emagent-chat-mcp-test-login-cursor-reloads-after-enable ()
+  "Cursor MCP login waits for enable before reconnecting."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let ((reloaded nil)
+           (enable-cb nil)
+           (emagent-chat-provider 'cursor))
+       (with-current-buffer buffer
+         (emagent-test--with-mocks
+             (((symbol-function 'emagent-chat--mcp-cli)
+               (lambda () (cons "cursor-agent" default-directory)))
+              ((symbol-function 'emagent-chat--mcp-start)
+               (lambda (_program _directory args on-done &optional _pty)
+                 (should (equal args '("mcp" "login" "sentry")))
+                 (when on-done (funcall on-done 0 ""))
+                 nil))
+              ((symbol-function 'emagent-cursor-write-mcp-approvals)
+               (lambda (&rest _) nil))
+              ((symbol-function 'emagent-chat--mcp-enable)
+               (lambda (name on-done)
+                 (should (string= name "sentry"))
+                 (setq enable-cb on-done)))
+              ((symbol-function 'emagent-chat--mcp-reload-session)
+               (lambda (buf name)
+                 (setq reloaded (list buf name))))
+              ((symbol-function 'run-at-time)
+               (lambda (&rest _) nil)))
+           (emagent-chat--mcp-login "sentry" 'cursor)
+           (should-not reloaded)
+           (should enable-cb)
+           (funcall enable-cb 0 "")
+           (should (equal reloaded (list buffer "sentry")))))))))
+
 ;;; emagent-chat-mcp-test.el ends here
