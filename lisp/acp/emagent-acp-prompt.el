@@ -43,9 +43,8 @@
 (require 'emagent-acp-usage)
 (require 'emagent-acp-permit)
 (require 'emagent-acp-model)
-(require 'emagent-acp-gate)
+(require 'emagent-acp-provider)
 (require 'emagent-acp-send)
-(require 'emagent-acp-wire)
 
 (defvar emagent-chat--finish-close)
 
@@ -331,7 +330,7 @@ Skips silently when the buffer is gone or a prompt is already running
   "Best-effort `session/set_mode' to MODE-ID for STATE."
   (when-let ((session-id (emagent-acp-state-session-id state)))
     (unless (fboundp 'emagent-acp--send-request)
-      (require 'emagent-acp-wire))
+      (require 'emagent-acp-usage))
     (emagent-acp--send-request
      :state state
      :request (emagent-acp-make-session-set-mode-request

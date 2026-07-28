@@ -27,23 +27,19 @@
 ;; SOFTWARE.
 
 ;;; Commentary:
-
-;; Public session state accessors, session utility helpers, and usage
-;; tracking for the ACP layer.
-
+;;
+;; Token/usage tracking and thin ACP wire progress helpers.
+;;
 ;;; Code:
 
 (require 'cl-lib)
 (require 'map)
-(require 'emagent-log)
 (require 'emagent-acp-custom)
-(require 'emagent-acp-state)
+(require 'emagent-acp-protocol)
 (require 'emagent-acp-provider)
+(require 'emagent-acp-state)
+(require 'emagent-log)
 (require 'emagent-session)
-
-;;; -------------------------------------------------------------------------
-;;; Public session state accessors (for use by emagent-chat.el)
-;;; -------------------------------------------------------------------------
 
 (defun emagent-acp-busy-p ()
   "Return non-nil when the current buffer's ACP session is processing a prompt."
@@ -101,10 +97,6 @@ See `emagent-acp-external-tool-gate-hints'."
   (and emagent-acp--session
        (emagent-acp-state-external-tool-gate-reasons emagent-acp--session)))
 
-;;; -------------------------------------------------------------------------
-;;; Session utility helpers
-;;; -------------------------------------------------------------------------
-
 (defun emagent-acp--chat-buffer (state)
   "Return STATE's chat buffer if it is live, else nil.
 
@@ -157,7 +149,6 @@ buffer signals \"Selecting deleted buffer\"."
           (set-buffer-modified-p was-modified)))))
   ;; The status push from --refresh-mode-line re-renders the model label.
   (emagent-acp--refresh-mode-line state))
-
 
 (defun emagent-acp--current-model-id (state models)
   "Return the current model id for STATE.
@@ -261,10 +252,6 @@ Arguments: STATE."
     (cancel-timer timer)
     (setf (emagent-acp-state-agent-rss-timer state) nil)))
 
-;;; -------------------------------------------------------------------------
-;;; Usage tracking
-;;; -------------------------------------------------------------------------
-
 (defun emagent-acp--usage-state (state)
   
   "Internal helper for STATE."
@@ -317,6 +304,44 @@ Arguments: EMAGENT-ACP-UPDATE."
       (map-put! usage :context-size size))
     (setf (emagent-acp-state-usage state) usage)
     (emagent-acp--refresh-mode-line state)))
+
+(defun emagent-acp--notify-user (_state message)
+  "Append MESSAGE to `emagent-log-buffer-name'."
+  (emagent-log "%s" message))
+
+(defun emagent-acp--trace (format-string &rest args)
+  "Append a trace line when `emagent-acp-trace' is non-nil.
+
+Arguments: FORMAT-STRING, ARGS."
+  (when emagent-acp-trace
+    (apply #'emagent-log (cons (concat "acp: " format-string) args))))
+
+(defun emagent-acp--progress (state message)
+  "Show init stage MESSAGE in the minibuffer and refresh the mode line.
+
+Arguments: STATE."
+  (emagent-acp--notify-user state (format "emagent: %s" message))
+  (emagent-acp--refresh-mode-line state))
+
+(cl-defun emagent-acp--send-request (&key state request on-success on-failure)
+
+  "Internal helper for STATE and REQUEST and ON-SUCCESS and ON-FAILURE."
+  (let ((method (map-elt request :method)))
+    (emagent-acp--trace "send %s" method)
+    (emagent-acp-send-request
+     :client (emagent-acp-state-client state)
+     :request request
+     :buffer (emagent-acp--chat-buffer state)
+     :on-success
+     (lambda (response)
+       (emagent-acp--trace "recv %s ok" method)
+       (when on-success (funcall on-success response)))
+     :on-failure
+     (lambda (error raw)
+       (emagent-acp--trace "recv %s error: %s"
+                           method
+                           (or (map-elt error 'message) (format "%s" error)))
+       (when on-failure (funcall on-failure error raw))))))
 
 (provide 'emagent-acp-usage)
 ;;; emagent-acp-usage.el ends here

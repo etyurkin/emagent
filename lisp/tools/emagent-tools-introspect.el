@@ -37,7 +37,6 @@
 (require 'seq)
 (require 'emagent-elisp)
 (require 'emagent-policy)
-(require 'emagent-policy-match)
 (require 'emagent-tools-core)
 (require 'emagent-tools-confirm)
 
