@@ -4,7 +4,7 @@
 
 (require 'ert)
 (require 'cl-lib)
-(require 'emagent-prompts)
+(require 'emagent-struct)
 
 (ert-deftest emagent-prompts-test-system-prompt ()
   (should (stringp emagent-acp-system-prompt))

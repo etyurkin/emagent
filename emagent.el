@@ -103,7 +103,6 @@ target BUFFER (hence the two-argument signature)."
 (require 'emagent-acp)
 (require 'emagent-acp-usage)
 (require 'emagent-cursor)
-(require 'emagent-trust)
 (require 'project)
 
 ;; Optional integrations — loaded only when the dependency is present.

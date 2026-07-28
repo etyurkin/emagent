@@ -28,16 +28,534 @@
 
 ;;; Commentary:
 ;;
-;; Session state, model helpers, and buffer/context capture.
+;; Session state, model/context helpers, and workspace trust.
 ;;
 ;;; Code:
 
 (require 'cl-lib)
 (require 'map)
+(require 'json)
 (require 'subr-x)
 (require 'org)
 (require 'org-element)
-(require 'emagent-trust)
+
+(defgroup emagent-trust nil
+  "Workspace trust integration for emagent."
+  :group 'emagent
+  :prefix "emagent-trust-")
+
+(defcustom emagent-trust-enabled t
+  "When non-nil, record workspace trust on disk before a new Claude/Cursor session.
+
+Remote `default-directory' values (Tramp) skip file writes."
+  :type 'boolean
+  :group 'emagent-trust)
+
+(defun emagent-trust--normalize-dir (directory)
+  "Return DIRECTORY as an absolute, `directory-file-name' path."
+  (let ((dir (expand-file-name directory)))
+    (if (string= dir "/")
+        "/"
+      (directory-file-name dir))))
+
+(defun emagent-trust--remote-p (directory)
+  "Return non-nil when DIRECTORY is under Tramp or another remote handler."
+  (file-remote-p (emagent-trust--normalize-dir directory)))
+
+(defun emagent-trust--iso8601-utc-now ()
+  "Return an ISO-8601 UTC timestamp string with millisecond field."
+  (format-time-string "%Y-%m-%dT%H:%M:%S.000Z" nil t))
+
+(defun emagent-trust--json-read-file (path)
+  "Read the first JSON value from PATH using `json-read'.
+
+Return nil for a missing file or an empty buffer (treat as an empty JSON
+object when paired with `emagent-trust--json-write-file').  Objects are alists
+with string keys (`json-key-type' is `string').
+
+Uses `json-read' instead of `json-parse-buffer' so large Claude Code state
+files round-trip via `json-encode'.  Arrays use `json-array-type' `vector' and
+JSON null uses the `:json-null' symbol so empty `[]' / `{}' do not become
+Elisp nil and then serialize as JSON null (which breaks Claude Code
+`projects' entries such as `allowedTools': [])."
+  (condition-case nil
+      (if (not (file-readable-p path))
+          nil
+        (with-temp-buffer
+          (set-buffer-multibyte nil)
+          (insert-file-contents-literally path)
+          (if (zerop (buffer-size))
+              nil
+            (goto-char (point-min))
+            (let ((json-object-type 'alist)
+                  (json-array-type 'vector)
+                  (json-key-type 'string)
+                  (json-null :json-null)
+                  (json-false :json-false))
+              (json-read)))))
+    (json-error
+     (error "Invalid JSON in %s" path))))
+
+(defun emagent-trust--json-write-file (object path)
+  "Write OBJECT as pretty-printed JSON to PATH atomically.
+
+OBJECT is either an alist/plist/list tree from `json-read' (written with
+`json-encode'), a hash table (written with `json-serialize'), or nil (written
+as `{}').  Optional pretty-print uses `json-pretty-print-buffer'."
+  (let* ((dir (file-name-directory path))
+         (tmp (make-temp-file "emagent-trust-" nil ".json")))
+    (unless (file-directory-p dir)
+      (make-directory dir t))
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (cond
+       ((null object)
+        (insert "{}"))
+       ((hash-table-p object)
+        (insert (json-serialize object
+                                :null-object nil
+                                :false-object :json-false)))
+       (t
+        (let ((json-object-type 'alist)
+              (json-array-type 'vector)
+              (json-key-type 'string)
+              (json-null :json-null)
+              (json-false :json-false))
+          (insert (json-encode object)))))
+      (when (fboundp 'json-pretty-print-buffer)
+        (goto-char (point-min))
+        (condition-case nil
+            ;; `json-pretty-print' binds `json-null' / object / key but not
+            ;; `json-array-type'.  With the default `list', JSON [] reads as
+            ;; nil and re-encodes as null — corrupting Claude `projects' keys
+            ;; like `allowedTools' and empty objects like `mcpServers'.
+            (let ((json-array-type 'vector)
+                  (json-null :json-null)
+                  (json-false :json-false))
+              (json-pretty-print-buffer))
+          (json-error nil)))
+      (write-region (point-min) (point-max) tmp nil 'silent))
+    (rename-file tmp path t)))
+
+(defun emagent-trust--prompt-ynq (directory agent-name)
+  "Ask y/n/q for DIRECTORY trust with AGENT-NAME; return `y, `n, or `q."
+  (let ((msg (format
+              "Trust this workspace for %s?\n%s\n(y=yes write trust config, n=no keep restricted, q=quit) "
+              agent-name directory)))
+    (pcase (read-char-choice msg '(?y ?n ?q))
+      (?y 'y)
+      (?n 'n)
+      (?q 'q))))
+
+(defcustom emagent-trust-claude-json-file
+  (expand-file-name "~/.claude.json")
+  "Claude Code user state file (`projects' map per absolute directory).
+
+Each project value may include `hasTrustDialogAccepted'.  Trust applies only
+when that field is JSON true; a missing entry, a missing field, or JSON false
+means not trusted at that path (parent directories are still checked, as in
+the `claude' CLI)."
+  :type 'file
+  :group 'emagent-trust)
+
+(defun emagent-trust-claude--has-trust-accepted-p (cell)
+  "Return non-nil when project CELL records explicit trust.
+
+In the JSON file the flag is the boolean true; after `json-read' it is
+symbol t.  Absent key, JSON false (`:json-false'), or any other value is not
+accepted at this path."
+  (and cell
+       (json-alist-p cell)
+       (eq (alist-get "hasTrustDialogAccepted" cell nil nil #'equal) t)))
+
+(defun emagent-trust-claude--projects-table (path)
+  "Return (ROOT . PROJECTS) for PATH, creating `projects' if missing."
+  (let ((root (emagent-trust--json-read-file path)))
+    (unless (or (null root) (json-alist-p root))
+      (error "Expected JSON object at top level: %s" path))
+    (unless root (setq root '()))
+    (let* ((entry (assoc "projects" root #'equal))
+           (projects nil))
+      (unless entry
+        (setq entry (cons "projects" '()))
+        (setq root (cons entry root)))
+      (setq projects (cdr entry))
+      (when (and projects (not (json-alist-p projects)))
+        (user-error
+         "Key `projects' must be a JSON object in %s (repair the file, then retry)"
+         path))
+      (cons root projects))))
+
+(defun emagent-trust-claude-trusted-p (directory)
+  "Return non-nil when DIRECTORY is trusted per Claude Code.
+
+Walks upward like the CLI; see `emagent-trust-claude--has-trust-accepted-p'."
+  (let* ((dir (emagent-trust--normalize-dir directory))
+         (path emagent-trust-claude-json-file)
+         (projects (cdr (emagent-trust-claude--projects-table path)))
+         (p dir)
+         (trusted nil))
+    (while (and p (not trusted))
+      (when-let ((cell (alist-get p projects nil nil #'equal)))
+        (when (emagent-trust-claude--has-trust-accepted-p cell)
+          (setq trusted t)))
+      (unless trusted
+        (setq p (unless (string= p "/")
+                  (file-name-directory (directory-file-name p))))
+        (when p
+          (setq p (directory-file-name (expand-file-name p))))))
+    trusted))
+
+(defun emagent-trust-claude-record-trust (directory)
+  "Set `hasTrustDialogAccepted' true for DIRECTORY in the Claude JSON file.
+
+Preserves other keys on the same `projects' entry (e.g. fixes explicit false)."
+  (let* ((dir (emagent-trust--normalize-dir directory))
+         (path emagent-trust-claude-json-file)
+         (pair (emagent-trust-claude--projects-table path))
+         (root (car pair))
+         (entry (assoc "projects" root #'equal))
+         (projects (cdr entry)))
+    (let ((cell (alist-get dir projects nil nil #'equal)))
+      (cond
+       ((and cell (json-alist-p cell))
+        (setf (alist-get "hasTrustDialogAccepted" cell nil nil #'equal) t))
+       (t
+        (setf (alist-get dir projects nil nil #'equal)
+              (list (cons "hasTrustDialogAccepted" t))))))
+    ;; setf on an empty `projects' alist can replace the local list without
+    ;; updating the cons on ROOT; sync the entry before writing.
+    (setcdr entry projects)
+    (emagent-trust--json-write-file root path)))
+
+(defcustom emagent-trust-cursor-config-dir
+  (expand-file-name "~/.cursor")
+  "Cursor configuration directory (contains `projects/' trust markers)."
+  :type 'directory
+  :group 'emagent-trust)
+
+(defun emagent-trust-cursor--project-slug (directory)
+  "Return Cursor project slug for DIRECTORY (under projects/ in config dir)."
+  (let ((abs (emagent-trust--normalize-dir directory)))
+    (if (string= abs "/")
+        ""
+      (replace-regexp-in-string "/" "-" (string-remove-prefix "/" abs)))))
+
+(defun emagent-trust-cursor--trust-file (directory)
+  "Return the path to Cursor's `.workspace-trusted' marker for DIRECTORY."
+  (expand-file-name
+   (format "projects/%s/.workspace-trusted"
+           (emagent-trust-cursor--project-slug directory))
+   emagent-trust-cursor-config-dir))
+
+(defun emagent-trust-cursor-trusted-p (directory)
+  "Return non-nil when Cursor's trust marker exists and matches DIRECTORY."
+  (let ((tf (emagent-trust-cursor--trust-file directory)))
+    (and (file-readable-p tf)
+         (condition-case nil
+             (let* ((data (emagent-trust--json-read-file tf))
+                    (wp (alist-get "workspacePath" data nil nil #'equal)))
+               (and (stringp wp)
+                    (string= (emagent-trust--normalize-dir wp)
+                             (emagent-trust--normalize-dir directory))))
+           (json-error nil)))))
+
+(defun emagent-trust-cursor-record-trust (directory)
+  "Write Cursor's `.workspace-trusted' marker for DIRECTORY."
+  (let* ((dir (emagent-trust--normalize-dir directory))
+         (tf (emagent-trust-cursor--trust-file directory))
+         (obj (list (cons "trustedAt" (emagent-trust--iso8601-utc-now))
+                    (cons "workspacePath" dir))))
+    (emagent-trust--json-write-file obj tf)))
+
+(defun emagent-trust--already-trusted-p (provider directory)
+  "Return non-nil when PROVIDER considers DIRECTORY trusted on disk."
+  (pcase provider
+    ('claude (emagent-trust-claude-trusted-p directory))
+    ('cursor (emagent-trust-cursor-trusted-p directory))
+    (_ t)))
+
+(defun emagent-trust--record-trust-if-needed (provider directory)
+  "Write on-disk trust for PROVIDER at DIRECTORY when not already trusted."
+  (unless (emagent-trust--already-trusted-p provider directory)
+    (let ((dir (emagent-trust--normalize-dir directory)))
+      (condition-case err
+          (pcase provider
+            ('claude (emagent-trust-claude-record-trust dir))
+            ('cursor (emagent-trust-cursor-record-trust dir)))
+        (error (signal (car err) (cdr err)))))))
+
+(defun emagent-trust--configure (provider project-dir)
+  "Handle trust setup for PROVIDER at PROJECT-DIR.
+
+When trust is missing on disk, writes Claude (~/.claude.json) or Cursor
+\(~/.cursor/projects/.../.workspace-trusted) markers automatically."
+  (cond
+   ((not (and emagent-trust-enabled (memq provider '(claude cursor))))
+    nil)
+   ((emagent-trust--remote-p project-dir)
+    (message "emagent: skipping workspace trust (remote directory)")
+    nil)
+   (t
+    (emagent-trust--record-trust-if-needed provider project-dir)
+    nil)))
+
+(defgroup emagent-permissions nil
+  "Persistent permission storage for emagent."
+  :group 'emagent
+  :prefix "emagent-permissions-")
+
+(defcustom emagent-permissions-directory
+  (expand-file-name ".emagent" "~")
+  "Directory for emagent permission files.
+
+Layout:
+- global.json — fingerprints from \"Allow always\"
+- sessions/SESSION.json — per-ACP-session fingerprints and allow-all flag
+- projects/HASH.json — per-project MCP tools and permission fingerprints"
+  :type 'directory
+  :group 'emagent-permissions)
+
+(defvar emagent-permissions--cache (make-hash-table :test 'equal)
+  "Cache of (FILE-MTIME . DATA) keyed by absolute file path.")
+
+(defun emagent-permissions--ensure-directory (subdir)
+  "Return SUBDIR under `emagent-permissions-directory', creating it."
+  (let ((dir (expand-file-name subdir emagent-permissions-directory)))
+    (make-directory dir t)
+    dir))
+
+(defun emagent-permissions--safe-filename (name)
+  "Return a filesystem-safe form of NAME."
+  (replace-regexp-in-string "[^a-zA-Z0-9._-]+" "_" name))
+
+(defun emagent-permissions--global-file ()
+  
+  "Internal helper."
+  (expand-file-name "global.json" emagent-permissions-directory))
+
+(defun emagent-permissions--session-file (session-id)
+  
+  "Internal helper for SESSION-ID."
+  (expand-file-name
+   (format "%s.json" (emagent-permissions--safe-filename session-id))
+   (emagent-permissions--ensure-directory "sessions")))
+
+(defun emagent-permissions--project-file (directory)
+  
+  "Internal helper for DIRECTORY."
+  (when directory
+    (let ((norm (emagent-trust--normalize-dir directory)))
+      (expand-file-name
+       (format "%s.json" (secure-hash 'sha1 norm))
+       (emagent-permissions--ensure-directory "projects")))))
+
+(defun emagent-permissions--invalidate (path)
+  
+  "Internal helper for PATH."
+  (when path (remhash path emagent-permissions--cache)))
+
+(defun emagent-permissions--file-mtime (path)
+  
+  "Internal helper for PATH."
+  (when (file-readable-p path)
+    (file-attribute-modification-time (file-attributes path))))
+
+(defun emagent-permissions--read-json (path)
+  
+  "Internal helper for PATH."
+  (or (emagent-trust--json-read-file path) nil))
+
+(defun emagent-permissions--write-json (path object)
+  
+  "Internal helper for PATH and OBJECT."
+  (make-directory emagent-permissions-directory t)
+  (emagent-trust--json-write-file object path)
+  (emagent-permissions--invalidate path))
+
+(defun emagent-permissions--cached (path reader)
+  
+  "Internal helper for PATH and READER."
+  (let ((mtime (emagent-permissions--file-mtime path)))
+    (if-let ((entry (gethash path emagent-permissions--cache)))
+        (if (equal (car entry) mtime)
+            (cdr entry)
+          (let ((data (funcall reader path)))
+            (puthash path (cons mtime data) emagent-permissions--cache)
+            data))
+      (let ((data (funcall reader path)))
+        (puthash path (cons mtime data) emagent-permissions--cache)
+        data))))
+
+(defun emagent-permissions--vector-to-list (value)
+  
+  "Internal helper for VALUE."
+  (cond
+   ((vectorp value) (append value nil))
+   ((listp value) value)
+   (t nil)))
+
+(defun emagent-permissions--fingerprints (data)
+  
+  "Internal helper for DATA."
+  (emagent-permissions--vector-to-list (cdr (assoc "fingerprints" data))))
+
+(defun emagent-permissions--tools (data)
+  
+  "Internal helper for DATA."
+  (mapcar #'intern (emagent-permissions--vector-to-list (cdr (assoc "tools" data)))))
+
+(defun emagent-permissions--auto-approve-p (data)
+  
+  "Internal helper for DATA."
+  (let ((value (cdr (assoc "autoApprove" data))))
+    (and value (not (eq value :json-false)) (not (eq value :false)))))
+
+(defun emagent-permissions--maybe-migrate-legacy-global ()
+  
+  "Internal helper."
+  (let* ((legacy (expand-file-name "allowed-permissions" emagent-permissions-directory))
+         (global (emagent-permissions--global-file)))
+    (when (and (file-readable-p legacy) (not (file-readable-p global)))
+      (let (fingerprints)
+        (with-temp-buffer
+          (insert-file-contents legacy)
+          (dolist (line (split-string (buffer-string) "\n" t))
+            (setq fingerprints
+                  (append fingerprints (split-string line "[ \t]+" t)))))
+        (emagent-permissions--write-json
+         global `((fingerprints . ,(vconcat (delete-dups fingerprints)))))))))
+
+(defun emagent-permissions--read-global-data (path)
+  
+  "Internal helper for PATH."
+  (emagent-permissions--maybe-migrate-legacy-global)
+  (or (emagent-permissions--read-json path)
+      '((fingerprints . []))))
+
+(defun emagent-permissions--read-session-data (session-id path)
+  
+  "Internal helper for SESSION-ID and PATH."
+  (or (emagent-permissions--read-json path)
+      `((sessionId . ,session-id)
+        (fingerprints . [])
+        (autoApprove . :json-false))))
+
+(defun emagent-permissions--read-project-data (directory path)
+  
+  "Internal helper for DIRECTORY and PATH."
+  (or (emagent-permissions--read-json path)
+      `((directory . ,(emagent-trust--normalize-dir directory))
+        (fingerprints . [])
+        (tools . []))))
+
+(defun emagent-permissions-global-fingerprints ()
+  "Return globally allowed ACP permission fingerprints."
+  (emagent-permissions--fingerprints
+   (emagent-permissions--cached (emagent-permissions--global-file)
+                                #'emagent-permissions--read-global-data)))
+
+(defun emagent-permissions-add-global-fingerprint (fingerprint)
+  "Persist FINGERPRINT as globally allowed."
+  (when fingerprint
+    (let* ((path (emagent-permissions--global-file))
+           (data (emagent-permissions--read-global-data path))
+           (merged (append (emagent-permissions--fingerprints data)
+                           (list fingerprint))))
+      (unless (member fingerprint (emagent-permissions--fingerprints data))
+        (emagent-permissions--write-json
+         path `((fingerprints . ,(vconcat (delete-dups merged)))))))))
+
+(defun emagent-permissions-session-fingerprints (session-id)
+  "Return session-scoped fingerprints for SESSION-ID."
+  (when (and session-id (not (string-empty-p session-id)))
+    (emagent-permissions--fingerprints
+     (emagent-permissions--cached (emagent-permissions--session-file session-id)
+                                  (lambda (path)
+                                    (emagent-permissions--read-session-data session-id path))))))
+
+(defun emagent-permissions-add-session-fingerprint (session-id fingerprint)
+  "Persist FINGERPRINT for SESSION-ID."
+  (when (and session-id fingerprint (not (string-empty-p session-id)))
+    (let* ((path (emagent-permissions--session-file session-id))
+           (data (emagent-permissions--read-session-data session-id path))
+           (merged (append (emagent-permissions--fingerprints data)
+                           (list fingerprint))))
+      (unless (member fingerprint (emagent-permissions--fingerprints data))
+        (emagent-permissions--write-json
+         path `((sessionId . ,session-id)
+                (fingerprints . ,(vconcat (delete-dups merged)))
+                (autoApprove . ,(if (emagent-permissions--auto-approve-p data) t :json-false))))))))
+
+(defun emagent-permissions-session-auto-approve-p (session-id)
+  "Return non-nil when SESSION-ID has allow-all enabled."
+  (when (and session-id (not (string-empty-p session-id)))
+    (emagent-permissions--auto-approve-p
+     (emagent-permissions--cached (emagent-permissions--session-file session-id)
+                                  (lambda (path)
+                                    (emagent-permissions--read-session-data session-id path))))))
+
+(defun emagent-permissions-set-session-auto-approve (session-id)
+  "Enable allow-all for SESSION-ID."
+  (when (and session-id (not (string-empty-p session-id)))
+    (let* ((path (emagent-permissions--session-file session-id))
+           (data (emagent-permissions--read-session-data session-id path)))
+      (unless (emagent-permissions--auto-approve-p data)
+        (emagent-permissions--write-json
+         path `((sessionId . ,session-id)
+                (fingerprints . ,(vconcat (emagent-permissions--fingerprints data)))
+                (autoApprove . t)))))))
+
+(defun emagent-permissions-project-fingerprints (directory)
+  "Return project-scoped fingerprints for DIRECTORY."
+  (when-let ((path (emagent-permissions--project-file directory)))
+    (emagent-permissions--fingerprints
+     (emagent-permissions--cached path
+                                  (lambda (_path)
+                                    (emagent-permissions--read-project-data directory path))))))
+
+(defun emagent-permissions-project-tools (directory)
+  "Return project-allowed MCP tool symbols for DIRECTORY."
+  (when-let ((path (emagent-permissions--project-file directory)))
+    (emagent-permissions--tools
+     (emagent-permissions--cached path
+                                  (lambda (_path)
+                                    (emagent-permissions--read-project-data directory path))))))
+
+(defun emagent-permissions-add-project-tool (directory tool)
+  "Persist TOOL as allowed for DIRECTORY."
+  (when (and directory tool)
+    (let* ((sym (if (stringp tool) (intern tool) tool))
+           (path (emagent-permissions--project-file directory))
+           (data (emagent-permissions--read-project-data directory path))
+           (merged (append (emagent-permissions--tools data) (list sym))))
+      (unless (memq sym (emagent-permissions--tools data))
+        (emagent-permissions--write-json
+         path `((directory . ,(emagent-trust--normalize-dir directory))
+                (fingerprints . ,(vconcat (emagent-permissions--fingerprints data)))
+                (tools . ,(vconcat (mapcar #'symbol-name (delete-dups merged))))))))))
+
+(defun emagent-permissions-reset-global ()
+  "Clear all globally allowed permission fingerprints."
+  (let ((path (emagent-permissions--global-file)))
+    (emagent-permissions--write-json path '((fingerprints . [])))))
+
+(defun emagent-permissions-reset-session (session-id)
+  "Clear all permissions stored for SESSION-ID."
+  (when (and session-id (not (string-empty-p session-id)))
+    (let ((path (emagent-permissions--session-file session-id)))
+      (emagent-permissions--write-json
+       path `((sessionId . ,session-id)
+               (fingerprints . [])
+               (autoApprove . :json-false))))))
+
+(defun emagent-permissions-reset-project (directory)
+  "Clear all permissions stored for DIRECTORY."
+  (when-let ((path (emagent-permissions--project-file directory)))
+    (emagent-permissions--write-json
+     path `((directory . ,(emagent-trust--normalize-dir directory))
+             (fingerprints . [])
+             (tools . [])))))
 
 (defun emagent-model-canonical-id (model)
   "Return MODEL id in the form Cursor ACP expects (keep bracket suffixes)."

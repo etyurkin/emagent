@@ -829,7 +829,7 @@ Arguments: MAX-BYTES."
 
 (defun emagent-tool-run-shell-command (command &optional directory)
   "Run COMMAND in DIRECTORY through Emacs, not an agent terminal."
-  (require 'emagent-shell)
+  (require 'emagent-tools)
   (when (fboundp 'emagent-shell-run-command)
     (emagent-shell-run-command command directory)))
 
@@ -839,7 +839,7 @@ CALLBACK receives \(OUTPUT IS-ERROR); for long-running commands Emacs
 stays responsive because no polling loop is used.
 
 Arguments: DIRECTORY."
-  (require 'emagent-shell)
+  (require 'emagent-tools)
   (when (fboundp 'emagent-shell-run-command-async)
     (emagent-shell-run-command-async command directory callback)))
 

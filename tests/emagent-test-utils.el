@@ -18,7 +18,6 @@
   (emagent--register-load-path root))
 
 (require 'emagent-acp-protocol)
-(require 'emagent-acp-protocol)
 (require 'emagent-acp-usage)
 (require 'emagent-mcp)
 

@@ -3,7 +3,7 @@
 ;;; Code:
 
 (require 'ert)
-(require 'emagent-shell)
+(require 'emagent-tools)
 
 ;;;; Git guards
 
@@ -61,7 +61,6 @@
 ;;;; fetch_url
 
 (require 'emagent-test-utils)
-(require 'emagent-tools)
 (require 'url)  ;; pre-load so cl-letf mocks aren't overwritten by require inside the functio)
 
 (defmacro emagent-shell-test--with-fake-url-retrieve (response &rest body)

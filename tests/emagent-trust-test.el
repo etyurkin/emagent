@@ -4,7 +4,7 @@
 
 (require 'ert)
 (require 'emagent-test-utils)
-(require 'emagent-trust)
+(require 'emagent-session)
 
 ;;;; Path normalization
 

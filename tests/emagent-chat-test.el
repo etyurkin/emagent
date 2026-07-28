@@ -5,7 +5,7 @@
 (require 'ert)
 (require 'emagent-test-utils)
 (require 'emagent-chat)
-(require 'emagent-acp-tool-call)
+(require 'emagent-acp-permit)
 (require 'emagent-acp)
 
 ;;;; Slugs and labels
