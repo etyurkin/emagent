@@ -18,8 +18,10 @@
   (emagent--register-load-path root))
 
 (require 'emagent-acp-protocol)
-(require 'emagent-acp-usage)
-(require 'emagent-mcp)
+(require 'emagent-chat)
+(require 'emagent-acp)
+(require 'emagent-cursor)
+(require 'emagent-claude)
 
 (defun emagent-test--temp-file (suffix)
   "Return a unique temp file path with SUFFIX."

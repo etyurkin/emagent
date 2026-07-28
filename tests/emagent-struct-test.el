@@ -8,7 +8,7 @@
 ;;; Code:
 
 (require 'ert)
-(require 'emagent-struct)
+(require 'emagent-tools)
 
 (ert-deftest emagent-struct-test-available-p ()
   (should (booleanp (emagent-struct-available-p))))

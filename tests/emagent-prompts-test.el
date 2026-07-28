@@ -4,7 +4,7 @@
 
 (require 'ert)
 (require 'cl-lib)
-(require 'emagent-struct)
+(require 'emagent-tools)
 
 (ert-deftest emagent-prompts-test-system-prompt ()
   (should (stringp emagent-acp-system-prompt))
@@ -13,7 +13,7 @@
   (should (string-match-p "read_file" emagent-acp-system-prompt)))
 
 (ert-deftest emagent-prompts-test-prefer-emacs-prompt ()
-  (require 'emagent-struct)
+  (require 'emagent-tools)
   (let ((prompt (emagent-prompts--prefer-emacs-prompt)))
     (should (string-match-p "Tool preference" prompt))
     (should (string-match-p "check_elisp" prompt))
@@ -45,7 +45,7 @@
   (should (string-match-p "json-parse-string" emagent-acp-elisp-guide)))
 
 (ert-deftest emagent-prompts-test-structural-policy ()
-  (require 'emagent-struct)
+  (require 'emagent-tools)
   (let ((policy (emagent-prompts--structural-policy)))
     (should (string-match-p "Structural editing" policy))
     (when (emagent-struct-available-p)

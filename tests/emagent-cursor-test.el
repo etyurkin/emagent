@@ -7,7 +7,6 @@
 
 (require 'cl-lib)
 (require 'emagent-chat)
-(require 'emagent-cursor)
 (require 'emagent-acp)
 
 (ert-deftest emagent-cursor-test-enrich-tool-call-update ()
