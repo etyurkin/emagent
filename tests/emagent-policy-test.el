@@ -5,7 +5,7 @@
 (require 'ert)
 (require 'emagent-test-utils)
 (require 'emagent-acp)
-(require 'emagent-policy)
+(require 'emagent-tools-shell)
 
 (defun emagent-policy-test--confirm-p (command)
   "Return non-nil when COMMAND yields a :confirm verdict."

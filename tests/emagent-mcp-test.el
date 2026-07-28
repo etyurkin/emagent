@@ -4,7 +4,7 @@
 
 (require 'ert)
 (require 'emagent-test-utils)
-(require 'emagent-mcp)
+(require 'emagent-chat)
 (require 'emagent-tools)
 
 ;;;; Tokens

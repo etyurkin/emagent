@@ -5,7 +5,6 @@
 (require 'ert)
 (require 'emagent-test-utils)
 (require 'emagent-acp)
-(require 'emagent-cursor)
 
 (ert-deftest emagent-providers-test-claude-command ()
   (should (string= "claude-agent-acp" (emagent-claude-command)))

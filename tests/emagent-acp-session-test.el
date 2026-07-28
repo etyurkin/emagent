@@ -6,7 +6,6 @@
 (require 'ert)
 (require 'emagent-test-utils)
 (require 'emagent-acp)
-(require 'emagent-cursor)
 
 ;;;; Stderr and logging helpers
 

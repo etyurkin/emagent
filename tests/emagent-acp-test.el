@@ -59,7 +59,6 @@
 (ert-deftest emagent-acp-test-parse-stderr-api-error ()
   (should-not (emagent-acp--parse-stderr-api-error "finished")))
 
-(require 'emagent-acp-usage)
 
 (ert-deftest emagent-acp-test-model-history-variable ()
   "Helm reads completing-read history via symbol-value; the variable must exist."

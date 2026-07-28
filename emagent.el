@@ -97,12 +97,9 @@ target BUFFER (hence the two-argument signature)."
 (require 'emagent-acp-protocol)
 (require 'emagent-log)
 (require 'emagent-tools)
-(require 'emagent-mcp)
-(require 'emagent-session)
 (require 'emagent-chat)
+(require 'emagent-session)
 (require 'emagent-acp)
-(require 'emagent-acp-usage)
-(require 'emagent-cursor)
 (require 'project)
 
 ;; Optional integrations — loaded only when the dependency is present.
