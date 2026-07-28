@@ -63,6 +63,35 @@
   '(("symbol" . ((type . "string")
                  (description . "Top-level form name (defun, defvar, ...).")))))
 
+(defun emagent-mcp--expected-tick-prop ()
+  "JSON schema property for optimistic-concurrency file ticks."
+  '(("expected_tick" . ((type . "string")
+                        (description . "emagent-tick from the latest read_file or structural_get for this path.")))))
+
+(defconst emagent-mcp--file-tick-required-tools
+  '("write_file"
+    "structural_replace"
+    "structural_insert"
+    "structural_format"
+    "structural_rename"
+    "structural_wrap"
+    "structural_remove"
+    "structural_move"
+    "structural_substitute"
+    "structural_extract"
+    "structural_instrument"
+    "structural_flatten"
+    "structural_convert_let"
+    "structural_splice"
+    "structural_raise")
+  "MCP tools that mutate files and require expected_tick under ACP.")
+
+(defun emagent-mcp--maybe-guard-file-tick (name args)
+  "Require a matching expected_tick for mutating tool NAME."
+  (when (member name emagent-mcp--file-tick-required-tools)
+    (emagent-tools--guard-file-tick (emagent-mcp--arg args "path")
+                                    (emagent-mcp--arg args "expected_tick"))))
+
 (defun emagent-mcp--structural-tool (name description properties required handler async-handler)
   "Build a lisp-sitter MCP tool registry entry.
 
@@ -156,8 +185,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
     (append (emagent-mcp--structural-path-prop)
             (emagent-mcp--structural-symbol-prop)
             '(("new_body" . ((type . "string")
-                             (description . "Complete replacement form text.")))))
-    '("path" "symbol" "new_body")
+                             (description . "Complete replacement form text."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "symbol" "new_body" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-replace (emagent-mcp--arg args "path")
                                        (emagent-mcp--arg args "symbol")
@@ -174,8 +204,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
             '(("after_symbol" . ((type . "string")
                                  (description . "__start__, __end__, or existing form name.")))
               ("node" . ((type . "string")
-                         (description . "Complete top-level form text to insert.")))))
-    '("path" "after_symbol" "node")
+                         (description . "Complete top-level form text to insert."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "after_symbol" "node" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-insert (emagent-mcp--arg args "path")
                                       (emagent-mcp--arg args "after_symbol")
@@ -204,8 +235,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
     "[lisp-sitter] Re-indent a file (depth-based). Pass write=true to save."
     (append (emagent-mcp--structural-path-prop)
             '(("write" . ((type . "boolean")
-                          (description . "When true, save the formatted file.")))))
-    '("path")
+                          (description . "When true, save the formatted file."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-format (emagent-mcp--arg args "path")
                                       (emagent-mcp--bool args "write")))
@@ -221,8 +253,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
               ("refs" . ((type . "boolean")
                          (description . "Also rename quoted references.")))
               ("no_refs" . ((type . "boolean")
-                            (description . "Rename definition only.")))))
-    '("path" "old" "new")
+                            (description . "Rename definition only."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "old" "new" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-rename (emagent-mcp--arg args "path")
                                       (emagent-mcp--arg args "old")
@@ -246,8 +279,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
               ("bindings" . ((type . "string")
                              (description . "let/let* bindings, e.g. ((x 1)).")))
               ("condition" . ((type . "string")
-                              (description . "Condition for if/when wrappers.")))))
-    '("path" "symbol" "in")
+                              (description . "Condition for if/when wrappers."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "symbol" "in" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-wrap (emagent-mcp--arg args "path")
                                     (emagent-mcp--arg args "symbol")
@@ -267,8 +301,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
     (append (emagent-mcp--structural-path-prop)
             (emagent-mcp--structural-symbol-prop)
             '(("keep_calls" . ((type . "boolean")
-                               (description . "Leave call sites unchanged.")))))
-    '("path" "symbol")
+                               (description . "Leave call sites unchanged."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "symbol" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-remove (emagent-mcp--arg args "path")
                                       (emagent-mcp--arg args "symbol")
@@ -284,8 +319,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
     (append (emagent-mcp--structural-path-prop)
             (emagent-mcp--structural-symbol-prop)
             '(("after" . ((type . "string")
-                          (description . "__start__, __end__, or symbol name.")))))
-    '("path" "symbol" "after")
+                          (description . "__start__, __end__, or symbol name."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "symbol" "after" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-move (emagent-mcp--arg args "path")
                                     (emagent-mcp--arg args "symbol")
@@ -302,8 +338,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
             (emagent-mcp--structural-symbol-prop)
             '(("pattern" . ((type . "string") (description . "S-expression to replace.")))
               ("replacement" . ((type . "string")
-                                 (description . "Replacement s-expression.")))))
-    '("path" "symbol" "pattern" "replacement")
+                                 (description . "Replacement s-expression."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "symbol" "pattern" "replacement" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-substitute (emagent-mcp--arg args "path")
                                           (emagent-mcp--arg args "symbol")
@@ -323,8 +360,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
             '(("pattern" . ((type . "string") (description . "Sub-expression to extract.")))
               ("name" . ((type . "string") (description . "New function name.")))
               ("params" . ((type . "string")
-                            (description . "Comma-separated parameter names.")))))
-    '("path" "symbol" "pattern" "name")
+                            (description . "Comma-separated parameter names."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "symbol" "pattern" "name" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-extract (emagent-mcp--arg args "path")
                                        (emagent-mcp--arg args "symbol")
@@ -357,8 +395,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
             (emagent-mcp--structural-symbol-prop)
             '(("with" . ((type . "string") (description . "Tracing form for the body.")))
               ("at" . ((type . "string") (description . "Sub-expression to instrument.")))
-              ("wrap" . ((type . "string") (description . "Wrapper around sub-expression.")))))
-    '("path" "symbol")
+              ("wrap" . ((type . "string") (description . "Wrapper around sub-expression."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "symbol" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-instrument (emagent-mcp--arg args "path")
                                           (emagent-mcp--arg args "symbol")
@@ -376,8 +415,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
     "structural_flatten"
     "[lisp-sitter] Inline all call sites of a function and remove the definition."
     (append (emagent-mcp--structural-path-prop)
-            (emagent-mcp--structural-symbol-prop))
-    '("path" "symbol")
+            (emagent-mcp--structural-symbol-prop)
+            (emagent-mcp--expected-tick-prop))
+    '("path" "symbol" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-flatten (emagent-mcp--arg args "path")
                                        (emagent-mcp--arg args "symbol")))
@@ -390,8 +430,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
     (append (emagent-mcp--structural-path-prop)
             (emagent-mcp--structural-symbol-prop)
             '(("to" . ((type . "string")
-                       (description . "let or let*.")))))
-    '("path" "symbol" "to")
+                       (description . "let or let*."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "symbol" "to" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-convert-let (emagent-mcp--arg args "path")
                                            (emagent-mcp--arg args "symbol")
@@ -407,8 +448,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
     (append (emagent-mcp--structural-path-prop)
             (emagent-mcp--structural-symbol-prop)
             '(("pattern" . ((type . "string")
-                            (description . "Parenthesised list to splice.")))))
-    '("path" "symbol" "pattern")
+                            (description . "Parenthesised list to splice."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "symbol" "pattern" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-splice (emagent-mcp--arg args "path")
                                       (emagent-mcp--arg args "symbol")
@@ -424,8 +466,9 @@ Arguments: NAME, DESCRIPTION, PROPERTIES, REQUIRED, HANDLER, ASYNC-HANDLER."
     (append (emagent-mcp--structural-path-prop)
             (emagent-mcp--structural-symbol-prop)
             '(("pattern" . ((type . "string")
-                            (description . "Sub-expression to raise.")))))
-    '("path" "symbol" "pattern")
+                            (description . "Sub-expression to raise."))))
+            (emagent-mcp--expected-tick-prop))
+    '("path" "symbol" "pattern" "expected_tick")
     (lambda (args)
       (emagent-tool-structural-raise (emagent-mcp--arg args "path")
                                      (emagent-mcp--arg args "symbol")
@@ -513,7 +556,7 @@ instead; emagent then writes whatever port it gets into the agent config."
   (append
    (list
    (list "read_file"
-         "Read a file through Emacs, including unsaved buffer contents. Returns its text."
+         "Read a file through Emacs, including unsaved buffer contents. Prefixes emagent-tick for write/structural CAS."
          '(("path" . ((type . "string")
                       (description . "Absolute path, or relative to the session root.")))
            ("line" . ((type . "integer")
@@ -526,12 +569,14 @@ instead; emagent then writes whatever port it gets into the agent config."
                                    (emagent-mcp--arg args "line")
                                    (emagent-mcp--arg args "limit"))))
    (list "write_file"
-         "Write CONTENT to a file through an Emacs buffer (one undoable change). Refused for .el/.lisp/.cl/.scm when lisp-sitter is installed — use structural_* tools instead."
+         "Write CONTENT to a file through an Emacs buffer (one undoable change). Requires expected_tick from the latest read_file for this path. Refused for .el/.lisp/.cl/.scm when lisp-sitter is installed — use structural_* tools instead."
          '(("path" . ((type . "string")
                       (description . "Absolute path, or relative to the session root.")))
            ("content" . ((type . "string")
-                         (description . "Full new contents of the file."))))
-         '("path" "content")
+                         (description . "Full new contents of the file.")))
+           ("expected_tick" . ((type . "string")
+                               (description . "emagent-tick from the latest read_file for this path."))))
+         '("path" "content" "expected_tick")
          (lambda (args)
            (emagent-tool-write-file (emagent-mcp--arg args "path")
                                     (emagent-mcp--arg args "content" "")))
@@ -845,10 +890,13 @@ Only includes tools whose :available predicate passes."
             (emagent-mcp--make-allow-all-fn buffer))
            (emagent-tools--chat-buffer buffer)
            (emagent-tools--acp-session-p t)
+           (emagent-tools--expected-file-tick
+            (emagent-mcp--arg args "expected_tick"))
            (emagent-acp-prefer-emacs (if session
                                          (plist-get session :prefer-emacs)
                                        (and (boundp 'emagent-acp-prefer-emacs)
                                             emagent-acp-prefer-emacs))))
+      (emagent-mcp--maybe-guard-file-tick name args)
       (emagent-mcp--string-result (funcall handler args)))))
 
 (defun emagent-mcp--run-tool-async (name args session callback)
@@ -874,11 +922,14 @@ immediately before this function returns."
               (emagent-mcp--make-allow-all-fn buffer))
              (emagent-tools--chat-buffer buffer)
              (emagent-tools--acp-session-p t)
+             (emagent-tools--expected-file-tick
+              (emagent-mcp--arg args "expected_tick"))
              (emagent-acp-prefer-emacs (if session
                                            (plist-get session :prefer-emacs)
                                          (and (boundp 'emagent-acp-prefer-emacs)
                                               emagent-acp-prefer-emacs)))
              (async-fn (plist-get (nthcdr 5 entry) :async)))
+        (emagent-mcp--maybe-guard-file-tick name args)
         (if async-fn
             (condition-case err
                 (funcall async-fn args
