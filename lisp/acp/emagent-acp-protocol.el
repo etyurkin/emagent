@@ -453,6 +453,7 @@ layer (see `emagent-chat-set-status')."
           :tool (emagent-acp-state-current-tool state)
           :tool-kind (emagent-acp-state-current-tool-kind state)
           :rss (emagent-acp-state-agent-rss state)
+          :emacs-rss (emagent-acp--emacs-rss-mb)
           :model-id (and (emagent-acp-state-ready state)
                          (emagent-acp--current-model-id state nil))
           :ctx-usage (when-let ((used (and usage (map-elt usage :context-used)))
@@ -474,6 +475,13 @@ layer (see `emagent-chat-set-status')."
       (with-current-buffer buffer
         (funcall cb snapshot)))))
 
+(defun emagent-acp--pid-rss-mb (pid)
+  "Return process PID RSS in MB via `process-attributes', or nil."
+  (when-let* (((and (integerp pid) (> pid 0)))
+              (attrs (ignore-errors (process-attributes pid)))
+              (rss-kb (alist-get 'rss attrs)))
+    (round (/ (float rss-kb) 1024))))
+
 (defun emagent-acp--agent-rss-mb (state)
   "Return the agent process RSS in MB via `process-attributes', or nil.
 
@@ -481,11 +489,12 @@ Arguments: STATE."
   (when-let* ((client (emagent-acp-state-client state))
               (proc (and client (map-elt client :process)))
               ((processp proc))
-              (pid (process-id proc))
-              ((> pid 0))
-              (attrs (ignore-errors (process-attributes pid)))
-              (rss-kb (alist-get 'rss attrs)))
-    (round (/ (float rss-kb) 1024))))
+              (pid (process-id proc)))
+    (emagent-acp--pid-rss-mb pid)))
+
+(defun emagent-acp--emacs-rss-mb ()
+  "Return this Emacs process RSS in MB, or nil."
+  (emagent-acp--pid-rss-mb (emacs-pid)))
 
 (defun emagent-acp--start-rss-timer (state)
   "Start a repeating timer that refreshes :agent-rss in STATE every 15 s."

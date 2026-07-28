@@ -558,6 +558,30 @@ re-rendering once the turn ends, so evicted entries are rarely missed.")
     (puthash id diff emagent-acp--edit-diff-cache))
   diff)
 
+(defun emagent-acp--edit-diff-cache-forget (id)
+  "Drop the cached edit diff for toolCallId ID, if any."
+  (when id
+    (remhash id emagent-acp--edit-diff-cache)
+    (setq emagent-acp--edit-diff-cache-order
+          (delete id emagent-acp--edit-diff-cache-order))))
+
+(defun emagent-acp--edit-diff-cache-clear ()
+  "Drop all cached edit diffs.
+Called at turn start; the org transcript already holds rendered diffs."
+  (clrhash emagent-acp--edit-diff-cache)
+  (setq emagent-acp--edit-diff-cache-order nil))
+
+(defun emagent-acp--release-tool-call-payloads (state id)
+  "Drop large in-flight payloads for toolCallId ID in STATE.
+The chat buffer already holds the rendered tool line; keep title/label/
+decision maps for arrow-line updates."
+  (when (and state id)
+    (when-let ((inputs (emagent-acp-state-tool-call-inputs state)))
+      (remhash id inputs))
+    (when-let ((pending (emagent-acp-state-tool-call-pending state)))
+      (remhash id pending))
+    (emagent-acp--edit-diff-cache-forget id)))
+
 (defun emagent-acp--tool-call-reversed-diff-string (resolved data proposed)
   "Real diff recovered by reverse-applying DATA's edits to PROPOSED.
 When the file already contains PROPOSED (the render happened after the
@@ -884,7 +908,7 @@ Arguments: STATE, ID, KIND, MERGED, STATUS."
          (prev (and id labels (gethash id labels)))
          (decision (and id (when-let ((d (emagent-acp-state-tool-call-decisions state)))
                              (gethash id d))))
-         (completed (member status '("completed" "failed")))
+         (completed (member status '("completed" "failed" "cancelled")))
          ;; A running or finished call already had its permission granted;
          ;; a pending call may still be awaiting a permission prompt.
          (granted (or completed (equal status "in_progress")))
@@ -914,6 +938,7 @@ Arguments: STATE, ID, KIND, MERGED, STATUS."
             (funcall cb id display (car spec) (cdr spec))))))
     (if completed
         (progn
+          (emagent-acp--release-tool-call-payloads state id)
           (setf (emagent-acp-state-current-tool state) nil)
           (setf (emagent-acp-state-current-tool-kind state) nil))
       (when label-changed
@@ -2530,6 +2555,7 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
   (clrhash (emagent-acp-state-tool-call-labels state))
   (clrhash (emagent-acp-state-tool-call-decisions state))
   (clrhash (emagent-acp-state-tool-call-pending state))
+  (emagent-acp--edit-diff-cache-clear)
   ;; A new turn supersedes any agent-scheduled wakeup: a stale request must
   ;; not arm after an unrelated prompt, and a pending timer must not fire
   ;; into the middle of this turn's conversation.

@@ -116,6 +116,13 @@
   (should-not (emagent-chat--bare-slash-command-p "hello"))
   (should-not (emagent-chat--bare-slash-command-p "/compress\nmore")))
 
+
+(ert-deftest emagent-chat-test-mode-disables-undo ()
+  "Chat buffers are transcripts; undo must not retain a second copy."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (should (eq t buffer-undo-list))))
+
 (ert-deftest emagent-chat-test-mode-enable-seeds-cursor-slash-commands ()
   "Cursor built-ins are available after mode enable without connecting."
   (with-temp-buffer
