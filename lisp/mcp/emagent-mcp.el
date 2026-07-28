@@ -42,10 +42,10 @@
 ;;   - Cursor: the cursor-agent CLI reads ~/.cursor/mcp.json, whose url uses
 ;;     ${env:EMAGENT_SESSION_TOKEN}; emagent sets that env var per session.
 ;;
-;; Implementation is split across require-DAG leaves:
+;; Implementation is split across:
 ;;   `emagent-mcp-core'     — identity, port, sessions, tokens
 ;;   `emagent-mcp-registry' — tool table and dispatch
-;;   `emagent-mcp-server'   — HTTP/JSON-RPC (http/lifecycle/cursor/gateway)
+;;   `emagent-mcp-server'   — HTTP/JSON-RPC, lifecycle, Cursor, gateway
 
 ;;; Code:
 

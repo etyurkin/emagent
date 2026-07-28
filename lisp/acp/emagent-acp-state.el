@@ -37,7 +37,7 @@
 (require 'map)
 (require 'emagent-log)
 (require 'emagent-acp-custom)
-(require 'emagent-acp-protocol-client)
+(require 'emagent-acp-protocol)
 
 
 (defvar-local emagent-acp--session nil
