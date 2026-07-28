@@ -451,6 +451,7 @@ Captured immediately after `define-derived-mode' so the public
 `emagent-mode' defun below can wrap display deferral without `advice-add'.
 Called by `emagent--run-derived-mode' in this file.")
 
+;;;###autoload
 (with-suppressed-warnings ((redefine emagent-mode))
   (defun emagent-mode (&optional arg)
     "Major mode for emagent chat scratch buffers.
