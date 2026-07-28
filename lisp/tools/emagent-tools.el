@@ -35,7 +35,6 @@
 (require 'emagent-tools-confirm)
 (require 'emagent-tools-introspect)
 (require 'emagent-tools-structural)
-(require 'emagent-policy-match)
 (require 'emagent-policy)
 
 (defvaralias 'emagent-tools-eval-blocked-symbols 'emagent-policy-elisp-blocked-symbols)

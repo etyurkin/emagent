@@ -27,24 +27,177 @@
 ;; SOFTWARE.
 
 ;;; Commentary:
-
-;; ACP session authenticate, connect, and load lifecycle.
-
+;;
+;; Session lifecycle, system prompt assembly, and ACP notifications.
+;;
 ;;; Code:
 
 (require 'cl-lib)
 (require 'map)
-(require 'emagent-log)
 (require 'emagent-acp-custom)
-(require 'emagent-acp-state)
-(require 'emagent-acp-protocol)
+(require 'emagent-acp-provider)
 (require 'emagent-acp-model)
-(require 'emagent-acp-prompt)
-(require 'emagent-acp-gate)
-(require 'emagent-acp-usage)
-(require 'emagent-acp-notify)
 (require 'emagent-acp-permit)
-(require 'emagent-acp-system-prompt)
+(require 'emagent-acp-prompt)
+(require 'emagent-acp-protocol)
+(require 'emagent-acp-request)
+(require 'emagent-acp-state)
+(require 'emagent-acp-tool-call)
+(require 'emagent-acp-usage)
+(require 'emagent-log)
+(require 'emagent-mcp)
+(require 'emagent-prompts)
+
+(defun emagent-acp--system-prompt ()
+  "Return the system prompt for new ACP sessions."
+  (concat emagent-acp-system-prompt
+          (emagent-mcp-gateway-system-prompt)
+          (when emagent-acp-prefer-emacs
+            (emagent-prompts--prefer-emacs-prompt))
+          (when emagent-acp-prefer-emacs
+            (emagent-prompts--structural-policy))))
+
+(defun emagent-acp--session-system-prompt (&optional compressed-context)
+  "Return the system prompt for session/new, optionally with COMPRESSED-CONTEXT."
+  (let ((summary (string-trim (or compressed-context ""))))
+    (if (string-empty-p summary)
+        (emagent-acp--system-prompt)
+      (concat (emagent-acp--system-prompt)
+              (format "\n\n[Compressed prior conversation context]\n%s"
+                      summary)))))
+
+(defun emagent-acp--trace-update (update-type emagent-acp-notification)
+  "Log UPDATE-TYPE and a short payload summary when tracing.
+
+Arguments: EMAGENT-ACP-NOTIFICATION."
+  (let ((text (or (map-nested-elt emagent-acp-notification '(params update content text)) ""))
+        (title (map-nested-elt emagent-acp-notification '(params update title))))
+    (pcase update-type
+      ((or "agent_message_chunk" "agent_thought_chunk")
+       (emagent-acp--trace "recv %s +%d" update-type (length text)))
+      ((or "tool_call" "tool_call_update")
+       (let* ((update (map-nested-elt emagent-acp-notification '(params update)))
+              (raw (or (map-elt update 'rawInput) (map-elt update 'arguments)))
+              (subtitle (map-elt update 'subtitle))
+              (locations (map-elt update 'locations))
+              (id (map-elt update 'toolCallId))
+              (raw-summary
+               (cond
+                ((or (null raw) (equal raw :null) (equal raw "")) nil)
+                ((hash-table-p raw)
+                 (format "keys(%s)"
+                         (string-join (hash-table-keys raw) ",")))
+                ((listp raw)
+                 (format "keys(%s)"
+                         (string-join (mapcar (lambda (p) (format "%s" (car p))) raw) ",")))
+                ((stringp raw)
+                 (format "str(%d)" (length raw)))
+                (t "?")))
+              (detail (or raw-summary
+                          (when subtitle (format "sub=%s" (truncate-string-to-width subtitle 40 nil nil "…")))
+                          (when locations (format "locs=%d" (length (append locations nil))))
+                          "no-detail")))
+         (emagent-acp--trace "recv %s %s [%s] %s"
+                             update-type
+                             (or title id "?")
+                             (or (map-elt update 'status) "")
+                             detail)))
+      (_
+       (emagent-acp--trace "recv %s" (or update-type "session/update"))))))
+
+(cl-defun emagent-acp--on-notification (&key state emagent-acp-notification)
+  
+  "Internal helper for STATE and EMAGENT-ACP-NOTIFICATION."
+  (when (equal (map-elt emagent-acp-notification 'method) "session/update")
+    (let ((update-type (map-nested-elt emagent-acp-notification '(params update sessionUpdate))))
+      (emagent-acp--trace-update update-type emagent-acp-notification)
+      (pcase update-type
+        ("agent_message_chunk"
+         (let ((text (or (map-nested-elt emagent-acp-notification '(params update content text)) "")))
+           (unless (emagent-acp-state-replaying-history state)
+             (when (and (not (string-empty-p text))
+                        (emagent-acp-state-tool-call-since-last-chunk state)
+                        (not (string-empty-p (or (emagent-acp-state-assistant-text state) ""))))
+               (setq text (concat "\n\n" text)))
+             (setf (emagent-acp-state-tool-call-since-last-chunk state) nil)
+             (emagent-acp--detect-external-refusal-in-text state text)
+             (setf (emagent-acp-state-assistant-text state) (concat (emagent-acp-state-assistant-text state) text))
+             (when (emagent-acp-state-prompt-finishing state)
+               (emagent-acp--schedule-prompt-render state))
+             (when-let ((buf (and (emagent-acp--stream-to-buffer-p state)
+                                 (emagent-acp--chat-buffer state))))
+               (with-current-buffer buf
+                 (when-let ((cb (emagent-acp-state-cb-chunk state)))
+                   (funcall cb text)))))))
+        ("agent_thought_chunk"
+         (let ((text (or (map-nested-elt emagent-acp-notification '(params update content text)) "")))
+           (emagent-acp--thought-chunk state text)))
+        ("tool_call"
+         (setf (emagent-acp-state-tool-call-since-last-chunk state) t)
+         (emagent-acp--on-tool-call state (map-nested-elt emagent-acp-notification '(params update))))
+        ("tool_call_update"
+         (emagent-acp--on-tool-call state (map-nested-elt emagent-acp-notification '(params update))))
+        ("config_option_update"
+         (emagent-acp--save-config-options
+          state
+          (map-nested-elt emagent-acp-notification '(params update configOptions)))
+         (when-let ((model-id (emagent-acp--current-model-id state nil)))
+           (emagent-acp--persist-model-id state model-id)))
+        ("usage_update"
+         (emagent-acp--update-usage-from-notification
+          state
+          (map-nested-elt emagent-acp-notification '(params update))))
+        ("available_commands_update"
+         (let ((commands (map-nested-elt emagent-acp-notification
+                                         '(params update availableCommands))))
+           (when-let* ((buffer (emagent-acp--chat-buffer state))
+                       (cb (emagent-acp-state-cb-slash-commands state)))
+             (with-current-buffer buffer
+               (funcall cb commands)))))
+        ("current_mode_update"
+         (let* ((update (map-nested-elt emagent-acp-notification
+                                        '(params update)))
+                (mode-id (or (map-elt update 'currentModeId)
+                             (map-elt update 'modeId)
+                             (map-elt update :currentModeId)
+                             (map-elt update :modeId))))
+           (when (and (stringp mode-id) (not (string-empty-p mode-id)))
+             (setf (emagent-acp-state-session-mode-id state) mode-id)
+             (emagent-acp--refresh-mode-line state))))
+        (_ nil)))))
+
+(cl-defun emagent-acp--subscribe (&key state)
+  "Subscribe STATE's client to ACP errors, notifications, and requests."
+  (let ((buffer (emagent-acp--chat-buffer state)))
+    (emagent-acp-subscribe-to-errors
+     :client (emagent-acp-state-client state)
+     :buffer buffer
+     :on-error
+     (lambda (emagent-acp-error)
+       (let ((message (or (map-elt emagent-acp-error 'message)
+                          (format "%s" emagent-acp-error))))
+         (emagent-acp--log-agent-stderr message)
+         (when (and (emagent-acp--fatal-agent-error-p message)
+                    (not (emagent-acp--prompt-retry-pending-p state))
+                    (or (emagent-acp-state-busy state)
+                        (emagent-acp-state-prompt-finishing state)
+                        (emagent-acp--quota-error-p message)))
+           (emagent-acp--abort-prompt state message))
+         (when (emagent-acp--stderr-notify-p emagent-acp-error)
+           (emagent-acp--notify-user state (format "emagent error: %s" message))))))
+    (emagent-acp-subscribe-to-notifications
+     :client (emagent-acp-state-client state)
+     :buffer buffer
+     :on-notification
+     (lambda (notification)
+       (emagent-acp--on-notification :state state
+                                     :emagent-acp-notification notification)))
+    (emagent-acp-subscribe-to-requests
+     :client (emagent-acp-state-client state)
+     :buffer buffer
+     :on-request
+     (lambda (request)
+       (emagent-acp--on-request :state state :emagent-acp-request request)))))
 
 (cl-defun emagent-acp--authenticate (&key state method-id on-ready)
   "Send an authenticate request with METHOD-ID, then connect the session.

@@ -37,7 +37,6 @@
 (require 'emagent-acp-state)
 (require 'map)
 (require 'emagent-acp-provider)
-(require 'emagent-acp-gate)
 (require 'emagent-acp-tool-call)
 (require 'emagent-acp-prompt)
 (require 'emagent-acp-request)

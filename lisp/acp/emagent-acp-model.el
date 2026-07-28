@@ -43,10 +43,8 @@
   "Minibuffer history for agent/model choices.")
 
 (require 'emagent-acp-protocol)
-
 (require 'emagent-model)
 (require 'emagent-acp-usage)
-(require 'emagent-acp-wire)
 (defun emagent-acp--auto-model-candidate (state models)
   "Return the agent's auto/default model id when advertised.
 
