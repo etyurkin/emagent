@@ -34,15 +34,11 @@
 
 (require 'cl-lib)
 (require 'map)
-(require 'emagent-acp-custom)
-(require 'emagent-acp-usage)
-(require 'emagent-acp-permission-queue)
-(require 'emagent-acp-permit)
 (require 'emagent-acp-protocol)
-(require 'emagent-acp-provider)
-(require 'emagent-acp-state)
+(require 'emagent-acp-usage)
+(require 'emagent-acp-permit)
 (require 'emagent-chat)
-(require 'emagent-chat-response)
+(require 'emagent-chat-ui)
 (require 'emagent-log)
 (require 'emagent-mcp)
 (require 'emagent-session)
@@ -712,7 +708,7 @@ Skips silently when the buffer is gone or a prompt is already running
         ;; (manual C-c C-c calls send-pending-begin; Build/wakeup must too).
         (emagent-chat--send-pending-begin)
         (unless (fboundp 'emagent-acp-send)
-          (require 'emagent-acp-connect))
+          (require 'emagent-acp))
         (emagent-acp-send text))))))
 
 (defun emagent-acp--set-session-mode (state mode-id)
@@ -758,7 +754,7 @@ work, but do not invent a synthetic `* user>' line in the transcript."
         (emagent-chat--ensure-follow-window buffer)
         (emagent-chat--send-pending-begin)
         (unless (fboundp 'emagent-acp-send)
-          (require 'emagent-acp-connect))
+          (require 'emagent-acp))
         (emagent-acp-send text))))))
 
 (defun emagent-acp--arm-plan-build (state)

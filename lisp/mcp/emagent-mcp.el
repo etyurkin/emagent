@@ -32,7 +32,7 @@
 (require 'cl-lib)
 (require 'map)
 (require 'seq)
-(require 'emagent-acp-custom)
+(require 'emagent-acp-protocol)
 (require 'emagent-log)
 (require 'emagent-session)
 (require 'emagent-struct)

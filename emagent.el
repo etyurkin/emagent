@@ -102,7 +102,6 @@ target BUFFER (hence the two-argument signature)."
 (require 'emagent-chat)
 (require 'emagent-acp)
 (require 'emagent-acp-usage)
-(require 'emagent-acp-connect)
 (require 'emagent-cursor)
 (require 'emagent-trust)
 (require 'project)
