@@ -37,7 +37,6 @@
 (require 'seq)
 (require 'org)
 (require 'emagent-acp-usage)
-(require 'emagent-model)
 (require 'emagent-session)
 (require 'project)
 

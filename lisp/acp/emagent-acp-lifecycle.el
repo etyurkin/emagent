@@ -36,14 +36,13 @@
 (require 'map)
 (require 'emagent-acp-custom)
 (require 'emagent-acp-provider)
-(require 'emagent-acp-model)
+(require 'emagent-acp-usage)
 (require 'emagent-acp-permit)
 (require 'emagent-acp-prompt)
 (require 'emagent-acp-protocol)
 (require 'emagent-acp-request)
 (require 'emagent-acp-state)
 (require 'emagent-acp-tool-call)
-(require 'emagent-acp-usage)
 (require 'emagent-log)
 (require 'emagent-mcp)
 (require 'emagent-prompts)
@@ -298,7 +297,7 @@ Arguments: STATE, ON-READY."
                                                   compressed-context))))))
    :on-success (lambda (response)
                  (unless (fboundp 'emagent-acp--configure-model)
-                   (require 'emagent-acp-model))
+                   (require 'emagent-acp-usage))
                  (emagent-acp--configure-model
                   :state state
                   :session-id (map-elt response 'sessionId)
@@ -329,7 +328,7 @@ Arguments: STATE, ON-READY."
                   (emagent-acp-state-client state) nil)
                  (setf (emagent-acp-state-replaying-history state) nil)
                  (unless (fboundp 'emagent-acp--configure-model)
-                   (require 'emagent-acp-model))
+                   (require 'emagent-acp-usage))
                  (emagent-acp--configure-model
                   :state state
                   :session-id session-id

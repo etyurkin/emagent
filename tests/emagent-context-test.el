@@ -3,7 +3,7 @@
 ;;; Code:
 
 (require 'ert)
-(require 'emagent-context)
+(require 'emagent-session)
 
 ;;;; Formatting
 

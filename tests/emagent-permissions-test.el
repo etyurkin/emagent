@@ -4,7 +4,7 @@
 
 (require 'ert)
 (require 'emagent-test-utils)
-(require 'emagent-permissions)
+(require 'emagent-trust)
 
 (defun emagent-test--with-permissions-dir (fn)
   "Run FN with a temporary `emagent-permissions-directory'."
