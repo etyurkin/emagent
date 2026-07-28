@@ -45,17 +45,13 @@
 ;; Implementation is split across require-DAG leaves:
 ;;   `emagent-mcp-core'     — identity, port, sessions, tokens
 ;;   `emagent-mcp-registry' — tool table and dispatch
-;;   `emagent-mcp-server'   — HTTP/JSON-RPC facade (http/lifecycle/cursor/gateway)
-;;   `emagent-mcp-session'  — session feature shim
-;;   `emagent-mcp-gateway'  — gateway feature shim
+;;   `emagent-mcp-server'   — HTTP/JSON-RPC (http/lifecycle/cursor/gateway)
 
 ;;; Code:
 
 (require 'emagent-mcp-core)
 (require 'emagent-mcp-registry)
 (require 'emagent-mcp-server)
-(require 'emagent-mcp-session)
-(require 'emagent-mcp-gateway)
 
 (provide 'emagent-mcp)
 ;;; emagent-mcp.el ends here

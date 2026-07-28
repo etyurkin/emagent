@@ -32,7 +32,6 @@
 (require 'emagent-tools-core)
 (require 'emagent-tools-file)
 (require 'emagent-tools-shell)
-(require 'emagent-tools-intro)
 (require 'emagent-tools-confirm)
 (require 'emagent-tools-introspect)
 (require 'emagent-tools-structural)

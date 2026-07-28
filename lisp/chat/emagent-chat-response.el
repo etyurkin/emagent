@@ -28,8 +28,7 @@
 
 ;;; Commentary:
 
-;; Begin/append/finish the assistant `** Response' section, extracted from
-;; `emagent-chat-render'.
+;; Begin/append/finish the assistant `** Response' section.
 
 ;;; Code:
 
