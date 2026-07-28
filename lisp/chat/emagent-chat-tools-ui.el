@@ -36,10 +36,9 @@
 (require 'cl-lib)
 (require 'map)
 (require 'seq)
-(require 'emagent-chat-markup)
-(require 'emagent-chat-thought)
-(require 'emagent-chat-response-state)
 (require 'emagent-chat-ui)
+(require 'emagent-chat-thought)
+(require 'emagent-chat-input)
 (require 'emagent-chat-response)
 (require 'emagent-tools)
 

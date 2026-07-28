@@ -8,7 +8,7 @@
 (require 'emagent-chat-mcp)
 (require 'emagent-acp-state)
 (require 'emagent-acp-send)
-(require 'emagent-chat-actions)
+(require 'emagent-chat-mode)
 
 (ert-deftest emagent-chat-mcp-test-command-p ()
   (should (emagent-chat--mcp-command-p "/mcp"))
