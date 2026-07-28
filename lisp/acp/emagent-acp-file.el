@@ -27,22 +27,62 @@
 ;; SOFTWARE.
 
 ;;; Commentary:
-
-;; ACP fs/read_text_file and fs/write_text_file request handlers.
-;; Routes file operations through Emacs tools for path safety.
-
+;;
+;; ACP file read/write helpers and filesystem boundary guards.
+;;
 ;;; Code:
 
 (require 'cl-lib)
-(require 'emagent-tools)
-(require 'emagent-guard)
 (require 'emagent-acp-custom)
-(require 'emagent-acp-protocol)
-(require 'emagent-session)
 (require 'emagent-acp-prompt)
+(require 'emagent-acp-protocol)
 (require 'emagent-acp-usage)
+(require 'emagent-policy)
+(require 'emagent-session)
+(require 'emagent-tools)
+
+(defun emagent-guard--path-verdict (path)
+  "Return an authorization verdict for file PATH.
+Resolves and confines PATH via `emagent-tools--root-directory', turning its
+boundary/protected-tree signal into a `:deny' verdict."
+  (condition-case err
+      (cons :allow (emagent-tools--root-directory path))
+    (error (cons :deny (error-message-string err)))))
+
+(defun emagent-guard-check (op payload)
+  "Return the authorization verdict for OP applied to PAYLOAD.
+
+OP is one of:
+  `read' `write' `delete' — PAYLOAD is a file path; a `:allow' verdict carries
+                            the resolved canonical path.
+  `shell'                 — PAYLOAD is a command string.
+  `eval'                  — PAYLOAD is an elisp form string.
+
+See the commentary for the verdict shape."
+  (pcase op
+    ((or 'read 'write 'delete) (emagent-guard--path-verdict payload))
+    ('shell (or (emagent-policy-check-shell payload) '(:allow . t)))
+    ('eval  (or (emagent-policy-check-elisp payload) '(:allow . t)))
+    (_ (cons :deny (format "unknown guarded operation: %S" op)))))
+
+(defun emagent-guard-allow-p (verdict)
+  "Return non-nil when VERDICT authorizes the effect."
+  (eq (car-safe verdict) :allow))
+
+(defun emagent-guard-deny-p (verdict)
+  "Return non-nil when VERDICT refuses the effect outright."
+  (eq (car-safe verdict) :deny))
+
+(defun emagent-guard-resolved (verdict)
+  "Return the resolved value of an allowing VERDICT, or nil."
+  (and (eq (car-safe verdict) :allow) (cdr verdict)))
+
+(defun emagent-guard-reason (verdict)
+  "Return the human-readable reason string of VERDICT, or nil."
+  (and (memq (car-safe verdict) '(:deny :confirm)) (cdr verdict)))
 
 (defvar emagent-tools--root-boundary)
+
 (defvar emagent-tools--project-directory)
 
 (defun emagent-acp--fs-session-root (state)

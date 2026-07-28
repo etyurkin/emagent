@@ -27,32 +27,93 @@
 ;; SOFTWARE.
 
 ;;; Commentary:
-
-;; Begin/append/finish the assistant `** Response' section.
-
+;;
+;; Assistant response rendering and context compression.
+;;
 ;;; Code:
 
 (require 'cl-lib)
-
-(require 'org)
-
 (require 'map)
-
-(require 'emagent-log)
-
-(require 'emagent-chat-header)
-
+(require 'org)
+(require 'emagent-chat-input)
 (require 'emagent-chat-markup)
-
-(require 'emagent-chat-reasoning)
-
-(require 'emagent-chat-thought)
-
 (require 'emagent-chat-response-state)
-
+(require 'emagent-chat-thought)
 (require 'emagent-chat-ui)
+(require 'emagent-log)
+(require 'emagent-session)
 
-(require 'emagent-chat-view)
+(defvar-local emagent-chat--follow-output nil
+  "Non-nil when this buffer should keep the live response in view.
+
+Set when the user sends a prompt or the window sits on the live tail;
+cleared when they scroll so the follow position is off-screen or move
+point into earlier history.")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+(defun emagent-chat--bare-slash-command-p (text)
+  "Return non-nil when TEXT is a single-line slash command."
+  (let ((trimmed (string-trim text)))
+    (and (not (string-empty-p trimmed))
+         (string-prefix-p "/" trimmed)
+         (not (string-match-p "\n" trimmed))
+         (let* ((body (substring trimmed 1))
+                (space (cl-position-if (lambda (c) (memq c '(?\s ?\t))) body))
+                (cmd (if space (substring body 0 space) body)))
+           (and (> (length cmd) 0)
+                (string-match-p "\\`[-a-z0-9:]+\\'" cmd))))))
+
+(defun emagent-chat--compress-command-p (text)
+  "Return non-nil when TEXT is a conversation compression slash command."
+  (let ((trimmed (string-trim text)))
+    (when (string-prefix-p "/" trimmed)
+      (let* ((body (substring trimmed 1))
+             (space (cl-position-if (lambda (c) (memq c '(?\s ?\t))) body))
+             (cmd (if space (substring body 0 space) body)))
+        (member cmd '("compress" "compact" "summarize"))))))
+
+(defconst emagent-chat--compress-history-limit 200000
+  "Maximum conversation chars included in a /compress request.")
+
+(defun emagent-chat--compress-boundary ()
+  "Return point at the user heading before an open response, or nil."
+  (save-excursion
+    (when-let ((resp (emagent-chat--find-open-response-begin)))
+      (goto-char resp)
+      (when (re-search-backward (emagent-chat--user-heading-re) nil t)
+        (line-beginning-position)))))
+
+(defun emagent-chat--conversation-history-text ()
+  "Return prior conversation text for /compress, or \"\"."
+  (save-excursion
+    (let* ((zone (emagent-session-store-metadata-end))
+           (end (or (emagent-chat--compress-boundary) (point))))
+      (when (and end (> end zone))
+        (string-trim (buffer-substring-no-properties zone end))))))
+
+(defun emagent-chat--compress-prompt-text (history)
+  "Return a summarization prompt for compression using HISTORY."
+  (let ((body (if (> (length history) emagent-chat--compress-history-limit)
+                  (concat (substring history 0 emagent-chat--compress-history-limit)
+                          "\n\n[...truncated for compression request...]")
+                history)))
+    (format "Summarize the conversation below for context compression. Preserve key decisions, file paths, errors, and open tasks. Output only the summary.\n\n<conversation>\n%s\n</conversation>"
+            body)))
 
 (defun emagent-chat--begin-response (&optional at)
   "Open a new emagent response at AT or point.
@@ -147,11 +208,9 @@ Thinking block."
 Nil when outside a fenced block; (lang . body-so-far) while buffering.
 Mirrors emagent-chat--fence-state but tracks the `** Response' stream.")
 
-
 (defun emagent-chat--fail-response-p ()
   "Return non-nil when an emagent response is open and can be closed with error."
   (emagent-chat--open-response-p))
-
 
 (defun emagent-chat--response-body-text ()
   "Return the current `** Response' body text, or nil when unavailable.

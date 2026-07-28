@@ -32,7 +32,7 @@
 
 (require 'emagent-log)
 (require 'emagent-policy)
-(require 'emagent-tools-file)
+(require 'emagent-tools)
 (require 'emagent-tools-shell)
 
 (defvar emagent-acp-prefer-emacs)

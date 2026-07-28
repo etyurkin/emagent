@@ -27,27 +27,100 @@
 ;; SOFTWARE.
 
 ;;; Commentary:
-
-;; Session identity for an emagent chat buffer: project root, model, ACP
-;; session id, provider, and the buffer's allowed-tools/permissions.  These
-;; are the fields lower layers (ACP runtime, MCP server) need to read, so they
-;; live here — below the chat UI — rather than in `emagent-chat', which would
-;; force those layers to depend upward on the whole UI module.
 ;;
-;; Persistence (org top-property read/write) lives in the leaf
-;; `emagent-session-store'; model-id normalization lives in `emagent-model';
-;; permission stores live in `emagent-permissions'.  This module carries no
-;; UI side effects — callers that also need a mode-line refresh (e.g. on a
-;; model change) wrap these accessors.
-
+;; Session metadata, persistence, and project/agent state.
+;;
 ;;; Code:
 
 (require 'cl-lib)
 (require 'emagent-model)
-(require 'emagent-session-store)
 (require 'emagent-permissions)
 
-;;;; Buffer-local session fields
+(defun emagent-session-store-read-top-property (name)
+  "Return the value of #+NAME at the top of the buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward (format "^#\\+%s:[ \t]*\\(.*\\)" name) nil t)
+      (string-trim (match-string 1)))))
+
+(defun emagent-session-store-metadata-end ()
+  "Return point after emagent comment and metadata header lines."
+  (save-excursion
+    (goto-char (point-min))
+    (while (and (not (eobp))
+                (or (looking-at "#\\+")
+                    (looking-at "# ")
+                    (looking-at "#$")))
+      (forward-line 1))
+    (point)))
+
+(defun emagent-session-store-write-top-property (name value)
+  "Insert or update #+NAME in the emagent metadata header.
+No-op when #+NAME already holds VALUE, so re-running `emagent-mode' (e.g. on
+desktop restore) does not mark the session buffer modified."
+  (let* ((inhibit-read-only t)
+         (inhibit-modification-hooks t)
+         (value (format "%s" value))
+         (line (format "#+%s: %s" name value))
+         (pattern (format "^#\\+%s:[ \t]*.*\n?" name)))
+    (unless (equal (emagent-session-store-read-top-property name) value)
+      (save-excursion
+        (save-restriction
+          (widen)
+          (goto-char (point-min))
+          (while (re-search-forward pattern nil t)
+            (delete-region (match-beginning 0) (match-end 0)))
+          (goto-char (emagent-session-store-metadata-end))
+          (unless (bolp) (insert "\n"))
+          (insert line "\n"))))))
+
+(defun emagent-session-store-delete-top-property (name)
+  "Delete #+NAME from the top of the buffer."
+  (let ((inhibit-read-only t))
+    (save-excursion
+      (goto-char (point-min))
+      (when (re-search-forward (format "^#\\+%s:.*\n?" name) nil t)
+        (replace-match "")))))
+
+(defun emagent-session-store-read-project-property ()
+  "Return the #+EMAGENT_PROJECT value at the top of the buffer."
+  (emagent-session-store-read-top-property "EMAGENT_PROJECT"))
+
+(defun emagent-session-store-read-model-property ()
+  "Return the #+EMAGENT_MODEL value at the top of the buffer."
+  (emagent-session-store-read-top-property "EMAGENT_MODEL"))
+
+(defun emagent-session-store-read-session-property ()
+  "Return the #+EMAGENT_SESSION value at the top of the buffer."
+  (emagent-session-store-read-top-property "EMAGENT_SESSION"))
+
+(defun emagent-session-store-read-agent-property ()
+  "Return the #+EMAGENT_AGENT value at the top of the buffer."
+  (emagent-session-store-read-top-property "EMAGENT_AGENT"))
+
+(defconst emagent-session-store--allowed-tools-property "EMAGENT_ALLOWED_TOOLS")
+
+(defconst emagent-session-store--allowed-permissions-property "EMAGENT_ALLOWED_PERMISSIONS")
+
+(defun emagent-session-store-read-allowed-tools-property ()
+  "Return the #+EMAGENT_ALLOWED_TOOLS value as a list of tool symbols."
+  (when-let* ((value (emagent-session-store-read-top-property
+                      emagent-session-store--allowed-tools-property))
+              ((not (string-empty-p value))))
+    (mapcar #'intern (split-string value "[ ,]+" t))))
+
+(defun emagent-session-store-read-allowed-permissions-property ()
+  "Return #+EMAGENT_ALLOWED_PERMISSIONS as a list of permission fingerprints."
+  (when-let* ((value (emagent-session-store-read-top-property
+                      emagent-session-store--allowed-permissions-property))
+              ((not (string-empty-p value))))
+    (split-string value "[ ,]+" t)))
+
+(defun emagent-session-store-display-project-directory (directory)
+  "Return DIRECTORY as written in #+EMAGENT_PROJECT."
+  (file-name-as-directory
+   (abbreviate-file-name (expand-file-name directory))))
+
 ;; Names retain the `emagent-chat-' prefix: they are referenced widely and are
 ;; effectively the persisted-session field names.  Their home is here.
 
@@ -75,8 +148,6 @@ Project-wide choices persist under `emagent-permissions-directory'.")
   "Legacy buffer-local permission fingerprints from #+EMAGENT_ALLOWED_PERMISSIONS.
 
 New choices persist under `emagent-permissions-directory'.")
-
-;;;; Accessors
 
 (defun emagent-session-id ()
   "Return the persisted ACP session id for the current buffer."
