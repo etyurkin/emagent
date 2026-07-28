@@ -43,7 +43,7 @@
 (require 'emagent-acp-provider)
 (require 'emagent-tools)
 (require 'emagent-policy)
-(require 'emagent-permissions)
+(require 'emagent-trust)
 (require 'emagent-session)
 (require 'emagent-acp-usage)
 (require 'emagent-chat)

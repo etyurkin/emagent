@@ -35,7 +35,7 @@
 (require 'cl-lib)
 (require 'emagent-acp)
 (require 'emagent-acp-protocol)
-(require 'emagent-acp-send)
+(require 'emagent-acp-prompt)
 (require 'emagent-chat)
 (require 'emagent-chat-ui)
 (require 'emagent-cursor)

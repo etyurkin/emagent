@@ -5,10 +5,9 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'emagent-test-utils)
-(require 'emagent-chat-mcp)
-(require 'emagent-acp-state)
-(require 'emagent-acp-send)
 (require 'emagent-chat-mode)
+(require 'emagent-acp-state)
+(require 'emagent-acp-prompt)
 
 (ert-deftest emagent-chat-mcp-test-command-p ()
   (should (emagent-chat--mcp-command-p "/mcp"))
