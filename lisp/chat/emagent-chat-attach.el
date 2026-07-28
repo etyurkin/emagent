@@ -40,15 +40,18 @@
 
 (eval-when-compile (require 'flymake))
 
-(defvar emagent-chat--on-attach)
+(defun emagent-chat--acp-attach (text)
+  "Attach TEXT via `emagent-acp-attach-context', loading send on first use."
+  (unless (fboundp 'emagent-acp-attach-context)
+    (require 'emagent-acp-send))
+  (emagent-acp-attach-context text))
 
 (defun emagent-chat-attach-buffer ()
   "Attach a buffer summary to the next prompt."
   (interactive)
   (let ((text (emagent-context-buffer-summary)))
     (emagent-log "attached buffer summary to next prompt")
-    (when emagent-chat--on-attach
-      (funcall emagent-chat--on-attach text))))
+    (emagent-chat--acp-attach text)))
 
 (defun emagent-chat-yank (&optional arg)
   "Yank text or paste a clipboard image.
@@ -180,8 +183,7 @@ active flymake diagnostics.  Attaches a combined error context block."
     (if all
         (let ((text (concat "[Error context]\n" (string-join all "\n"))))
           (emagent-log "attached %d error(s) to next prompt" (length all))
-          (when emagent-chat--on-attach
-            (funcall emagent-chat--on-attach text)))
+          (emagent-chat--acp-attach text))
       (message "emagent: no errors found in compilation buffer or flymake"))))
 
 (defun emagent-chat-attach-files ()
@@ -219,8 +221,7 @@ relative path, size in lines, and a short content preview."
     (if blocks
         (let ((text (string-join blocks "\n\n")))
           (emagent-log "attached %d file(s) to next prompt" (length blocks))
-          (when emagent-chat--on-attach
-            (funcall emagent-chat--on-attach text)))
+          (emagent-chat--acp-attach text))
       (message "emagent: no files selected"))))
 
 (provide 'emagent-chat-attach)

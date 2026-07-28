@@ -27,14 +27,11 @@
 ;; SOFTWARE.
 
 ;;; Commentary:
-
 ;; Session pending/deferral, `emagent-mode-entry' / `emagent-mode-force', and
 ;; first-display activation helpers.
 ;;
-;; `define-derived-mode' stays in the facade `emagent-chat-mode' so the public
-;; `emagent-mode' wrapper can overwrite the function cell after capture.
-;; This file runs the captured body via `emagent--derived-mode-function',
-;; installed by the facade immediately after `define-derived-mode'.
+;; Runs the bare `define-derived-mode' body via `emagent--derived-mode',
+;; captured in `emagent-chat-mode' after `define-derived-mode'.
 ;;
 ;; DAG: mode-faces → mode-activate → mode facade.
 
@@ -46,8 +43,6 @@
 (require 'emagent-chat-buffer)
 (require 'emagent-chat-mode-faces)
 
-(defvar emagent--derived-mode-function #'ignore
-  "Bare `define-derived-mode' body; set by `emagent-chat-mode' after capture.")
 
 (defun emagent--run-derived-mode ()
   "Run derived `emagent-mode' with Org startup inline images disabled.
@@ -55,9 +50,15 @@
 Only bind `org-startup-with-inline-images' here.  Do not let-bind
 `org-element-use-cache': the mode body and
 `emagent-chat--disable-incompatible-org-minor-modes' set it buffer-local,
-and let-binding it makes `setq-local' fail on Emacs 29."
+and let-binding it makes `setq-local' fail on Emacs 29.
+
+Calls `emagent--derived-mode' (captured in `emagent-chat-mode').  When that
+alias is not bound yet (load-order edge), retry activation on idle."
   (let ((org-startup-with-inline-images nil))
-    (funcall emagent--derived-mode-function)))
+    (if (fboundp 'emagent--derived-mode)
+        (emagent--derived-mode)
+      (run-with-idle-timer 0 nil #'emagent--activate-session-now))))
+
 
 (defun emagent--session-buffer-p ()
   "Return non-nil when current `org-mode' buffer is an emagent session."
@@ -191,19 +192,6 @@ Used for session files without the `mode: emagent' cookie (only the
 
 (add-hook 'find-file-hook #'emagent--maybe-register-session)
 (add-hook 'window-buffer-change-functions #'emagent--activate-displayed-pending)
-
-;; When this file loads after session org files were already opened, register
-;; them: activate the ones currently displayed, defer the rest.
-(dolist (buf (buffer-list))
-  (with-current-buffer buf
-    (when (and (not (derived-mode-p 'emagent-mode))
-               (emagent--session-buffer-p))
-      (if emagent--session-pending
-          (cl-pushnew buf emagent--pending-buffers)
-        (if (and emagent-activate-on-display
-                 (not (emagent-chat--buffer-displayed-p)))
-            (emagent--mark-session-pending)
-          (emagent--activate-session-now))))))
 
 (provide 'emagent-chat-mode-activate)
 ;;; emagent-chat-mode-activate.el ends here

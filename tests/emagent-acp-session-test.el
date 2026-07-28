@@ -775,22 +775,22 @@ Continuation uses `run-at-time'; pump those timers iteratively."
     (should-not (emagent-acp-state-wakeup-request state))))
 
 (ert-deftest emagent-acp-session-test-wakeup-fire-sends-prompt ()
-  "Firing a wakeup inserts a user turn and calls the buffer's send callback."
+  "Firing a wakeup inserts a user turn and calls `emagent-acp-send'."
   (let ((state (emagent-acp--state-create))
         (sent nil)
         (token nil))
     (with-temp-buffer
-      (setq-local emagent-chat--on-send
-                  (lambda (text)
-                    (setq sent text
-                          token emagent-chat--send-token)))
       (emagent-test--with-mocks
           (((symbol-function 'emagent-acp--chat-buffer)
             (lambda (_) (current-buffer)))
            ((symbol-function 'emagent-chat--insert-user-heading-with-text)
             (lambda (_text) (point)))
            ((symbol-function 'emagent-chat--begin-response)
-            (lambda (&rest _) nil)))
+            (lambda (&rest _) nil))
+           ((symbol-function 'emagent-acp-send)
+            (lambda (text &optional _compress)
+              (setq sent text
+                    token emagent-chat--send-token))))
         (emagent-acp--fire-wakeup state "check the run again")
         (should (equal "check the run again" sent))
         ;; Regression: without send-pending-begin, emagent-acp-send's
@@ -805,10 +805,11 @@ Continuation uses `run-at-time'; pump those timers iteratively."
         (sent nil))
     (setf (emagent-acp-state-busy state) t)
     (with-temp-buffer
-      (setq-local emagent-chat--on-send (lambda (text) (setq sent text)))
       (emagent-test--with-mocks
           (((symbol-function 'emagent-acp--chat-buffer)
-            (lambda (_) (current-buffer))))
+            (lambda (_) (current-buffer)))
+           ((symbol-function 'emagent-acp-send)
+            (lambda (text &optional _compress) (setq sent text))))
         (emagent-acp--fire-wakeup state "should not send")
         (should-not sent)))))
 
@@ -821,10 +822,6 @@ Continuation uses `run-at-time'; pump those timers iteratively."
         (began nil)
         (scrolled nil))
     (with-temp-buffer
-      (setq-local emagent-chat--on-send
-                  (lambda (text)
-                    (setq sent text
-                          token emagent-chat--send-token)))
       (setq-local emagent-chat--defer-user-stub t)
       (setq-local emagent-chat--follow-output nil)
       (emagent-test--with-mocks
@@ -841,7 +838,11 @@ Continuation uses `run-at-time'; pump those timers iteratively."
            ((symbol-function 'emagent-chat--ensure-follow-window)
             (lambda (&rest _)
               (setq scrolled t
-                    emagent-chat--follow-output t))))
+                    emagent-chat--follow-output t)))
+           ((symbol-function 'emagent-acp-send)
+            (lambda (text &optional _compress)
+              (setq sent text
+                    token emagent-chat--send-token))))
         (emagent-acp--fire-plan-build
          state "Build the approved plan \"X\" (file:///tmp/x.plan.md).")
         (should (string-match-p "Build the approved plan" sent))

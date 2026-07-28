@@ -139,9 +139,6 @@ or concurrent chat buffers would alias one table.")
 (defvar-local emagent-chat--user-zone-start-marker nil
   "Position where the next user prompt may begin.")
 
-(defvar-local emagent-chat--on-send nil
-  "Function called with user input when sending.")
-
 (defvar-local emagent-chat--send-pending nil
   "Non-nil from send until `emagent-acp-send-prompt' dispatches the turn.
 
@@ -165,12 +162,6 @@ across a failure so `retry' reuses the model.")
   "Session model to restore to when a per-turn override ends, or nil.
 Captured (once) from the live session model just before the first override
 switch, so restoring returns to whatever the session was really on.")
-
-(defvar-local emagent-chat--on-attach nil
-  "Function called with attachment text.")
-
-(defvar-local emagent-chat--on-quit nil
-  "Function called when quitting chat.")
 
 (defvar-local emagent-chat-slug nil
   "Filesystem slug for the current emagent buffer.")
