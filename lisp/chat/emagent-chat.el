@@ -87,7 +87,9 @@
   "MCP tools that mutate files and require expected_tick under ACP.")
 
 (defun emagent-mcp--maybe-guard-file-tick (name args)
-  "Require a matching expected_tick for mutating tool NAME."
+  "Require a matching expected_tick for mutating tool NAME.
+
+ARGS is the tool argument hash-table from the MCP call."
   (when (member name emagent-mcp--file-tick-required-tools)
     (emagent-tools--guard-file-tick (emagent-mcp--arg args "path")
                                     (emagent-mcp--arg args "expected_tick"))))
