@@ -25,10 +25,9 @@
 
 ;;; Commentary:
 ;;
-;; Shared helpers and the startup `emagent-trust--configure' orchestration.
-;; Provider-specific logic lives in =emagent-trust-claude.el= and
-;; =emagent-trust-cursor.el=.
-
+;; Workspace trust helpers for Claude and Cursor providers: detect and
+;; record on-disk trust markers so ACP agents can operate in the project.
+;;
 ;;; Code:
 
 (require 'json)
@@ -141,21 +140,132 @@ as `{}').  Optional pretty-print uses `json-pretty-print-buffer'."
       (?n 'n)
       (?q 'q))))
 
-(defun emagent-trust--ensure-provider-features ()
-  "Load Claude/Cursor trust code.
+(defcustom emagent-trust-claude-json-file
+  (expand-file-name "~/.claude.json")
+  "Claude Code user state file (`projects' map per absolute directory).
 
-Loads lazily so `require' is not recursive at top level."
-  (require 'emagent-trust-claude)
-  (require 'emagent-trust-cursor))
+Each project value may include `hasTrustDialogAccepted'.  Trust applies only
+when that field is JSON true; a missing entry, a missing field, or JSON false
+means not trusted at that path (parent directories are still checked, as in
+the `claude' CLI)."
+  :type 'file
+  :group 'emagent-trust)
+
+(defun emagent-trust-claude--has-trust-accepted-p (cell)
+  "Return non-nil when project CELL records explicit trust.
+
+In the JSON file the flag is the boolean true; after `json-read' it is
+symbol t.  Absent key, JSON false (`:json-false'), or any other value is not
+accepted at this path."
+  (and cell
+       (json-alist-p cell)
+       (eq (alist-get "hasTrustDialogAccepted" cell nil nil #'equal) t)))
+
+(defun emagent-trust-claude--projects-table (path)
+  "Return (ROOT . PROJECTS) for PATH, creating `projects' if missing."
+  (let ((root (emagent-trust--json-read-file path)))
+    (unless (or (null root) (json-alist-p root))
+      (error "Expected JSON object at top level: %s" path))
+    (unless root (setq root '()))
+    (let* ((entry (assoc "projects" root #'equal))
+           (projects nil))
+      (unless entry
+        (setq entry (cons "projects" '()))
+        (setq root (cons entry root)))
+      (setq projects (cdr entry))
+      (when (and projects (not (json-alist-p projects)))
+        (user-error
+         "Key `projects' must be a JSON object in %s (repair the file, then retry)"
+         path))
+      (cons root projects))))
+
+(defun emagent-trust-claude-trusted-p (directory)
+  "Return non-nil when DIRECTORY is trusted per Claude Code.
+
+Walks upward like the CLI; see `emagent-trust-claude--has-trust-accepted-p'."
+  (let* ((dir (emagent-trust--normalize-dir directory))
+         (path emagent-trust-claude-json-file)
+         (projects (cdr (emagent-trust-claude--projects-table path)))
+         (p dir)
+         (trusted nil))
+    (while (and p (not trusted))
+      (when-let ((cell (alist-get p projects nil nil #'equal)))
+        (when (emagent-trust-claude--has-trust-accepted-p cell)
+          (setq trusted t)))
+      (unless trusted
+        (setq p (unless (string= p "/")
+                  (file-name-directory (directory-file-name p))))
+        (when p
+          (setq p (directory-file-name (expand-file-name p))))))
+    trusted))
+
+(defun emagent-trust-claude-record-trust (directory)
+  "Set `hasTrustDialogAccepted' true for DIRECTORY in the Claude JSON file.
+
+Preserves other keys on the same `projects' entry (e.g. fixes explicit false)."
+  (let* ((dir (emagent-trust--normalize-dir directory))
+         (path emagent-trust-claude-json-file)
+         (pair (emagent-trust-claude--projects-table path))
+         (root (car pair))
+         (entry (assoc "projects" root #'equal))
+         (projects (cdr entry)))
+    (let ((cell (alist-get dir projects nil nil #'equal)))
+      (cond
+       ((and cell (json-alist-p cell))
+        (setf (alist-get "hasTrustDialogAccepted" cell nil nil #'equal) t))
+       (t
+        (setf (alist-get dir projects nil nil #'equal)
+              (list (cons "hasTrustDialogAccepted" t))))))
+    ;; setf on an empty `projects' alist can replace the local list without
+    ;; updating the cons on ROOT; sync the entry before writing.
+    (setcdr entry projects)
+    (emagent-trust--json-write-file root path)))
+
+(defcustom emagent-trust-cursor-config-dir
+  (expand-file-name "~/.cursor")
+  "Cursor configuration directory (contains `projects/' trust markers)."
+  :type 'directory
+  :group 'emagent-trust)
+
+(defun emagent-trust-cursor--project-slug (directory)
+  "Return Cursor project slug for DIRECTORY (under projects/ in config dir)."
+  (let ((abs (emagent-trust--normalize-dir directory)))
+    (if (string= abs "/")
+        ""
+      (replace-regexp-in-string "/" "-" (string-remove-prefix "/" abs)))))
+
+(defun emagent-trust-cursor--trust-file (directory)
+  "Return the path to Cursor's `.workspace-trusted' marker for DIRECTORY."
+  (expand-file-name
+   (format "projects/%s/.workspace-trusted"
+           (emagent-trust-cursor--project-slug directory))
+   emagent-trust-cursor-config-dir))
+
+(defun emagent-trust-cursor-trusted-p (directory)
+  "Return non-nil when Cursor's trust marker exists and matches DIRECTORY."
+  (let ((tf (emagent-trust-cursor--trust-file directory)))
+    (and (file-readable-p tf)
+         (condition-case nil
+             (let* ((data (emagent-trust--json-read-file tf))
+                    (wp (alist-get "workspacePath" data nil nil #'equal)))
+               (and (stringp wp)
+                    (string= (emagent-trust--normalize-dir wp)
+                             (emagent-trust--normalize-dir directory))))
+           (json-error nil)))))
+
+(defun emagent-trust-cursor-record-trust (directory)
+  "Write Cursor's `.workspace-trusted' marker for DIRECTORY."
+  (let* ((dir (emagent-trust--normalize-dir directory))
+         (tf (emagent-trust-cursor--trust-file directory))
+         (obj (list (cons "trustedAt" (emagent-trust--iso8601-utc-now))
+                    (cons "workspacePath" dir))))
+    (emagent-trust--json-write-file obj tf)))
 
 (defun emagent-trust--already-trusted-p (provider directory)
   "Return non-nil when PROVIDER considers DIRECTORY trusted on disk."
-  (emagent-trust--ensure-provider-features)
   (pcase provider
-    ('claude (and (fboundp 'emagent-trust-claude-trusted-p)
-                  (emagent-trust-claude-trusted-p directory)))
-    ('cursor (and (fboundp 'emagent-trust-cursor-trusted-p)
-                  (emagent-trust-cursor-trusted-p directory)))
+    ('claude (emagent-trust-claude-trusted-p directory))
+    ('cursor (emagent-trust-cursor-trusted-p directory))
     (_ t)))
 
 (defun emagent-trust--record-trust-if-needed (provider directory)
@@ -164,10 +274,8 @@ Loads lazily so `require' is not recursive at top level."
     (let ((dir (emagent-trust--normalize-dir directory)))
       (condition-case err
           (pcase provider
-            ('claude (and (fboundp 'emagent-trust-claude-record-trust)
-                          (emagent-trust-claude-record-trust dir)))
-            ('cursor (and (fboundp 'emagent-trust-cursor-record-trust)
-                          (emagent-trust-cursor-record-trust dir))))
+            ('claude (emagent-trust-claude-record-trust dir))
+            ('cursor (emagent-trust-cursor-record-trust dir)))
         (error (signal (car err) (cdr err)))))))
 
 (defun emagent-trust--configure (provider project-dir)
@@ -175,7 +283,6 @@ Loads lazily so `require' is not recursive at top level."
 
 When trust is missing on disk, writes Claude (~/.claude.json) or Cursor
 \(~/.cursor/projects/.../.workspace-trusted) markers automatically."
-  (emagent-trust--ensure-provider-features)
   (cond
    ((not (and emagent-trust-enabled (memq provider '(claude cursor))))
     nil)
@@ -187,5 +294,4 @@ When trust is missing on disk, writes Claude (~/.claude.json) or Cursor
     nil)))
 
 (provide 'emagent-trust)
-
 ;;; emagent-trust.el ends here

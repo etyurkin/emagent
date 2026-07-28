@@ -5,8 +5,6 @@
 (require 'ert)
 (require 'emagent-test-utils)
 (require 'emagent-trust)
-(require 'emagent-trust-claude)
-(require 'emagent-trust-cursor)
 
 ;;;; Path normalization
 

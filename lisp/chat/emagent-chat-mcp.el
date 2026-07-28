@@ -42,7 +42,7 @@
 (require 'emagent-log)
 (require 'emagent-session)
 (require 'emagent-chat-slash)
-(require 'emagent-mcp-server)
+(require 'emagent-mcp)
 (require 'emagent-cursor-command)
 
 (defvar emagent-chat-provider)

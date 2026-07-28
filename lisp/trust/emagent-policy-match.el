@@ -29,7 +29,7 @@
 ;;; Commentary:
 
 ;; Tokenizes shell commands and evaluates declarative :match specs from
-;; `emagent-policy-rules-shell'.
+;; `emagent-policy-shell-rules'.
 
 ;;; Code:
 

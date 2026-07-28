@@ -354,7 +354,6 @@ trust use `emagent-trust-claude-reconnect' in this buffer (or clear
   (interactive "P")
   (unless (derived-mode-p 'emagent-mode)
     (user-error "Emagent-trust-workspace must be called from an emagent buffer"))
-  (emagent-trust--ensure-provider-features)
   (let* ((dir0 (or (emagent-session-project-directory)
                    (user-error "No project directory set in this buffer")))
          (dir (emagent-trust--normalize-dir (expand-file-name dir0)))
@@ -373,10 +372,8 @@ trust use `emagent-trust-claude-reconnect' in this buffer (or clear
       (user-error "Remote directories are not supported: %s" dir))
     (dolist (p providers)
       (pcase p
-        ('claude (and (fboundp 'emagent-trust-claude-record-trust)
-                      (emagent-trust-claude-record-trust dir)))
-        ('cursor (and (fboundp 'emagent-trust-cursor-record-trust)
-                      (emagent-trust-cursor-record-trust dir)))))
+        ('claude (emagent-trust-claude-record-trust dir))
+        ('cursor (emagent-trust-cursor-record-trust dir))))
     (message "Recorded trust for %s (%s).%s"
              (mapconcat #'symbol-name providers ", ")
              dir
