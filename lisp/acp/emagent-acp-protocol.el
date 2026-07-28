@@ -35,6 +35,62 @@
 (require 'emagent-log)
 (require 'emagent-session)
 
+
+(defun emagent-acp--make-usage ()
+  "Return a fresh usage hash table."
+  (let ((u (make-hash-table :test 'eq)))
+    (puthash :context-used nil u)
+    (puthash :context-size nil u)
+    (puthash :total-tokens 0 u)
+    u))
+
+;; Defined before any code that reads or `setf's its slots: the accessors' gv
+;; setter expanders must be registered at compile time, else a `setf' on a slot
+;; earlier in the file falls back to a nonexistent `(setf ...)' function.
+(cl-defstruct (emagent-acp-state
+               (:constructor emagent-acp--state-create)
+               (:copier nil))
+  "Mutable per-buffer ACP session state.
+
+Replaces the former untyped hash table so field access is checked
+at byte-compile time.  Slots that are themselves maps (the usage
+and tool-call/tool-resolve tables, keyed by id) stay hash tables."
+  ;; Connection
+  client chat-buffer on-reveal provider mcp-http initialized
+  ;; Session
+  session-id config-options (usage (emagent-acp--make-usage))
+  session-auto-approve permission-auto-allow
+  external-tool-gate-reasons external-tool-gate-logged
+  external-tool-refusal-logged
+  agent-rss agent-rss-timer
+  ;; Turn
+  ready busy
+  (assistant-text "") (thought-text "") (thought-buffer "")
+  prompt-finalized prompt-finishing (prompt-generation 0)
+  prompt-retry-gen
+  finish-token finish-timer prompt-watchdog prompt-watchdog-timer
+  extra-context compress-pending quiet-prompt replaying-history
+  continue-attempts deferred-complete-response
+  current-tool current-tool-kind tool-call-since-last-chunk
+  (tool-call-titles (make-hash-table :test 'equal))
+  (tool-call-inputs (make-hash-table :test 'equal))
+  (tool-call-labels (make-hash-table :test 'equal))
+  (tool-call-decisions (make-hash-table :test 'equal))
+  (tool-call-pending (make-hash-table :test 'equal))
+  tool-resolve-queue tool-resolve-worker
+  (tool-resolve-attempts (make-hash-table :test 'equal))
+  ;; Permission gate
+  permission-queue permission-busy permission-drain-timer
+  ;; Agent-scheduled wakeup (ScheduleWakeup tool)
+  wakeup-request wakeup-timer
+  ;; Callbacks (wired by the app; see emagent.el)
+  cb-chunk cb-thought cb-finish cb-fail cb-slash-commands
+  cb-tool-call cb-permission cb-status
+  ;; After cursor/create_plan accept: follow-up Build turn
+  plan-build-prompt plan-build-timer
+  ;; Session mode (ACP modes / current_mode_update); kept last for hot-reload.
+  session-mode-id available-modes)
+
 (defvar emagent-acp--provider-specs (make-hash-table :test 'eq)
   "Hash table mapping provider symbol to adapter property list.")
 
@@ -1142,61 +1198,6 @@ session's current model instead.")
 
 (defvar-local emagent-acp--when-connected-queue nil
   "Callbacks waiting for `emagent-acp--connected-p' in this buffer.")
-
-(defun emagent-acp--make-usage ()
-  "Return a fresh usage hash table."
-  (let ((u (make-hash-table :test 'eq)))
-    (puthash :context-used nil u)
-    (puthash :context-size nil u)
-    (puthash :total-tokens 0 u)
-    u))
-
-;; Defined before any code that reads or `setf's its slots: the accessors' gv
-;; setter expanders must be registered at compile time, else a `setf' on a slot
-;; earlier in the file falls back to a nonexistent `(setf ...)' function.
-(cl-defstruct (emagent-acp-state
-               (:constructor emagent-acp--state-create)
-               (:copier nil))
-  "Mutable per-buffer ACP session state.
-
-Replaces the former untyped hash table so field access is checked
-at byte-compile time.  Slots that are themselves maps (the usage
-and tool-call/tool-resolve tables, keyed by id) stay hash tables."
-  ;; Connection
-  client chat-buffer on-reveal provider mcp-http initialized
-  ;; Session
-  session-id config-options (usage (emagent-acp--make-usage))
-  session-auto-approve permission-auto-allow
-  external-tool-gate-reasons external-tool-gate-logged
-  external-tool-refusal-logged
-  agent-rss agent-rss-timer
-  ;; Turn
-  ready busy
-  (assistant-text "") (thought-text "") (thought-buffer "")
-  prompt-finalized prompt-finishing (prompt-generation 0)
-  prompt-retry-gen
-  finish-token finish-timer prompt-watchdog prompt-watchdog-timer
-  extra-context compress-pending quiet-prompt replaying-history
-  continue-attempts deferred-complete-response
-  current-tool current-tool-kind tool-call-since-last-chunk
-  (tool-call-titles (make-hash-table :test 'equal))
-  (tool-call-inputs (make-hash-table :test 'equal))
-  (tool-call-labels (make-hash-table :test 'equal))
-  (tool-call-decisions (make-hash-table :test 'equal))
-  (tool-call-pending (make-hash-table :test 'equal))
-  tool-resolve-queue tool-resolve-worker
-  (tool-resolve-attempts (make-hash-table :test 'equal))
-  ;; Permission gate
-  permission-queue permission-busy permission-drain-timer
-  ;; Agent-scheduled wakeup (ScheduleWakeup tool)
-  wakeup-request wakeup-timer
-  ;; Callbacks (wired by the app; see emagent.el)
-  cb-chunk cb-thought cb-finish cb-fail cb-slash-commands
-  cb-tool-call cb-permission cb-status
-  ;; After cursor/create_plan accept: follow-up Build turn
-  plan-build-prompt plan-build-timer
-  ;; Session mode (ACP modes / current_mode_update); kept last for hot-reload.
-  session-mode-id available-modes)
 
 (defun emagent-acp--strip-pino-colors (string)
   "Remove literal pino color tokens like [32m from STRING."
