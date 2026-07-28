@@ -1856,6 +1856,64 @@ project directory rather than opening up unconfined access."
                              (modeId . "agent")))))))
     (should (string= "agent" (emagent-acp-state-session-mode-id state)))))
 
+
+(ert-deftest emagent-acp-session-test-turn-begin-clears-edit-diff-cache ()
+  "A new turn drops cached edit diffs; the transcript already has them."
+  (let* ((state (emagent-test--make-acp-state))
+         (emagent-acp--edit-diff-cache (make-hash-table :test 'equal))
+         (emagent-acp--edit-diff-cache-order '("a" "b")))
+    (puthash "a" "diff-a" emagent-acp--edit-diff-cache)
+    (puthash "b" "diff-b" emagent-acp--edit-diff-cache)
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--schedule-prompt-watchdog)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--cancel-wakeup) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--cancel-plan-build) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--provider-reset-tool-resolve)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--reset-permission-gate)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--cancel-prompt-render)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--clear-thought-buffer)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--chat-buffer) (lambda (_) nil)))
+      (emagent-acp--turn-begin state))
+    (should (= 0 (hash-table-count emagent-acp--edit-diff-cache)))
+    (should-not emagent-acp--edit-diff-cache-order)))
+
+(ert-deftest emagent-acp-session-test-completed-releases-tool-payloads ()
+  "Terminal tool status drops rawInput/pending/diff cache for that id."
+  (let* ((state (emagent-test--make-acp-state))
+         (id "big1")
+         (emagent-acp--edit-diff-cache (make-hash-table :test 'equal))
+         (emagent-acp--edit-diff-cache-order (list id)))
+    (puthash id '((content . "huge")) (emagent-acp-state-tool-call-inputs state))
+    (puthash id '((toolCallId . "big1")) (emagent-acp-state-tool-call-pending state))
+    (puthash id "cached-diff" emagent-acp--edit-diff-cache)
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-chat-show-tool-call) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--detect-external-refusal-in-text)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--notify-user) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--schedule-prompt-watchdog)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--chat-buffer)
+          (lambda (_) (current-buffer))))
+      (emagent-acp--emit-tool-call-display
+       state id 'edit nil "Edit File: foo.el" "completed"))
+    (should-not (gethash id (emagent-acp-state-tool-call-inputs state)))
+    (should-not (gethash id (emagent-acp-state-tool-call-pending state)))
+    (should-not (gethash id emagent-acp--edit-diff-cache))))
+
+(ert-deftest emagent-acp-session-test-status-snapshot-has-emacs-rss ()
+  (let* ((state (emagent-test--make-acp-state))
+         (snap (emagent-acp--status-snapshot state)))
+    (should (plist-member snap :emacs-rss))
+    (should (plist-member snap :rss))))
+
+
 (provide 'emagent-acp-session-test)
 
 ;;; emagent-acp-session-test.el ends here

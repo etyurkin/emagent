@@ -2724,8 +2724,9 @@ deferred org table alignment on the chat buffer until Emacs pegged CPU."
   "Plist snapshot of ACP session status, pushed by the ACP layer via :cb-status.
 
 Keys: :busy :waiting-permission :ready :prompt-finishing :tool :tool-kind :rss
-:model-id :ctx-usage (a (USED . SIZE) cons or nil) :ctx-unavailable.  The mode
-line renders from this snapshot so the UI never calls up into the ACP runtime.")
+:emacs-rss :model-id :ctx-usage (a (USED . SIZE) cons or nil) :ctx-unavailable.
+The mode line renders from this snapshot so the UI never calls up into the ACP
+runtime.")
 
 (defun emagent-chat--stat (key)
   "Return status field KEY from the pushed ACP snapshot."
@@ -2817,6 +2818,7 @@ the mode line pulling session state back out of the ACP layer."
          (tool  (emagent-chat--stat :tool))
          (kind  (emagent-chat--stat :tool-kind))
          (rss   (emagent-chat--stat :rss))
+         (emacs-rss (emagent-chat--stat :emacs-rss))
          (connected (or busy ready))
          (spinner (when (emagent-chat--spinner-animate-p)
                     (emagent-chat--mode-line-spinner-suffix)))
@@ -2853,14 +2855,21 @@ the mode line pulling session state back out of the ACP layer."
                      (propertize mode-id 'face 'shadow)))
          (context (emagent-chat--mode-line-context-usage))
          (rss-str (when rss
-                    (propertize (format "mem:%dMB" rss)
+                    (propertize (format "agent:%dMB" rss)
                                 'face (cond ((>= rss 1000) 'error)
                                             ((>= rss 500)  'warning)
                                             (t             'success)))))
+         (emacs-rss-str
+          (when emacs-rss
+            (propertize (format "emacs:%dMB" emacs-rss)
+                        'face (cond ((>= emacs-rss 1000) 'error)
+                                    ((>= emacs-rss 500)  'warning)
+                                    (t             'success)))))
          (tail (concat (when model-str (concat sep model-str))
                        (when mode-str  (concat sep mode-str))
                        (when context   (concat sep (string-trim-left context)))
-                       (when rss-str   (concat sep rss-str)))))
+                       (when rss-str   (concat sep rss-str))
+                       (when emacs-rss-str (concat sep emacs-rss-str)))))
     (cons head tail)))
 
 (defun emagent-chat--mode-line-context-usage ()
@@ -4014,6 +4023,9 @@ Run \\[emagent-mode] to reconnect a saved session."
     (require 'emagent)
     (setq-local buffer-read-only nil)
     (setq-local emagent-chat--tool-call-lines (make-hash-table :test 'equal))
+    ;; Chat is a live transcript log; undo would retain a second copy of every
+    ;; streamed insert and tool-line rewrite for the whole session.
+    (buffer-disable-undo)
     (emagent-chat--writable)
     (when-let* ((raw (or emagent-chat-project-directory
                          (emagent-session-store-read-project-property)))
