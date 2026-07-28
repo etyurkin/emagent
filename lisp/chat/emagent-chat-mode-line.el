@@ -224,7 +224,6 @@ connected provider (cursor) cannot report it, and nil otherwise."
     (when (emagent-chat--stat :ctx-unavailable)
       (propertize " ctx:n/a" 'face 'shadow))))
 
-;;;###autoload
 (defun emagent-mode-line ()
   "Return cached emagent status text for the mode line."
   (or emagent-chat--mode-line-cache

@@ -63,7 +63,6 @@
 
 (defvar emagent-default-provider)
 
-;;;###autoload
 (cl-defun emagent-acp-ensure-connected (&key on-ready on-reveal)
   "Connect the current emagent buffer to its ACP provider if needed.
 
@@ -115,7 +114,6 @@ COMPRESS is forwarded to `emagent-acp-send-prompt'."
          (when (fboundp 'emagent-chat-fail-assistant)
            (emagent-chat-fail-assistant msg)))))))
 
-;;;###autoload
 (defun emagent-acp-send (user-text &optional compress)
   "Ensure connection and send USER-TEXT from the current buffer.
 

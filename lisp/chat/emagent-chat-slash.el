@@ -167,12 +167,10 @@ Arguments: DESCRIPTION, HINT."
       (maphash (lambda (_ cmd) (push cmd result)) table)
       (sort result (lambda (a b) (string< (map-elt a 'name) (map-elt b 'name)))))))
 
-;;;###autoload
 (defun emagent-chat-clear-slash-commands ()
   "Clear slash commands until the agent publishes a fresh list."
   (setq emagent-chat-slash-commands nil))
 
-;;;###autoload
 (defun emagent-chat-seed-cursor-slash-commands ()
   "Merge Cursor built-in and custom slash commands into the buffer list."
   (when (and (eq emagent-chat-provider 'cursor)
@@ -182,7 +180,6 @@ Arguments: DESCRIPTION, HINT."
            (emagent-cursor-slash-commands (emagent-session-project-directory))
            emagent-chat-slash-commands))))
 
-;;;###autoload
 (defun emagent-chat-set-slash-commands (commands)
   "Merge normalized COMMANDS from the agent into `emagent-chat-slash-commands'."
   (let ((incoming (emagent-chat--normalize-slash-commands commands)))
@@ -243,7 +240,6 @@ long as the `/' is preceded by the heading, the line start, or whitespace."
               (when (<= start user-point end)
                 (cons start end)))))))))
 
-;;;###autoload
 (defun emagent-chat-slash-command-completion-at-point ()
   "Complete agent slash commands at point."
   (when-let* ((bounds (emagent-chat--slash-token-bounds))
@@ -278,7 +274,6 @@ long as the `/' is preceded by the heading, the line start, or whitespace."
               (emagent-chat--run-client-slash-command str)))
           :exclusive t)))
 
-;;;###autoload
 (defun emagent-chat-tab ()
   "On a slash-command token, complete or run it; otherwise run `org-cycle'."
   (interactive)
