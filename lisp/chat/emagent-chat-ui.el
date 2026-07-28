@@ -1228,13 +1228,42 @@ point into earlier history.")
       (when (re-search-backward (emagent-chat--user-heading-re) nil t)
         (line-beginning-position)))))
 
+(defun emagent-chat--conversation-history-for-compress (raw)
+  "Return RAW history with Thinking and tool chrome stripped.
+
+Keeps user headings and `** Response' bodies for the compress prompt."
+  (let ((lines (split-string (or raw "") "\n"))
+        (out nil)
+        (in-thinking nil)
+        (in-response nil))
+    (dolist (line lines)
+      (cond
+       ((string-match-p "\\`\\*\\* Thinking" line)
+        (setq in-thinking t in-response nil))
+       ((string-match-p "\\`\\*\\* Response" line)
+        (setq in-thinking nil in-response t)
+        (push line out))
+       ((string-match-p (emagent-chat--user-heading-re) line)
+        (setq in-thinking nil in-response nil)
+        (push line out))
+       (in-thinking nil)
+       ((and (not in-response)
+             (string-match-p "\\`→ " line))
+        nil)
+       (t (push line out))))
+    (string-join (nreverse out) "\n")))
+
 (defun emagent-chat--conversation-history-text ()
-  "Return prior conversation text for /compress, or \"\"."
+  "Return prior conversation text for /compress, or \"\".
+
+Strips `** Thinking' subsections and tool arrow lines so compress
+prompts stay small."
   (save-excursion
     (let* ((zone (emagent-session-store-metadata-end))
            (end (or (emagent-chat--compress-boundary) (point))))
       (when (and end (> end zone))
-        (string-trim (buffer-substring-no-properties zone end))))))
+        (emagent-chat--conversation-history-for-compress
+         (string-trim (buffer-substring-no-properties zone end)))))))
 
 (defun emagent-chat--compress-prompt-text (history)
   "Return a summarization prompt for compression using HISTORY."
@@ -1242,8 +1271,15 @@ point into earlier history.")
                   (concat (substring history 0 emagent-chat--compress-history-limit)
                           "\n\n[...truncated for compression request...]")
                 history)))
-    (format "Summarize the conversation below for context compression. Preserve key decisions, file paths, errors, and open tasks. Output only the summary.\n\n<conversation>\n%s\n</conversation>"
-            body)))
+    (format
+     (concat
+      "Compress the conversation below into a short durable brief.\n"
+      "Format exactly:\n"
+      "1) SUMMARY: 5-12 short bullets (decisions, paths, errors, open tasks)\n"
+      "2) FACTS: durable bullets only (paths, decisions, TODOs) — no prose\n"
+      "Do not invent details. Prefer paths and concrete outcomes.\n\n"
+      "<conversation>\n%s\n</conversation>")
+     body)))
 
 (defun emagent-chat--begin-response (&optional at)
   "Open a new emagent response at AT or point.
@@ -1531,11 +1567,97 @@ the render loop closes the response only after assistant text is stable.")
 (defvar-local emagent-chat--pending-hide-reasoning nil
   "Buffer position to fold after a deferred finish close, or nil.")
 
+(defun emagent-chat--context-fill-percent ()
+  "Return current session context fill percent, or nil when unknown.
+
+When the provider omits context usage, estimate from MCP payload bytes
+and buffer size against `emagent-acp-ctx-proxy-size'."
+  (or
+   (when-let* ((pair (and (fboundp 'emagent-acp-context-usage)
+                          (emagent-acp-context-usage)))
+               (used (car pair))
+               (size (cdr pair))
+               ((and (numberp used) (numberp size) (> size 0))))
+     (* 100.0 (/ (float used) size)))
+   (when-let* ((size (and (boundp 'emagent-acp-ctx-proxy-size)
+                          emagent-acp-ctx-proxy-size))
+               ((and (integerp size) (> size 0)))
+               (mcp (if (fboundp 'emagent-tools-age-bytes)
+                        (emagent-tools-age-bytes)
+                      0))
+               ;; Rough chars→tokens; MCP bytes dominate Cursor sessions.
+               (est (+ (/ mcp 4) (/ (buffer-size) 8)))
+               ((> est 0)))
+     (* 100.0 (/ (float est) size)))))
+
+(defvar-local emagent-chat--last-compact-hint nil
+  "Time of the last /compact hint inserted in this buffer, or nil.")
+
+(defun emagent-chat--compact-hint-due-p ()
+  "Return non-nil when a compact hint may be shown (cooldown elapsed)."
+  (let ((last emagent-chat--last-compact-hint)
+        (cooldown (and (boundp 'emagent-acp-compact-hint-cooldown)
+                       emagent-acp-compact-hint-cooldown)))
+    (or (null last)
+        (null cooldown)
+        (<= cooldown 0)
+        (>= (float-time (time-subtract (current-time) last))
+            cooldown))))
+
+(defun emagent-chat--reset-compact-hint-cooldown ()
+  "Allow the next high-context turn to show a /compact hint again."
+  (setq emagent-chat--last-compact-hint nil))
+
+(defun emagent-chat--maybe-insert-compact-hint ()
+  "Append a /compact suggestion under the open Response when context is high.
+
+Controlled by `emagent-acp-compact-hint-threshold' and
+`emagent-acp-compact-hint-cooldown'.  Also triggers when MCP payload
+bytes cross `emagent-tools-age-bytes-threshold'."
+  (let* ((threshold (and (boundp 'emagent-acp-compact-hint-threshold)
+                         emagent-acp-compact-hint-threshold))
+         (pct (emagent-chat--context-fill-percent))
+         (bytes-hint (and (fboundp 'emagent-tools-age-bytes-hint-p)
+                          (emagent-tools-age-bytes-hint-p)))
+         (ctx-na (emagent-chat--stat :ctx-unavailable)))
+    (when (and (integerp threshold)
+               (> threshold 0)
+               (emagent-chat--compact-hint-due-p)
+               (or bytes-hint (and pct (>= pct threshold)))
+               (emagent-chat--open-response-p))
+      (when-let* ((bounds (emagent-chat--response-body-bounds))
+                  (start (car bounds))
+                  (end (cdr bounds)))
+        (let ((body (buffer-substring-no-properties start end)))
+          (unless (string-match-p "consider.*/compact" body)
+            (let* ((inhibit-read-only t)
+                   (msg (cond
+                         (bytes-hint
+                          "/MCP tool payloads are large; consider ~/compact~./")
+                         ((and ctx-na (not pct))
+                          "/Context usage unavailable; consider ~/compact~ if replies degrade./")
+                         (t
+                          (format "/context is over %d%%, consider ~/compact~./"
+                                  threshold)))))
+              (emagent-chat--writable)
+              (save-excursion
+                (goto-char end)
+                (skip-chars-backward " \t\n" start)
+                (insert "\n\n" msg "\n")
+                (when emagent-chat--assistant-marker
+                  (set-marker emagent-chat--assistant-marker (point))))
+              (setq emagent-chat--last-compact-hint (current-time))
+              (when (fboundp 'emagent-tools-age-clear-bytes-hint)
+                (emagent-tools-age-clear-bytes-hint)))))))))
+
 (defun emagent-chat--close-finished-response ()
   "Reset response markers and insert the next user heading stub.
 
 Called once the ACP finish render has settled (no newer assistant text)."
   (emagent-chat--flush-response-pending t)
+  (emagent-chat--maybe-insert-compact-hint)
+  (when (fboundp 'emagent-archive-on-turn-end)
+    (emagent-archive-on-turn-end))
   (when emagent-chat--pending-hide-reasoning
     (emagent-chat--hide-reasoning-deferred
      emagent-chat--pending-hide-reasoning)
@@ -1594,6 +1716,8 @@ so a subsequent finish can replace the body if more assistant text arrives."
               (setq hide-at nil))
             (emagent-chat--finalize-streamed-assistant converted)
             (emagent-chat--finish-response-spacing)
+            (when emagent-chat--finish-close
+              (progn (emagent-chat--maybe-insert-compact-hint) (when (fboundp 'emagent-archive-on-turn-end) (emagent-archive-on-turn-end))))
             (emagent-chat--maybe-font-lock-flush)
             (if emagent-chat--finish-close
                 (progn

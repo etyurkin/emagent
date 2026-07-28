@@ -109,6 +109,89 @@
          (should (string-match-p "<conversation>" sent-text))
          (should (string-match-p "hello" sent-text)))))))
 
+(ert-deftest emagent-chat-test-run-auto-compress ()
+  "Auto-compact inserts /compress (auto) and dispatches with COMPRESS set."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (goto-char (point-max))
+       (insert (emagent-chat--user-heading-prefix) "hello\n\n** Response\nhi there\n\n")
+       (let (sent-text sent-compress)
+         (emagent-test--with-mocks
+             (((symbol-function 'emagent-acp-send)
+               (lambda (text &optional compress)
+                 (setq sent-text text sent-compress compress))))
+           (emagent-chat--run-auto-compress))
+         (should sent-compress)
+         (should (string-match-p "<conversation>" sent-text))
+         (should (string-match-p "hello" sent-text))
+         (should (string-match-p "/compress (auto)" (buffer-string)))
+         (should emagent-chat--last-auto-compact))))))
+
+(ert-deftest emagent-chat-test-compact-hint-in-response ()
+  "High context appends a /compact hint under the open Response block."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (setq emagent-acp--session (emagent-test--make-acp-state nil buffer))
+       (let ((usage (emagent-acp-state-usage emagent-acp--session))
+             (emagent-acp-compact-hint-threshold 80)
+             (emagent-acp-compact-hint-cooldown 600))
+         (map-put! usage :context-used 90000)
+         (map-put! usage :context-size 100000)
+         (emagent-chat--reset-compact-hint-cooldown)
+         (goto-char (point-max))
+         (insert (emagent-chat--user-heading-prefix) "hello\n")
+         (emagent-chat--begin-response (point))
+         (emagent-chat--ensure-response-headline)
+         (goto-char (cdr (emagent-chat--response-body-bounds)))
+         (insert "answer text\n")
+         (emagent-chat--maybe-insert-compact-hint)
+         (should (string-match-p "context is over 80%" (buffer-string)))
+         (should (string-match-p "consider ~/compact~" (buffer-string)))
+         (emagent-chat--maybe-insert-compact-hint)
+         (should (= 1 (how-many "consider.*/compact" (point-min) (point-max))))
+         ;; Cooldown blocks a second Response insert.
+         (goto-char (point-max))
+         (insert (emagent-chat--user-heading-prefix) "again\n")
+         (emagent-chat--begin-response (point))
+         (emagent-chat--ensure-response-headline)
+         (goto-char (cdr (emagent-chat--response-body-bounds)))
+         (insert "still high\n")
+         (emagent-chat--maybe-insert-compact-hint)
+         (should (= 1 (how-many "consider.*/compact" (point-min) (point-max))))
+         (emagent-chat--reset-compact-hint-cooldown)
+         (emagent-chat--maybe-insert-compact-hint)
+         (should (= 2 (how-many "consider.*/compact" (point-min) (point-max))))
+         (erase-buffer)
+         (insert (format "#+TITLE: test\n\n%shello\n"
+                         (emagent-chat--user-heading-prefix)))
+         (emagent-chat--begin-response (point))
+         (emagent-chat--ensure-response-headline)
+         (goto-char (cdr (emagent-chat--response-body-bounds)))
+         (insert "low\n")
+         (map-put! usage :context-used 10000)
+         (emagent-chat--reset-compact-hint-cooldown)
+         (emagent-chat--maybe-insert-compact-hint)
+         (should-not (string-match-p "consider.*/compact" (buffer-string))))))))
+
+(ert-deftest emagent-chat-test-compress-history-strips-thinking ()
+  "Compress history keeps Response bodies and drops Thinking/tool lines."
+  (let* ((raw (string-join
+               '("* user> hello"
+                 "** Thinking"
+                 "secret thoughts"
+                 "→ git status"
+                 "** Response"
+                 "visible answer"
+                 "* user> next")
+               "\n"))
+         (out (emagent-chat--conversation-history-for-compress raw)))
+    (should (string-match-p "visible answer" out))
+    (should (string-match-p "\\* user> hello" out))
+    (should-not (string-match-p "secret thoughts" out))
+    (should-not (string-match-p "→ git status" out))))
+
 (ert-deftest emagent-chat-test-bare-slash-command-p ()
   (should (emagent-chat--bare-slash-command-p "/compress"))
   (should (emagent-chat--bare-slash-command-p "/plan refactor auth"))

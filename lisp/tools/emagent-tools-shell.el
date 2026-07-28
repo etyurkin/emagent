@@ -37,6 +37,8 @@
 (require 'org)
 (require 'emagent-chat-ui)
 (require 'emagent-log)
+(require 'emagent-tools-compact)
+(require 'emagent-tools-age)
 
 (defun emagent-policy-match--words (command)
   "Split shell COMMAND into words, unquoting shell single/double quotes.
@@ -1185,6 +1187,8 @@ For tests and internal callers only — MCP agent tools use the async path."
                       (is-error (or (eq status 'signal)
                                     (and (numberp status)
                                          (not (zerop status))))))
+                 (setq output
+                       (emagent-tools-compact-shell output command is-error))
                  (when (and (not is-error) (> (length output) limit))
                    (setq output (concat (substring output 0 limit)
                                         "\n… (output truncated)")))
@@ -1224,9 +1228,10 @@ For tests and internal callers only — MCP agent tools use the async path."
                           lines)
                     (setq matches (1+ matches))))
               (file-missing nil))))))
-    (if lines
-        (string-join (nreverse lines) "\n")
-      "No matches")))
+    (emagent-tools-compact-grep
+     (if lines
+         (string-join (nreverse lines) "\n")
+       "No matches"))))
 
 (defun emagent-tool-grep-async (callback pattern &optional path)
   "Search for PATTERN under PATH; call CALLBACK with (output is-error)."
@@ -1241,7 +1246,9 @@ For tests and internal callers only — MCP agent tools use the async path."
           (let ((default-directory root))
             (emagent-tools--run-process-async
              (lambda (output is-error)
-               (funcall callback output is-error))
+               (funcall callback
+                        (emagent-tools-compact-grep output)
+                        is-error))
              "rg" "--no-heading" "--line-number"
              "--max-count" (number-to-string emagent-tools--grep-max-results)
              "--hidden" "--glob" "!/.git/*"
@@ -1281,15 +1288,17 @@ build artifacts and other gitignored trees don't flood the result.
 Elsewhere it walks the tree, skipping
 `emagent-tools--list-files-ignored-dirs'."
   (let* ((root (emagent-tools--root-directory path))
-         (default-directory root))
-    (or (when (and (executable-find "git")
-                   (locate-dominating-file root ".git"))
-          (with-temp-buffer
-            (when (zerop (call-process "git" nil t nil "ls-files"
-                                       "--cached" "--others"
-                                       "--exclude-standard"))
-              (string-trim-right (buffer-string)))))
-        (emagent-tools--list-files-walk root))))
+         (default-directory root)
+         (result
+          (or (when (and (executable-find "git")
+                         (locate-dominating-file root ".git"))
+                (with-temp-buffer
+                  (when (zerop (call-process "git" nil t nil "ls-files"
+                                             "--cached" "--others"
+                                             "--exclude-standard"))
+                    (string-trim-right (buffer-string)))))
+              (emagent-tools--list-files-walk root))))
+    (emagent-tools-compact-file-list result)))
 
 (defun emagent-tools--glob-to-regexp (glob)
   "Convert a simple shell GLOB to a regexp."
@@ -1334,9 +1343,10 @@ against the file's path relative to the search root.  The glob regexp is
                                          (file-name-nondirectory rel)))))
           (when (string-match-p regexp candidate)
             (push rel files)))))
-    (if files
-        (string-join (sort files #'string<) "\n")
-      "No matches")))
+    (emagent-tools-compact-file-list
+     (if files
+         (string-join (sort files #'string<) "\n")
+       "No matches"))))
 
 (cl-defun emagent-tools--run-git-async (callback &rest args)
   "Run git ARGS asynchronously; call CALLBACK with (output is-error).
@@ -1362,7 +1372,9 @@ hangs the tool)."
 Arguments: CALLBACK."
   (emagent-tools--run-git-async
    (lambda (output is-error)
-     (funcall callback (string-trim output) is-error))
+     (funcall callback
+              (emagent-tools-compact-git-status (string-trim output))
+              is-error))
    "status" "--short" "--branch"))
 
 (defun emagent-tool-git-status ()
@@ -1372,16 +1384,33 @@ Arguments: CALLBACK."
 (defun emagent-tool-git-diff-async (callback &optional args)
   "Return git diff output asynchronously.
 
+With no ARGS, return `git diff --stat' plus a note to pass a path for
+hunks.  With ARGS, return a compact unified diff.
+
 Arguments: CALLBACK, ARGS."
-  (if (and args (not (string-empty-p args)))
-      (apply #'emagent-tools--run-git-async
-             (lambda (output is-error)
-               (funcall callback (string-trim output) is-error))
-             "diff" (split-string-shell-command args))
-    (emagent-tools--run-git-async
-     (lambda (output is-error)
-       (funcall callback (string-trim output) is-error))
-     "diff")))
+  (require 'emagent-tools-age)
+  (let* ((args (and args (string-trim args)))
+         (bare (or (null args) (string-empty-p args)))
+         (refresh (and args (string-match-p "\\brefresh=1\\b" args)))
+         (git-args
+          (cond
+           (bare '("diff" "--stat"))
+           (t (cons "diff" (split-string-shell-command args))))))
+    (apply #'emagent-tools--run-git-async
+           (lambda (output is-error)
+             (let* ((clean (string-trim (or output "")))
+                    (body
+                     (if bare
+                         (concat
+                          (emagent-tools-compact-git-diff clean)
+                          (if (string-empty-p clean)
+                              ""
+                            "\n\n[Pass a path to git op=diff for full hunks.]"))
+                       (emagent-tools-compact-git-diff clean)))
+                    (noted (emagent-tools-age-note
+                            "git-diff" nil (or args "") body refresh)))
+               (funcall callback noted is-error)))
+           git-args)))
 
 (defun emagent-tool-git-diff (&optional args)
   "Return git diff output.  Optional ARGS is extra git diff arguments."
@@ -1394,11 +1423,15 @@ Arguments: CALLBACK, ARGS."
   (if (and args (not (string-empty-p args)))
       (apply #'emagent-tools--run-git-async
              (lambda (output is-error)
-               (funcall callback (string-trim output) is-error))
+               (funcall callback
+                        (emagent-tools-compact-git-log (string-trim output))
+                        is-error))
              "log" (split-string-shell-command args))
     (emagent-tools--run-git-async
      (lambda (output is-error)
-       (funcall callback (string-trim output) is-error))
+       (funcall callback
+                (emagent-tools-compact-git-log (string-trim output))
+                is-error))
      "log" "--oneline" "-n" "20")))
 
 (defun emagent-tool-git-log (&optional args)
@@ -1539,57 +1572,66 @@ Arguments: DIRECTORY."
   (require 'compile)
   (require 'ansi-color)
   (let* ((default-directory (expand-file-name
-          (or directory
-            emagent-tools--project-directory
-            default-directory)))
-      (timeout-secs (emagent-tools--subprocess-timeout))
-      (limit emagent-tools--shell-output-limit)
-      (done nil)
-      (timer nil)
-      (proc nil)
-      (buf nil)
-      (finish
-        (lambda (text is-error)
-          (unless done
-            (setq done t)
-            (when timer (cancel-timer timer))
-            (when (and proc (process-live-p proc))
-              (delete-process proc))
-            (funcall callback text is-error)))))
+                            (or directory
+                                emagent-tools--project-directory
+                                default-directory)))
+         (timeout-secs (emagent-tools--subprocess-timeout))
+         (limit emagent-tools--shell-output-limit)
+         (done nil)
+         (timer nil)
+         (proc nil)
+         (buf nil)
+         (finish
+          (lambda (text is-error)
+            (unless done
+              (setq done t)
+              (when timer (cancel-timer timer))
+              (when (and proc (process-live-p proc))
+                (delete-process proc))
+              (funcall callback text is-error)))))
     (condition-case err
-      (progn
-        (setq buf (let ((display-buffer-overriding-action
-                (unless emagent-tools-display-compile-buffer
-                  (list #'display-buffer-no-window
-                    '(allow-no-window . t)))))
-            (compilation-start command 'compilation-mode
-              (lambda (_) "*emagent-compile*"))))
-        (setq proc (get-buffer-process buf))
-        (with-current-buffer buf
-          (add-hook 'compilation-filter-hook #'ansi-color-compilation-filter nil t))
-        (when proc
-          (setq timer
-            (run-with-timer
-              timeout-secs nil
-              (lambda ()
-                (when (process-live-p proc)
-                  (delete-process proc))
-                (funcall finish
-                  (emagent-tools--timeout-message timeout-secs t)
-                  t))))
-          (set-process-sentinel
-            proc
-            (lambda (_p _event)
-              (with-current-buffer buf
-                (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-                  (if (> (length text) limit)
-                    (setq text (concat (substring text 0 limit)
-                        "\n… (output truncated)")))
-                  (funcall finish text nil))))))
-        (unless proc
+        (progn
+          (setq buf (let ((display-buffer-overriding-action
+                          (unless emagent-tools-display-compile-buffer
+                            (list #'display-buffer-no-window
+                                  '(allow-no-window . t)))))
+                      (compilation-start command 'compilation-mode
+                                         (lambda (_) "*emagent-compile*"))))
+          (setq proc (get-buffer-process buf))
           (with-current-buffer buf
-            (let ((text (buffer-substring-no-properties (point-min) (point-max))))
-              (funcall finish text nil)))))
+            (add-hook 'compilation-filter-hook
+                      #'ansi-color-compilation-filter nil t))
+          (when proc
+            (setq timer
+                  (run-with-timer
+                   timeout-secs nil
+                   (lambda ()
+                     (when (process-live-p proc)
+                       (delete-process proc))
+                     (funcall finish
+                              (emagent-tools--timeout-message timeout-secs t)
+                              t))))
+            (set-process-sentinel
+             proc
+             (lambda (p _event)
+               (with-current-buffer buf
+                 (let* ((raw (buffer-substring-no-properties
+                              (point-min) (point-max)))
+                        (status (process-exit-status p))
+                        (is-error (not (zerop status)))
+                        (text (emagent-tools-compact-compile
+                               raw command is-error)))
+                   (when (> (length text) limit)
+                     (setq text (concat (substring text 0 limit)
+                                         "\n… (output truncated)")))
+                   (funcall finish text is-error))))))
+          (unless proc
+            (with-current-buffer buf
+              (let ((text (buffer-substring-no-properties
+                           (point-min) (point-max))))
+                (funcall finish
+                         (emagent-tools-compact-compile text command nil)
+                         nil)))))
       (error (funcall finish (error-message-string err) t)))))
 
 (defun emagent-tool-compile (command &optional directory)

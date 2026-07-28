@@ -663,18 +663,42 @@ files is slow and the chat structure is not a normal org document."
                       (flymake-diagnostic-text d)))
               (flymake-diagnostics (point))))))
 
+(defcustom emagent-context-level 'minimal
+  "How much automatic Emacs context to attach to each prompt.
+
+`minimal' (default): buffer, file, mode, directory, point, enclosing
+function; region only when active; org headline in `org-mode'.
+`full': also treesit node and flymake diagnostics."
+  :type '(choice (const :tag "Minimal" minimal)
+                 (const :tag "Full" full))
+  :group 'emagent)
+
+(defcustom emagent-context-skip-unchanged t
+  "When non-nil, reuse a short unchanged marker if context matches the last turn."
+  :type 'boolean
+  :group 'emagent)
+
+(defvar-local emagent-context--last-fingerprint nil
+  "Fingerprint of the last injected Emacs context block.")
+
 (defun emagent-context-auto ()
   "Build automatic Emacs context for the current buffer."
-  (list (cons :buffer (buffer-name))
-        (cons :file (or (buffer-file-name) nil))
-        (cons :major-mode (symbol-name major-mode))
-        (cons :default-directory default-directory)
-        (cons :point (emagent-context--point-info))
-        (cons :enclosing-function (emagent-context--which-function))
-        (cons :treesit-node (emagent-context--treesit-node))
-        (cons :region (emagent-context--region-info))
-        (cons :flymake (emagent-context--flymake-diagnostics))
-        (cons :org (emagent-context--org-info))))
+  (let ((full (eq emagent-context-level 'full))
+        (ctx (list (cons :buffer (buffer-name))
+                   (cons :file (or (buffer-file-name) nil))
+                   (cons :major-mode (symbol-name major-mode))
+                   (cons :default-directory default-directory)
+                   (cons :point (emagent-context--point-info))
+                   (cons :enclosing-function (emagent-context--which-function)))))
+    (when (region-active-p)
+      (setq ctx (append ctx (list (cons :region (emagent-context--region-info))))))
+    (when (derived-mode-p 'org-mode)
+      (setq ctx (append ctx (list (cons :org (emagent-context--org-info))))))
+    (when full
+      (setq ctx (append ctx
+                        (list (cons :treesit-node (emagent-context--treesit-node))
+                              (cons :flymake (emagent-context--flymake-diagnostics))))))
+    ctx))
 
 (defun emagent-context-format (context)
   "Format CONTEXT alist as a readable string block."
@@ -694,17 +718,26 @@ files is slow and the chat structure is not a normal org document."
     (when-let* ((node (map-elt context :treesit-node)))
       (setq lines (append lines (list (format "treesit-node: %s" node)))))
     (when-let* ((region (map-elt context :region)))
-      (setq lines (append lines
-                          (list (format "region: %s-%s"
-                                        (map-elt region :begin)
-                                        (map-elt region :end))
-                                (format "region-text:\n%s" (map-elt region :text))))))
+      (let ((rt (or (map-elt region :text) "")))
+        (when (> (length rt) 2000)
+          (setq rt (concat (substring rt 0 2000) "\n… (region truncated)")))
+        (setq lines (append lines
+                            (list (format "region: %s-%s"
+                                          (map-elt region :begin)
+                                          (map-elt region :end))
+                                  (format "region-text:\n%s" rt))))))
     (when-let* ((diags (map-elt context :flymake)))
-      (setq lines (append lines
-                          (list (format "flymake-diagnostics: %s"
-                                        (mapconcat (lambda (d)
-                                                     (format "[%s] %s" (car d) (cdr d)))
-                                                   diags "; "))))))
+      (let ((kept (cl-subseq diags 0 (min 8 (length diags))))
+            (extra (max 0 (- (length diags) 8))))
+        (setq lines
+              (append lines
+                      (list (format "flymake-diagnostics: %s%s"
+                                    (mapconcat (lambda (d)
+                                                 (format "[%s] %s" (car d) (cdr d)))
+                                               kept "; ")
+                                    (if (> extra 0)
+                                        (format " (+%d more)" extra)
+                                      "")))))))
     (when-let* ((org (map-elt context :org)))
       (setq lines (append lines
                           (list (format "org-headline: level %s, title %s"
@@ -728,9 +761,27 @@ files is slow and the chat structure is not a normal org document."
 
 (defun emagent-context-build-prompt (user-text &optional extra-blocks)
   "Combine USER-TEXT with auto context and EXTRA-BLOCKS."
-  (let* ((auto (emagent-context-format (emagent-context-auto)))
-         (blocks (cons auto (or extra-blocks nil))))
-    (string-join (cons user-text blocks) "\n\n")))
+  (require 'emagent-usage nil t)
+  (let* ((ctx (emagent-context-auto))
+         (auto (emagent-context-format ctx))
+         (fp (secure-hash 'sha1 auto))
+         (block
+          (if (and emagent-context-skip-unchanged
+                   (equal fp emagent-context--last-fingerprint))
+              "[Emacs context: unchanged]"
+            (progn
+              (setq emagent-context--last-fingerprint fp)
+              auto)))
+         (budget (and (boundp 'emagent-usage-budget-context)
+                      emagent-usage-budget-context))
+         (block (if (fboundp 'emagent-usage--cap-string)
+                    (emagent-usage--cap-string block budget 'context)
+                  block))
+         (user (if (fboundp 'emagent-usage--cap-string)
+                   (emagent-usage--cap-string (or user-text "") nil 'user)
+                 (or user-text "")))
+         (blocks (cons block (or extra-blocks nil))))
+    (string-join (cons user blocks) "\n\n")))
 
 (defun emagent-session-store-read-top-property (name)
   "Return the value of #+NAME at the top of the buffer."
@@ -777,6 +828,94 @@ desktop restore) does not mark the session buffer modified."
       (goto-char (point-min))
       (when (re-search-forward (format "^#\\+%s:.*\n?" name) nil t)
         (replace-match "")))))
+
+(defconst emagent-session-notes-property "EMAGENT_NOTES"
+  "Top-property name for durable session notes.")
+
+(defconst emagent-session-notes-max-chars 2000
+  "Maximum characters kept in session notes.")
+
+(defun emagent-session-notes-read ()
+  "Return decoded session notes text, or \"\"."
+  (let ((raw (emagent-session-store-read-top-property
+              emagent-session-notes-property)))
+    (if (not raw)
+        ""
+      (replace-regexp-in-string "\\\\n" "\n" raw t t))))
+
+(defun emagent-session-notes-write (text)
+  "Store TEXT as session notes (newline-escaped, capped)."
+  (let* ((trimmed (string-trim (or text "")))
+         (capped (if (> (length trimmed) emagent-session-notes-max-chars)
+                     (substring trimmed 0 emagent-session-notes-max-chars)
+                   trimmed))
+         (encoded (replace-regexp-in-string "\n" "\\\\n" capped t t)))
+    (if (string-empty-p capped)
+        (emagent-session-store-delete-top-property emagent-session-notes-property)
+      (emagent-session-store-write-top-property
+       emagent-session-notes-property encoded))))
+
+(defun emagent-session-notes--extract-facts (summary)
+  "Return FACTS bullets from SUMMARY, or nil."
+  (when (and (stringp summary)
+             (string-match "FACTS:\\s-*\n\\(\\(.\\|\n\\)*\\)\\'" summary))
+    (string-trim (match-string 1 summary))))
+
+(defun emagent-session-notes-strip-facts (summary)
+  "Return SUMMARY without a trailing FACTS: section."
+  (if (and (stringp summary)
+           (string-match "\n*FACTS:\\s-*\n\\(.\\|\n\\)*\\'" summary))
+      (string-trim (substring summary 0 (match-beginning 0)))
+    (or summary "")))
+
+(defun emagent-session-notes-merge-from-summary (summary)
+  "Merge FACTS from SUMMARY into durable session notes."
+  (when-let ((facts (emagent-session-notes--extract-facts summary)))
+    (let* ((old (emagent-session-notes-read))
+           (combined (if (string-empty-p old)
+                         facts
+                       (concat old "\n" facts))))
+      (emagent-session-notes-write combined))))
+
+(defcustom emagent-project-notes-relative ".emagent/notes.org"
+  "Project-relative notes file merged into the system prompt."
+  :type 'string
+  :group 'emagent)
+
+(defun emagent-session-project-notes-file ()
+  "Return absolute path of the project notes file, or nil."
+  (when-let* ((root (emagent-session-project-directory))
+              (rel emagent-project-notes-relative)
+              (path (expand-file-name rel root)))
+    path))
+
+(defun emagent-session-project-notes-read ()
+  "Return project notes text, or \"\"."
+  (when-let* ((path (emagent-session-project-notes-file))
+              ((file-readable-p path)))
+    (with-temp-buffer
+      (insert-file-contents path)
+      (string-trim (buffer-string)))))
+
+(defun emagent-session-notes-prompt-block ()
+  "Return a system-prompt block for session and project notes, or \"\"."
+  (require 'emagent-usage nil t)
+  (let* ((session (emagent-session-notes-read))
+         (project (or (emagent-session-project-notes-read) ""))
+         (parts (delq nil
+                      (list (and (not (string-empty-p session))
+                                 (format "session:\n%s" session))
+                            (and (not (string-empty-p project))
+                                 (format "project:\n%s" project)))))
+         (raw (string-join parts "\n\n"))
+         (budget (and (boundp 'emagent-usage-budget-notes)
+                      emagent-usage-budget-notes))
+         (notes (if (fboundp 'emagent-usage--cap-string)
+                    (emagent-usage--cap-string raw budget 'notes)
+                  raw)))
+    (if (string-empty-p notes)
+        ""
+      (format "\n\n[Session notes]\n%s" notes))))
 
 (defun emagent-session-store-read-project-property ()
   "Return the #+EMAGENT_PROJECT value at the top of the buffer."
