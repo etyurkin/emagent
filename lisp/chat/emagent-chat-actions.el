@@ -51,14 +51,6 @@
 (require 'emagent-chat-model-ui)
 (require 'emagent-chat-mcp)
 
-;; Owned by `emagent-acp-send' (which requires `emagent-chat', so this file —
-;; required by the facade — cannot require it back); set there once the real
-;; implementation is defined, so a stop before ACP loads is simply a no-op.
-(defvar emagent-chat--on-finalize-in-flight #'ignore
-  "Function called to finalize/cancel the in-flight ACP prompt.
-Takes one optional STOP-NOTICE argument; see
-`emagent-acp--finalize-in-flight-prompt'.")
-
 (defun emagent-chat--operation-active-p ()
   "Return non-nil when the buffer has work Esc-Esc should stop."
   (or emagent-chat--send-pending
@@ -95,8 +87,11 @@ Return non-nil when something was stopped."
         (emagent-acp--clear-when-connected-queue))
       (emagent-chat--abort-open-response))
     (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
-      (funcall emagent-chat--on-finalize-in-flight
-               "/Stopped — awaiting new instructions./"))
+      (progn
+        (unless (fboundp 'emagent-acp--finalize-in-flight-prompt)
+          (require 'emagent-acp-send))
+        (emagent-acp--finalize-in-flight-prompt
+         "/Stopped — awaiting new instructions./")))
     (emagent-chat--send-pending-end)
     (when (fboundp 'emagent-chat--refresh-mode-line)
       (emagent-chat--refresh-mode-line))
@@ -126,7 +121,10 @@ partial response, and sends `btw, TEXT' as a new prompt."
     (user-error "BTW message is empty"))
   (let ((text (format "btw, %s" (string-trim text))))
     (when (and (fboundp 'emagent-acp-busy-p) (emagent-acp-busy-p))
-      (funcall emagent-chat--on-finalize-in-flight))
+      (progn
+        (unless (fboundp 'emagent-acp--finalize-in-flight-prompt)
+          (require 'emagent-acp-send))
+        (emagent-acp--finalize-in-flight-prompt)))
     (emagent-log "btw send: %s" (emagent-log-truncate-line text 80))
     (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
       (emagent-chat--begin-response response-pos))

@@ -170,13 +170,5 @@ Arguments: STATE."
         (emagent-acp--schedule-permission-drain state)
       (emagent-acp--drain-permission-queue-now state))))
 
-;; Registered on the leaf `emagent-acp--stall-recovery-functions' hook (see
-;; `emagent-acp-usage') rather than called by name from that module, which
-;; this file requires.
-(add-hook 'emagent-acp--stall-recovery-functions
-          (lambda (state)
-            (when (emagent-acp-state-permission-queue state)
-              (emagent-acp--drain-permission-queue state))))
-
 (provide 'emagent-acp-permission-queue)
 ;;; emagent-acp-permission-queue.el ends here

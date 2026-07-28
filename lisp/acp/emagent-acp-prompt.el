@@ -253,12 +253,6 @@ Arguments: STATE."
       (setf (emagent-acp-state-deferred-complete-response state) nil)
       (emagent-acp--complete-prompt state response))))
 
-;; Registered on the leaf `emagent-acp--stall-recovery-functions' hook
-;; (see `emagent-acp-usage') rather than called by name from
-;; `emagent-acp-usage', which this file requires.
-(add-hook 'emagent-acp--stall-recovery-functions
-          #'emagent-acp--maybe-complete-deferred-prompt)
-
 (defun emagent-acp--complete-prompt (state response)
   "Finalize the in-flight prompt for STATE using RESPONSE and close chat."
   (cond

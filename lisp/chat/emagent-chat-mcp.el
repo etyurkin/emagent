@@ -333,11 +333,6 @@ health-checks the in-process emagent MCP server."
     (delete-region (car bounds) (cdr bounds)))
   (emagent-chat--mcp-select-and-act (and text (emagent-chat--mcp-arg text))))
 
-;; `emagent-chat-slash' (required above) cannot require this file back (this
-;; file requires it, for the slash-token helpers), so the callback slot it
-;; declares is wired here once the real implementation is defined.
-(setq emagent-chat--on-slash-mcp #'emagent-chat--slash-mcp-apply)
-
 (defun emagent-cursor-approve-configured-mcp-servers ()
   "Approve non-emagent servers from ~/.cursor/mcp.json for the session cwd.
 

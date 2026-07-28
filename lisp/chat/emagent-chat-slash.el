@@ -47,20 +47,6 @@
   "Emagent chat UI."
   :group 'emagent)
 
-;; Owned by `emagent-acp-connect' (which requires `emagent-chat', so this
-;; file — required by the facade — cannot require it back); set there once
-;; the real implementation is defined, so use before connect is a no-op.
-(defvar emagent-chat--on-ensure-connected #'ignore
-  "Function called to connect the current buffer's ACP provider if needed.
-Called with the same `:on-ready'/`:on-reveal' keyword arguments as
-`emagent-acp-ensure-connected'.")
-
-;; Owned by `emagent-chat-mcp' (which requires this file for slash-token
-;; helpers, so this file cannot require it back); set there once the real
-;; implementation is defined.
-(defvar emagent-chat--on-slash-mcp #'ignore
-  "Function called to run the client `/mcp' UI for the current buffer.")
-
 (defun emagent-chat-cycle-or-org-cycle ()
   "Cycle visibility with `org-cycle' (responses fold as native Org subtrees)."
   (interactive)
@@ -111,18 +97,24 @@ stripped from the text sent to the agent."
       (user-error "No `/model' token at point"))
     (if (emagent-acp--connected-p)
         (emagent-chat--slash-model-apply-1 bounds)
-      (funcall emagent-chat--on-ensure-connected
-       :on-ready
-       (lambda ()
-         (with-current-buffer buf
-           (emagent-chat--slash-model-apply-1
-            (or (emagent-chat--slash-token-bounds) bounds))))))))
+      (progn
+        (unless (fboundp 'emagent-acp-ensure-connected)
+          (require 'emagent-acp-connect))
+        (emagent-acp-ensure-connected
+         :on-ready
+         (lambda ()
+           (with-current-buffer buf
+             (emagent-chat--slash-model-apply-1
+              (or (emagent-chat--slash-token-bounds) bounds)))))))))
 
 (defun emagent-chat--run-client-slash-command (name)
   "Run the client slash command NAME (dispatch after completion)."
   (pcase name
     ("model" (emagent-chat--slash-model-apply))
-    ("mcp" (funcall emagent-chat--on-slash-mcp))))
+    ("mcp"
+     (unless (fboundp 'emagent-chat--slash-mcp-apply)
+       (require 'emagent-chat-mcp))
+     (emagent-chat--slash-mcp-apply))))
 
 (defvar emagent-chat-provider)
 (defvar-local emagent-chat-slash-commands nil

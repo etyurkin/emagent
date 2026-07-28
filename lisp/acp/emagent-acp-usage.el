@@ -158,11 +158,6 @@ buffer signals \"Selecting deleted buffer\"."
   ;; The status push from --refresh-mode-line re-renders the model label.
   (emagent-acp--refresh-mode-line state))
 
-(defvar emagent-acp--stall-recovery-functions nil
-  "Functions run by `emagent-acp--maybe-recover-stall' on a settled session.
-Each is called with the `emagent-acp-state'.  Populated at load time by
-`emagent-acp-prompt' and `emagent-acp-permission-queue' so this file need not
-require those modules back.")
 
 (defun emagent-acp--current-model-id (state models)
   "Return the current model id for STATE.
@@ -183,14 +178,20 @@ Prefer the session config-option current value, then MODELS'
 (defun emagent-acp--maybe-recover-stall (state)
   "Unstick a session that finished on the wire but left the buffer open.
 
-Runs `emagent-acp--stall-recovery-functions' instead of calling prompt or
-permission-queue functions by name, since those modules require this file.
+Lazy-loads prompt/permission-queue so this leaf need not require them
+\(those modules require this file\).
 
 Arguments: STATE."
   (when (and state
              (emagent-acp-state-ready state)
              (not (emagent-acp-state-busy state)))
-    (run-hook-with-args 'emagent-acp--stall-recovery-functions state)))
+    (unless (fboundp 'emagent-acp--maybe-complete-deferred-prompt)
+      (require 'emagent-acp-prompt))
+    (emagent-acp--maybe-complete-deferred-prompt state)
+    (when (emagent-acp-state-permission-queue state)
+      (unless (fboundp 'emagent-acp--drain-permission-queue)
+        (require 'emagent-acp-permission-queue))
+      (emagent-acp--drain-permission-queue state))))
 
 (defun emagent-acp--status-snapshot (state)
   "Return a mode-line status plist computed from STATE.

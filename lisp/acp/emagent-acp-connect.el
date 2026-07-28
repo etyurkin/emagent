@@ -101,12 +101,6 @@ the session down and starting over."
                           (:cb-permission     . ,#'emagent-chat-permission-prompt)
                           (:cb-status         . ,#'emagent-chat-set-status)))))))
 
-;; `emagent-chat-slash' (required by the facade `emagent-chat', which this
-;; file requires) calls this indirectly through
-;; `emagent-chat--on-ensure-connected' (set here) so `/model' can connect
-;; before applying an override without requiring this file back.
-(setq emagent-chat--on-ensure-connected #'emagent-acp-ensure-connected)
-
 (defun emagent-acp--send-prompt-safe (buffer user-text &optional compress)
   "Send USER-TEXT from BUFFER, logging and surfacing failures in the chat.
 COMPRESS is forwarded to `emagent-acp-send-prompt'."
