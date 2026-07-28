@@ -158,6 +158,8 @@ Common Elisp patterns (use these, not shell equivalents):
 - Omit a path to use the session project directory; relative paths resolve against it.
 - File tools are confined to the session root.
 - To revert a write_file mistake, call undo_file — never rewrite from memory.
+- Concurrent MCP edits: always pass expected_tick from the latest read_file
+  (or structural_get) emagent-tick; stale_revision means re-read and retry.
 - delete-file, write-file, shell-command, call-process are blocked inside eval;
   use the dedicated tools (writes use Emacs unless you enable
   `emagent-acp-confirm-fs-writes').
@@ -1501,11 +1503,17 @@ Arguments: LINE, LIMIT."
 (defun emagent-tool-read-file (path &optional line limit)
   "Return contents of PATH as a string.
 
+When `emagent-tools--acp-session-p' is set, prefix the text with an
+emagent-tick header for optimistic concurrency on later writes.
+
 Arguments: LINE, LIMIT."
   (when (emagent-tools--protected-fs-path-p path)
     (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
                 (emagent-tools--root-directory path)))
-  (emagent-tools--read-file-content path line limit))
+  (let ((text (emagent-tools--read-file-content path line limit)))
+    (if emagent-tools--acp-session-p
+        (emagent-tools--format-with-file-tick path text)
+      text)))
 
 (defun emagent-tools--read-structural-file-content (path)
   "Like `emagent-tools--read-file-content' but return \"\" when PATH is missing."
@@ -1513,9 +1521,73 @@ Arguments: LINE, LIMIT."
       (emagent-tools--read-file-content path)
     (file-missing "")))
 
-(defun emagent-tools--write-file-content (path content)
+(defvar emagent-tools--expected-file-tick nil
+  "Expected `emagent-tools--file-tick' for the current MCP mutating call.
+Bound by the MCP dispatcher from the tool's expected_tick argument.")
+
+(defvar emagent-tools--skip-file-tick-guard nil
+  "When non-nil, `emagent-tools--write-file-content' skips tick CAS.
+Used only for rare internal writes that must not participate in CAS.")
+
+(defun emagent-tools--file-tick (path)
+  "Return a revision token string for PATH's current contents.
+
+Uses a SHA-1 of buffer-or-disk file text so a no-op buffer sync keeps the
+same tick, while any concurrent edit invalidates it.  Missing files use
+\"0\"."
+  (let ((resolved (emagent-tools--root-directory path)))
+    (condition-case nil
+        (secure-hash 'sha1 (emagent-tools--read-file-content resolved))
+      (file-missing "0"))))
+
+(defun emagent-tools--normalize-file-tick (tick)
+  "Return TICK as a comparable string, or nil when TICK is absent."
+  (cond
+   ((null tick) nil)
+   ((stringp tick) (if (string-empty-p tick) nil tick))
+   ((numberp tick) (format "%s" tick))
+   (t (format "%s" tick))))
+
+(defun emagent-tools--guard-file-tick (path expected-tick)
+  "Signal when EXPECTED-TICK does not match PATH's current revision.
+
+When `emagent-tools--acp-session-p' is set, EXPECTED-TICK is required.
+Otherwise a nil EXPECTED-TICK skips the check (non-MCP callers)."
+  (when (and emagent-tools--acp-session-p
+             (not emagent-tools--skip-file-tick-guard))
+    (let* ((expected (emagent-tools--normalize-file-tick expected-tick))
+           (current (emagent-tools--file-tick path))
+           (resolved (emagent-tools--root-directory path)))
+      (unless expected
+        (user-error
+         (concat "expected_tick required for MCP writes to %s; "
+                 "call read_file (or a structural read) and pass its "
+                 "emagent-tick on write/structural mutate (current_tick=%s)")
+         resolved current))
+      (unless (string= expected current)
+        (user-error
+         (concat "stale_revision: path=%s expected_tick=%s current_tick=%s; "
+                 "re-read_file and retry")
+         resolved expected current)))))
+
+(defun emagent-tools--format-with-file-tick (path text)
+  "Return TEXT prefixed with PATH's emagent-tick header for MCP clients."
+  (format "emagent-tick: %s\n---\n%s"
+          (emagent-tools--file-tick path)
+          (or text "")))
+
+(defun emagent-tools--append-file-tick (path text)
+  "Return TEXT with PATH's current emagent-tick appended."
+  (format "%s\nemagent-tick: %s"
+          (or text "")
+          (emagent-tools--file-tick path)))
+
+(defun emagent-tools--write-file-content (path content &optional expected-tick)
   "Write CONTENT to PATH through an Emacs buffer.
-Each call is recorded as a single undoable change in the target buffer."
+Each call is recorded as a single undoable change in the target buffer.
+EXPECTED-TICK, when non-nil, overrides `emagent-tools--expected-file-tick'."
+  (emagent-tools--guard-file-tick
+   path (or expected-tick emagent-tools--expected-file-tick))
   (let* ((resolved (emagent-tools--root-directory path))
          (dir (file-name-directory resolved))
          (buffer (or (find-buffer-visiting resolved)
@@ -1612,7 +1684,8 @@ Each call is recorded as a single undoable change in the target buffer."
            (cl-return-from emagent-tool-write-file-async)))
   (let* ((resolved (emagent-tools--root-directory path))
          (label (file-name-nondirectory resolved))
-         (old (emagent-tools--read-elisp-file-content path)))
+         (old (emagent-tools--read-elisp-file-content path))
+         (acp emagent-tools--acp-session-p))
     (condition-case err
         (progn
           (when (emagent-tools--protected-fs-path-p path)
@@ -1623,11 +1696,14 @@ Each call is recorded as a single undoable change in the target buffer."
            (lambda (diff is-error)
              (if is-error
                  (funcall callback diff t)
-               (funcall callback
-                        (if (string-empty-p diff)
-                            (format "Wrote %s (no changes)" resolved)
-                          diff)
-                        nil)))
+               (let ((result (if (string-empty-p diff)
+                                 (format "Wrote %s (no changes)" resolved)
+                               diff)))
+                 (funcall callback
+                          (if acp
+                              (emagent-tools--append-file-tick path result)
+                            result)
+                          nil))))
            old content label))
       (error (funcall callback (error-message-string err) t)))))
 
@@ -1644,14 +1720,19 @@ Each call is recorded as a single undoable change in the target buffer."
       (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
                   resolved))
     (emagent-tools--write-file-content path content)
-    (let ((diff (emagent-tools--unified-diff old content label)))
-      (if (string-empty-p diff)
-          (format "Wrote %s (no changes)" resolved)
-        diff))))
+    (let* ((diff (emagent-tools--unified-diff old content label))
+           (result (if (string-empty-p diff)
+                       (format "Wrote %s (no changes)" resolved)
+                     diff)))
+      (if emagent-tools--acp-session-p
+          (emagent-tools--append-file-tick path result)
+        result))))
 
 (defun emagent-tools--structural-sync-path (file)
-  "Sync FILE buffer content to disk; return absolute path."
-  (let ((content (emagent-tools--read-structural-file-content file)))
+  "Sync FILE buffer content to disk; return absolute path.
+Skips tick CAS: a no-op sync must not require expected_tick."
+  (let ((emagent-tools--skip-file-tick-guard t)
+        (content (emagent-tools--read-structural-file-content file)))
     (emagent-tools--write-file-content file content)
     (emagent-tools--root-directory file)))
 
@@ -1661,7 +1742,10 @@ Each call is recorded as a single undoable change in the target buffer."
       result
     (progn
       (emagent-tools--write-file-content file result)
-      (format "Wrote %s" (emagent-tools--root-directory file)))))
+      (let ((msg (format "Wrote %s" (emagent-tools--root-directory file))))
+        (if emagent-tools--acp-session-p
+            (emagent-tools--append-file-tick file msg)
+          msg)))))
 
 (defun emagent-tool-check-structural-file (file)
   "Validate FILE with lisp-sitter (when available)."
@@ -1690,8 +1774,14 @@ Arguments: DEPTH."
         (format "install lisp-sitter to see structural outline of %s" file)))))
 
 (defun emagent-tool-structural-get (file symbol)
-  "Return full text of top-level SYMBOL in FILE."
-  (emagent-struct-get (emagent-tools--read-structural-file-content file) file symbol))
+  "Return full text of top-level SYMBOL in FILE.
+When `emagent-tools--acp-session-p' is set, append emagent-tick for writes."
+  (let ((text (emagent-struct-get
+               (emagent-tools--read-structural-file-content file)
+               file symbol)))
+    (if emagent-tools--acp-session-p
+        (emagent-tools--append-file-tick file text)
+      text)))
 
 (defun emagent-tool-structural-find-errors (file)
   "Return tree-sitter MISSING/ERROR nodes for FILE."
@@ -1816,33 +1906,48 @@ Arguments: AT, WRAP."
   (when-let ((err (emagent-tools--eval-form-guard new-body)))
     (user-error "%s" err))
   (let* ((content (emagent-tools--read-structural-file-content file))
-         (updated (emagent-struct-replace content file symbol new-body)))
-    (emagent-tools--write-file-content file updated)
-    (when emagent-struct-eval-after-structural-edit
-      (ignore-errors (eval (read new-body))))
-    (format "Wrote %s" (expand-file-name file))))
+         (updated (emagent-struct-replace content file symbol new-body))
+         (result (progn
+                   (emagent-tools--write-file-content file updated)
+                   (when emagent-struct-eval-after-structural-edit
+                     (ignore-errors (eval (read new-body))))
+                   (format "Wrote %s" (expand-file-name file)))))
+    (if emagent-tools--acp-session-p
+        (emagent-tools--append-file-tick file result)
+      result)))
 
 (defun emagent-tool-structural-insert (file after-symbol node)
   "Insert complete top-level NODE after AFTER-SYMBOL in FILE."
   (when-let ((err (emagent-tools--eval-form-guard node)))
     (user-error "%s" err))
   (let* ((content (emagent-tools--read-structural-file-content file))
-         (updated (emagent-struct-insert content file after-symbol node)))
-    (emagent-tools--write-file-content file updated)
-    (when emagent-struct-eval-after-structural-edit
-      (ignore-errors (eval (read node))))
-    (format "Wrote %s" (expand-file-name file))))
+         (updated (emagent-struct-insert content file after-symbol node))
+         (result (progn
+                   (emagent-tools--write-file-content file updated)
+                   (when emagent-struct-eval-after-structural-edit
+                     (ignore-errors (eval (read node))))
+                   (format "Wrote %s" (expand-file-name file)))))
+    (if emagent-tools--acp-session-p
+        (emagent-tools--append-file-tick file result)
+      result)))
 
 (defun emagent-tools--structural-apply-async (callback file args)
   "Run lisp-sitter ARGS on synced FILE; write result and call CALLBACK."
-  (apply #'emagent-struct--call-path-async
-         (lambda (result is-error)
-           (if is-error
-               (funcall callback result t)
-             (funcall callback
-                      (emagent-tools--structural-apply-file-result file result)
-                      nil)))
-         args))
+  (let ((expected emagent-tools--expected-file-tick)
+        (acp emagent-tools--acp-session-p))
+    (apply #'emagent-struct--call-path-async
+           (lambda (result is-error)
+             (if is-error
+                 (funcall callback result t)
+               (condition-case err
+                   (let ((emagent-tools--expected-file-tick expected)
+                         (emagent-tools--acp-session-p acp))
+                     (funcall callback
+                              (emagent-tools--structural-apply-file-result
+                               file result)
+                              nil))
+                 (error (funcall callback (error-message-string err) t)))))
+           args)))
 
 (defun emagent-tool-check-structural-file-async (callback file)
   "Validate FILE with lisp-sitter asynchronously.
@@ -1900,8 +2005,16 @@ Arguments: CALLBACK, DEPTH."
   "Return full text of top-level SYMBOL in FILE asynchronously.
 
 Arguments: CALLBACK."
-  (let ((content (emagent-tools--read-structural-file-content file)))
-    (apply #'emagent-struct--call-async callback content "get" "-" symbol
+  (let ((content (emagent-tools--read-structural-file-content file))
+        (acp emagent-tools--acp-session-p))
+    (apply #'emagent-struct--call-async
+           (lambda (result is-error)
+             (if (or is-error (not acp))
+                 (funcall callback result is-error)
+               (funcall callback
+                        (emagent-tools--append-file-tick file result)
+                        nil)))
+           content "get" "-" symbol
            "--lang" (emagent-struct--lang-for file))))
 
 (defun emagent-tool-structural-find-errors-async (callback file)
@@ -2059,7 +2172,7 @@ Arguments: CALLBACK."
            "--lang" (emagent-struct--lang-for file))))
 
 (cl-defun emagent-tool-structural-replace-async (callback file symbol new-body)
-  "Replace top-level node SYMBOL in FILE with NEW-BODY asynchronously.
+  "Replace top-level node SYMBOL in FILE asynchronously.
 
 Arguments: CALLBACK."
   (condition-case err
@@ -2068,15 +2181,26 @@ Arguments: CALLBACK."
     (error (funcall callback (error-message-string err) t)
            (cl-return-from emagent-tool-structural-replace-async)))
   (let* ((content (emagent-tools--read-structural-file-content file))
-         (lang (emagent-struct--lang-for file)))
+         (lang (emagent-struct--lang-for file))
+         (expected emagent-tools--expected-file-tick)
+         (acp emagent-tools--acp-session-p))
     (apply #'emagent-struct--call-async
            (lambda (updated is-error)
              (if is-error
                  (funcall callback updated t)
-               (emagent-tools--write-file-content file updated)
-               (when emagent-struct-eval-after-structural-edit
-                 (ignore-errors (eval (read new-body))))
-               (funcall callback (format "Wrote %s" (expand-file-name file)) nil)))
+               (condition-case err
+                   (let ((emagent-tools--expected-file-tick expected)
+                         (emagent-tools--acp-session-p acp))
+                     (emagent-tools--write-file-content file updated)
+                     (when emagent-struct-eval-after-structural-edit
+                       (ignore-errors (eval (read new-body))))
+                     (let ((result (format "Wrote %s" (expand-file-name file))))
+                       (funcall callback
+                                (if acp
+                                    (emagent-tools--append-file-tick file result)
+                                  result)
+                                nil)))
+                 (error (funcall callback (error-message-string err) t)))))
            content "replace" "-" symbol "--body" new-body "--lang" lang)))
 
 (cl-defun emagent-tool-structural-insert-async (callback file after-symbol node)
@@ -2089,15 +2213,26 @@ Arguments: CALLBACK."
     (error (funcall callback (error-message-string err) t)
            (cl-return-from emagent-tool-structural-insert-async)))
   (let* ((content (emagent-tools--read-structural-file-content file))
-         (lang (emagent-struct--lang-for file)))
+         (lang (emagent-struct--lang-for file))
+         (expected emagent-tools--expected-file-tick)
+         (acp emagent-tools--acp-session-p))
     (apply #'emagent-struct--call-async
            (lambda (updated is-error)
              (if is-error
                  (funcall callback updated t)
-               (emagent-tools--write-file-content file updated)
-               (when emagent-struct-eval-after-structural-edit
-                 (ignore-errors (eval (read node))))
-               (funcall callback (format "Wrote %s" (expand-file-name file)) nil)))
+               (condition-case err
+                   (let ((emagent-tools--expected-file-tick expected)
+                         (emagent-tools--acp-session-p acp))
+                     (emagent-tools--write-file-content file updated)
+                     (when emagent-struct-eval-after-structural-edit
+                       (ignore-errors (eval (read node))))
+                     (let ((result (format "Wrote %s" (expand-file-name file))))
+                       (funcall callback
+                                (if acp
+                                    (emagent-tools--append-file-tick file result)
+                                  result)
+                                nil)))
+                 (error (funcall callback (error-message-string err) t)))))
            content "insert" "-" after-symbol "--node" node "--lang" lang)))
 
 (defcustom emagent-allowed-tools '(emagent-tool-fetch-url)

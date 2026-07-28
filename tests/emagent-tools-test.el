@@ -275,6 +275,87 @@ relative paths and does not cross directory boundaries on `*'."
                                                  '(delete-file))))
   (should (equal nil (emagent-tools--symbols-in-form '(+ 1 2) '(delete-file)))))
 
+
+(ert-deftest emagent-tools-test-file-tick-stable-for-same-content ()
+  (let* ((dir (make-temp-file "emagent-tick-" t))
+         (file (expand-file-name "note.txt" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir))
+    (unwind-protect
+        (progn
+          (write-region "hello\n" nil file nil 'silent)
+          (let ((tick (emagent-tools--file-tick file)))
+            (should (stringp tick))
+            (should (string= tick (emagent-tools--file-tick file)))
+            (write-region "hello\n" nil file nil 'silent)
+            (should (string= tick (emagent-tools--file-tick file)))
+            (write-region "other\n" nil file nil 'silent)
+            (should-not (string= tick (emagent-tools--file-tick file)))))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-mcp-write-requires-tick ()
+  (let* ((dir (make-temp-file "emagent-tick-req-" t))
+         (file (expand-file-name "note.txt" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p t)
+         (emagent-tools--expected-file-tick nil))
+    (unwind-protect
+        (progn
+          (write-region "v1\n" nil file nil 'silent)
+          (should-error (emagent-tools--write-file-content file "v2\n")))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-mcp-write-stale-tick ()
+  (let* ((dir (make-temp-file "emagent-tick-stale-" t))
+         (file (expand-file-name "note.txt" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p t))
+    (unwind-protect
+        (progn
+          (write-region "v1\n" nil file nil 'silent)
+          (let ((tick (emagent-tools--file-tick file)))
+            (write-region "v1b\n" nil file nil 'silent)
+            (let ((emagent-tools--expected-file-tick tick))
+              (should-error (emagent-tools--write-file-content file "v2\n")))))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-mcp-write-matching-tick ()
+  (let* ((dir (make-temp-file "emagent-tick-ok-" t))
+         (file (expand-file-name "note.txt" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p t)
+         (emagent-tools-show-written-buffer nil))
+    (unwind-protect
+        (progn
+          (write-region "v1\n" nil file nil 'silent)
+          (let* ((tick (emagent-tools--file-tick file))
+                 (emagent-tools--expected-file-tick tick))
+            (emagent-tools--write-file-content file "v2\n")
+            (should (string= "v2\n"
+                             (with-temp-buffer
+                               (insert-file-contents file)
+                               (buffer-string))))
+            (should-not (string= tick (emagent-tools--file-tick file)))))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-mcp-read-file-includes-tick ()
+  (let* ((dir (make-temp-file "emagent-tick-read-" t))
+         (file (expand-file-name "note.txt" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p t))
+    (unwind-protect
+        (progn
+          (write-region "hello\n" nil file nil 'silent)
+          (let ((out (emagent-tool-read-file file)))
+            (should (string-match-p "\\`emagent-tick: " out))
+            (should (string-match-p "---\nhello\n\\'" out))))
+      (delete-directory dir t))))
+
+
 (provide 'emagent-tools-test)
 
 ;;; emagent-tools-test.el ends here
