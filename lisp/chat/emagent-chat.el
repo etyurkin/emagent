@@ -2123,12 +2123,34 @@ is not lost after `completing-read' returns."
     (set-process-query-on-exit-flag proc nil)
     proc))
 
+(defun emagent-chat--mcp-reload-session (buffer &optional name)
+  "Reconnect BUFFER's ACP session so MCP tools load after auth.
+
+NAME is the MCP server id used in status messages."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (derived-mode-p 'emagent-mode)
+        (unless (fboundp 'emagent-acp-shutdown-buffer)
+          (require 'emagent-acp))
+        (message "emagent: reconnecting to load MCP tools%s…"
+                 (if name (format " (%s)" name) ""))
+        (emagent-chat-seed-cursor-slash-commands)
+        (when (bound-and-true-p emagent-acp--session)
+          (emagent-acp-shutdown-buffer))
+        (emagent-acp-ensure-connected
+         :on-ready
+         (lambda ()
+           (message "emagent: MCP server%s ready — reconnected"
+                    (if name (format " %s" name) ""))))))))
+
 (defun emagent-chat--mcp-login (name &optional provider)
   "Authenticate MCP server NAME via the provider CLI (async).
 
 PROVIDER defaults to `emagent-chat-provider'.  Captured explicitly so the
-exit callback does not depend on buffer-local state after the minibuffer."
+exit callback does not depend on buffer-local state after the minibuffer.
+On success, reconnects the ACP session so gateway tools are rediscovered."
   (let* ((prov (or provider emagent-chat-provider))
+         (buf (current-buffer))
          (emagent-chat-provider prov))
     (pcase-let ((`(,program . ,directory) (emagent-chat--mcp-cli)))
       ;; Defer past minibuffer teardown — a bare `message' right after
@@ -2142,29 +2164,35 @@ exit callback does not depend on buffer-local state after the minibuffer."
        program directory (list "mcp" "login" name)
        (lambda (code _out)
          (if (zerop code)
-             (progn
-               (when (eq prov 'cursor)
+             (if (eq prov 'cursor)
                  (let ((emagent-chat-provider prov))
                    (ignore-errors
                      (emagent-cursor-write-mcp-approvals directory))
-                   (emagent-chat--mcp-enable name)))
-               (message
-                "emagent: MCP server %s authenticated — reconnect (toggle emagent-mode) to load tools"
-                name))
+                   (emagent-chat--mcp-enable
+                    name
+                    (lambda (_enable-code _enable-out)
+                      (emagent-chat--mcp-reload-session buf name))))
+               (emagent-chat--mcp-reload-session buf name))
            (message "emagent: MCP login for %s failed (exit %s); see *Emagent Log*"
                     name code)))
        t))))
 
-(defun emagent-chat--mcp-enable (name)
-  "Approve Cursor MCP server NAME for the project cwd (async)."
-  (when (eq emagent-chat-provider 'cursor)
+(defun emagent-chat--mcp-enable (name &optional on-done)
+  "Approve Cursor MCP server NAME for the project cwd (async).
+
+ON-DONE, when non-nil, is called as (ON-DONE CODE OUT) after enable
+finishes (or immediately when the provider is not Cursor)."
+  (if (not (eq emagent-chat-provider 'cursor))
+      (when on-done (funcall on-done nil nil))
     (pcase-let ((`(,program . ,directory) (emagent-chat--mcp-cli)))
       (emagent-chat--mcp-start
        program directory (list "mcp" "enable" name)
-       (lambda (code _out)
+       (lambda (code out)
          (if (zerop code)
              (emagent-log "mcp enable %s: ok" name)
-           (emagent-log "mcp enable %s failed (exit %s)" name code)))))))
+           (emagent-log "mcp enable %s failed (exit %s)" name code))
+         (when on-done
+           (funcall on-done code out)))))))
 
 (defun emagent-chat--mcp-pick-server (servers &optional preferred)
   "Prompt for a server from SERVERS alist and login/enable as needed.
