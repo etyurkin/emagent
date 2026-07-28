@@ -135,10 +135,7 @@ Run \\[emagent-mode] to reconnect a saved session."
 
 Captured immediately after `define-derived-mode' so the public
 `emagent-mode' defun below can wrap display deferral without `advice-add'.
-Installed into `emagent--derived-mode-function' for
-`emagent-chat-mode-activate' (which must not require this facade back).")
-
-(setq emagent--derived-mode-function #'emagent--derived-mode)
+Called by `emagent--run-derived-mode' in `emagent-chat-mode-activate'.")
 
 
 ;;;###autoload
@@ -247,6 +244,19 @@ working inside session buffers."
          t)
         (call-interactively 'emagent--transient-menu))
     (message "emagent: SPC=send, c=connect, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
+
+;; Register session org buffers already open when this facade finishes
+;; loading (after `emagent--derived-mode' is captured).
+(dolist (buf (buffer-list))
+  (with-current-buffer buf
+    (when (and (not (derived-mode-p 'emagent-mode))
+               (emagent--session-buffer-p))
+      (if emagent--session-pending
+          (cl-pushnew buf emagent--pending-buffers)
+        (if (and emagent-activate-on-display
+                 (not (emagent-chat--buffer-displayed-p)))
+            (emagent--mark-session-pending)
+          (emagent--activate-session-now))))))
 
 (provide 'emagent-chat-mode)
 ;;; emagent-chat-mode.el ends here

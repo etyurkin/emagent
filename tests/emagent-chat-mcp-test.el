@@ -55,12 +55,13 @@
    (lambda (buffer _dir)
      (let (dispatched ran)
        (with-current-buffer buffer
-         (setq emagent-chat--on-send (lambda (&rest _args) (setq dispatched t)))
          (goto-char (point-max))
          (insert (emagent-chat--user-heading-prefix) "/mcp")
          (emagent-test--with-mocks
              (((symbol-function 'emagent-chat--slash-mcp-apply)
-               (lambda (&optional _text) (setq ran t))))
+               (lambda (&optional _text) (setq ran t)))
+              ((symbol-function 'emagent-acp-send)
+               (lambda (&rest _args) (setq dispatched t))))
            (emagent-chat-send))
          (should ran)
          (should-not dispatched))))))

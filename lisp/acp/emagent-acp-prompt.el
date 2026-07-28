@@ -313,8 +313,7 @@ Skips silently when the buffer is gone or a prompt is already running
       (cond
        ((emagent-acp-state-busy state)
         (emagent-log "wakeup: skipped — a prompt is already running"))
-       ((not (and (fboundp 'emagent-chat--insert-user-heading-with-text)
-                  emagent-chat--on-send))
+       ((not (fboundp 'emagent-chat--insert-user-heading-with-text))
         (emagent-log "wakeup: skipped — chat send unavailable"))
        (t
         (emagent-log "wakeup: %s" (emagent-log-truncate-line text 80))
@@ -324,7 +323,9 @@ Skips silently when the buffer is gone or a prompt is already running
         ;; emagent-acp-send drops the turn unless a send token is armed
         ;; (manual C-c C-c calls send-pending-begin; Build/wakeup must too).
         (emagent-chat--send-pending-begin)
-        (funcall emagent-chat--on-send text))))))
+        (unless (fboundp 'emagent-acp-send)
+          (require 'emagent-acp-connect))
+        (emagent-acp-send text))))))
 
 (defun emagent-acp--set-session-mode (state mode-id)
   "Best-effort `session/set_mode' to MODE-ID for STATE."
@@ -361,8 +362,6 @@ work, but do not invent a synthetic `* user>' line in the transcript."
       (cond
        ((emagent-acp-state-busy state)
         (emagent-log "plan-build: skipped — a prompt is already running"))
-       ((not emagent-chat--on-send)
-        (emagent-log "plan-build: skipped — chat send unavailable"))
        (t
         (emagent-log "plan-build: %s" (emagent-log-truncate-line text 80))
         ;; Build owns the next turn; allow a normal stub after it finishes.
@@ -370,7 +369,9 @@ work, but do not invent a synthetic `* user>' line in the transcript."
         (emagent-chat--begin-response (emagent-chat--user-zone-start))
         (emagent-chat--ensure-follow-window buffer)
         (emagent-chat--send-pending-begin)
-        (funcall emagent-chat--on-send text))))))
+        (unless (fboundp 'emagent-acp-send)
+          (require 'emagent-acp-connect))
+        (emagent-acp-send text))))))
 
 (defun emagent-acp--arm-plan-build (state)
   "Arm a Build turn when create_plan queued one on STATE."

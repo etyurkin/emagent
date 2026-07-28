@@ -82,10 +82,12 @@
    (lambda (buffer _dir)
      (with-current-buffer buffer
        (let (dispatched)
-         (setq emagent-chat--on-send (lambda (&rest _args) (setq dispatched t)))
          (goto-char (point-max))
          (insert (emagent-chat--user-heading-prefix) "/compress")
-         (emagent-chat-send)
+         (emagent-test--with-mocks
+             (((symbol-function 'emagent-acp-send)
+               (lambda (&rest _args) (setq dispatched t))))
+           (emagent-chat-send))
          (should-not dispatched)
          (should (string-match-p "No conversation to compress" (buffer-string))))))))
 
@@ -97,12 +99,13 @@
        (goto-char (point-max))
        (insert (emagent-chat--user-heading-prefix) "hello\n\n** Response\nhi there\n\n")
        (let (sent-text sent-compress)
-         (setq emagent-chat--on-send
-               (lambda (text &optional compress)
-                 (setq sent-text text sent-compress compress)))
          (goto-char (point-max))
          (insert (emagent-chat--user-heading-prefix) "/compress")
-         (emagent-chat-send)
+         (emagent-test--with-mocks
+             (((symbol-function 'emagent-acp-send)
+               (lambda (text &optional compress)
+                 (setq sent-text text sent-compress compress))))
+           (emagent-chat-send))
          (should sent-compress)
          (should (string-match-p "<conversation>" sent-text))
          (should (string-match-p "hello" sent-text)))))))
@@ -2284,8 +2287,9 @@ tables stayed ragged until the user hit TAB."
       (emagent-test--with-mocks
           (((symbol-function 'emagent-acp--finalize-in-flight-prompt)
             (lambda (&optional _notice) (setq finalized t) t))
-           ((symbol-function 'emagent-chat--begin-response) (lambda (&optional _at) nil)))
-        (setq emagent-chat--on-send (lambda (text) (setq sent text)))
+           ((symbol-function 'emagent-chat--begin-response) (lambda (&optional _at) nil))
+           ((symbol-function 'emagent-acp-send)
+            (lambda (text &optional _compress) (setq sent text))))
         (let ((inhibit-message t))
           (emagent-btw "check tests"))
         (should finalized)
@@ -2300,8 +2304,9 @@ tables stayed ragged until the user hit TAB."
       (emagent-test--with-mocks
           (((symbol-function 'emagent-acp--finalize-in-flight-prompt)
             (lambda (&optional _notice) (setq finalized t) t))
-           ((symbol-function 'emagent-chat--begin-response) (lambda (&optional _at) nil)))
-        (setq emagent-chat--on-send (lambda (text) (setq sent text)))
+           ((symbol-function 'emagent-chat--begin-response) (lambda (&optional _at) nil))
+           ((symbol-function 'emagent-acp-send)
+            (lambda (text &optional _compress) (setq sent text))))
         (let ((inhibit-message t))
           (emagent-btw "note"))
         (should-not finalized)

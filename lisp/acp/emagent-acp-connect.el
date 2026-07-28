@@ -159,14 +159,11 @@ summary prompt rather than ordinary chat input."
                (emagent-acp--send-prompt-safe buf user-text compress)))))))))
 
 (defun emagent-acp--wire-chat-buffer ()
-  "Attach the ACP send/attach/quit callbacks to the current chat buffer.
+  "Install buffer teardown for the current emagent chat buffer.
 
-`emagent-chat-mode' cannot require this file back (it requires `emagent-chat',
-which this file requires), so the callback slots it declares are wired from
-here instead, on `emagent-mode-hook'."
-  (setq emagent-chat--on-send #'emagent-acp-send
-        emagent-chat--on-attach #'emagent-acp-attach-context
-        emagent-chat--on-quit #'emagent-acp-shutdown-buffer)
+Adds `emagent-acp-shutdown-buffer' on `kill-buffer-hook'.  Send/attach/quit
+commands call ACP entry points directly (lazy `require'), so no buffer-local
+function slots are needed."
   (add-hook 'kill-buffer-hook #'emagent-acp-shutdown-buffer nil t))
 
 (add-hook 'emagent-mode-hook #'emagent-acp--wire-chat-buffer)

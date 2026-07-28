@@ -51,6 +51,19 @@
 (require 'emagent-chat-model-ui)
 (require 'emagent-chat-mcp)
 
+(defun emagent-chat--acp-send (text &optional compress)
+  "Send TEXT via `emagent-acp-send', loading connect on first use.
+Optional COMPRESS is forwarded for `/compress' session reset."
+  (unless (fboundp 'emagent-acp-send)
+    (require 'emagent-acp-connect))
+  (emagent-acp-send text compress))
+
+(defun emagent-chat--acp-quit ()
+  "Shut down this buffer's ACP session, loading send on first use."
+  (unless (fboundp 'emagent-acp-shutdown-buffer)
+    (require 'emagent-acp-send))
+  (emagent-acp-shutdown-buffer))
+
 (defun emagent-chat--operation-active-p ()
   "Return non-nil when the buffer has work Esc-Esc should stop."
   (or emagent-chat--send-pending
@@ -129,21 +142,20 @@ partial response, and sends `btw, TEXT' as a new prompt."
     (let ((response-pos (emagent-chat--insert-user-heading-with-text text)))
       (emagent-chat--begin-response response-pos))
     (emagent-chat--ensure-follow-window)
-    (when emagent-chat--on-send
-      (emagent-chat--send-pending-begin)
-      (funcall emagent-chat--on-send text))))
+    (emagent-chat--send-pending-begin)
+    (emagent-chat--acp-send text)))
 
 (defun emagent-chat--dispatch-compress ()
   "Handle a /compress-family slash command from `emagent-chat-send'.
 
 Summarizes the prior conversation and forwards the summary to
-`emagent-chat--on-send' with the compress flag, so ACP resets the session with
+`emagent-acp-send' with the compress flag, so ACP resets the session with
 it once the turn finishes (see `emagent-acp-send-prompt').  With no prior
 conversation, fails the just-opened response instead of dispatching."
   (let ((history (emagent-chat--conversation-history-text)))
     (if (string-empty-p history)
         (emagent-chat-fail-assistant "No conversation to compress")
-      (funcall emagent-chat--on-send (emagent-chat--compress-prompt-text history) t))))
+      (emagent-chat--acp-send (emagent-chat--compress-prompt-text history) t))))
 
 (defun emagent-chat-send ()
   "Send the `* user>' prompt at point to the agent (C-c C-c).
@@ -193,11 +205,10 @@ Sending a previous prompt replaces its old response."
           ;; to the live end so the first thought chunk does not clear
           ;; sticky follow when that end is briefly off-screen.
           (emagent-chat--ensure-follow-window)
-          (when emagent-chat--on-send
-            (if (and (emagent-chat--bare-slash-command-p input)
-                     (emagent-chat--compress-command-p input))
-                (emagent-chat--dispatch-compress)
-              (funcall emagent-chat--on-send input))))))))
+          (if (and (emagent-chat--bare-slash-command-p input)
+                   (emagent-chat--compress-command-p input))
+              (emagent-chat--dispatch-compress)
+            (emagent-chat--acp-send input)))))))
 
 (defun emagent-chat-interrupt ()
   "Stop any in-flight emagent work (ESC ESC).
@@ -226,8 +237,7 @@ above the user zone, jumps to the end of the buffer first."
 (defun emagent-chat-quit ()
   "Disconnect this buffer's ACP agent and bury the window."
   (interactive)
-  (when emagent-chat--on-quit
-    (funcall emagent-chat--on-quit))
+  (emagent-chat--acp-quit)
   (bury-buffer))
 
 (provide 'emagent-chat-actions)
