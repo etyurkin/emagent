@@ -37,9 +37,8 @@
 (require 'seq)
 (require 'json)
 (require 'subr-x)
-(require 'emagent-acp-custom)
-(require 'emagent-acp-provider)
-(require 'emagent-acp-state)
+(require 'emagent-acp-protocol)
+(require 'emagent-acp-usage)
 (require 'emagent-log)
 (require 'emagent-tools)
 
@@ -1083,7 +1082,7 @@ Arguments: STATE."
         (when id (remhash id pending-table)))
       (when (emagent-acp-state-permission-queue state)
         (unless (fboundp 'emagent-acp--drain-permission-queue)
-          (require 'emagent-acp-permission-queue))
+          (require 'emagent-acp-permit))
         (emagent-acp--drain-permission-queue state)))))
 
 (provide 'emagent-acp-tool-call)

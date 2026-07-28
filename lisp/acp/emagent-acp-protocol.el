@@ -25,21 +25,516 @@
 
 ;;; Commentary:
 ;;
-;; Self-contained implementation of the Agent Communication Protocol (ACP)
-;; for emagent.  Symbols use the emagent-acp- prefix so this file can
-;; coexist with xenodium/acp.el in the same Emacs session.
+;; ACP protocol messages, customs, and session state.
 ;;
-;; Covers wire logging, JSON helpers, client lifecycle, stdio framing /
-;; routing, and outbound request builders.
-;;
-;; See https://agentclientprotocol.com for the ACP specification.
-
 ;;; Code:
 
 (require 'cl-lib)
 (require 'map)
 (require 'json)
-(require 'emagent-acp-custom)
+(require 'emagent-log)
+
+;; Backward compatibility (aliases before their referents).
+(define-obsolete-variable-alias 'emagent-acp-emacs-native 'emagent-acp-prefer-emacs "0.1.0")
+
+(define-obsolete-variable-alias 'emagent-acp-emacs-only 'emagent-acp-prefer-emacs "0.1.0")
+
+(defcustom emagent-acp-prefer-emacs t
+  "Instruct the agent to prefer emagent and Emacs tools, with external fallback.
+
+When non-nil (default), emagent tells the agent to reach for emagent MCP tools
+and Emacs Lisp first, but still allows Claude Code built-in tools, plugin slash
+commands, and forwarded MCP gateways when Emacs cannot do the job.  File search
+uses pure Emacs grep rather than ripgrep.  Keep `emagent-acp-file-access'
+enabled so ACP file read/write route through Emacs buffers."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-file-access t
+  "Route ACP file read/write through Emacs file tools.
+
+When non-nil (default), agent read_file and write_file calls run
+`emagent-tools--read-file-content' and `emagent-tools--write-file-content'
+instead of cursor-agent's own file tools.  That matches agent-shell and
+avoids macOS \"access data from other apps\" prompts on normal project trees.
+
+Emagent still refuses iCloud and ~/Library/Containers paths to avoid separate
+iCloud Drive prompts.  Set to nil only if you prefer the agent's own file tools."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-auto-approve-permissions nil
+  "Automatically approve ACP session permission prompts at the emagent gate.
+
+When nil (default), emagent prompts in the chat buffer unless the user has
+already allowed the request fingerprint for this ACP session
+\(`emagent-permissions-directory'/sessions), globally (\"Allow always\"), per
+project directory (projects/), or in a legacy buffer header
+\(#+EMAGENT_ALLOWED_PERMISSIONS).
+
+When `safe', read and write tools are auto-approved without prompting.
+Execute (shell) commands are inspected for destructive operations — rm,
+dd, formatting, and similar — and only prompted then.  Harmless
+commands like `mvn compile` or `ls` pass through without prompting.
+
+When t, all permission prompts that pass emagent validation are
+auto-approved without user interaction.
+
+Emagent always replies to the agent with a one-shot allow optionId
+\(never allow_always), so every tool call still arrives at the emagent
+gate for validation even after the user chooses \"Allow always\"."
+  :type '(choice
+          (const :tag "Prompt for all permissions" nil)
+          (const :tag "Auto-approve safe tools, prompt only for destructive shell commands" safe)
+          (const :tag "Auto-approve all permissions" t))
+  :group 'emagent)
+
+(defcustom emagent-acp-confirm-fs-writes nil
+  "When non-nil, require diff + Allow before each ACP fs/write_text_file.
+
+When nil (default), Emacs writes immediately after path checks, so file edits
+are not blocked by a second in-editor prompt.  ACP `session/request_permission'
+is unchanged; see `emagent-acp-auto-approve-permissions'."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-external-tool-gate-hints t
+  "When non-nil, detect extra agent-side tool permission layers and log hints.
+
+Emacs only answers ACP `session/request_permission' (see
+`emagent-acp-auto-approve-permissions').  Claude Agent SDK, Cursor, and
+similar stacks may still block tools afterward.  When this is non-nil,
+emagent records hints after `initialize' (from the agent command line and
+optional capability metadata) and when refusal-shaped text appears in
+streamed chunks or tool-call labels, then logs to `emagent-log-buffer-name'."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-honor-schedule-wakeup t
+  "When non-nil, honor the agent's `ScheduleWakeup' tool calls.
+
+Agents pace long-running loops by calling ScheduleWakeup with a delay and
+a prompt, ending their turn and expecting the client to re-invoke them
+after the delay.  When enabled, emagent arms a timer when the turn
+completes and sends the wakeup prompt as a new user turn; a manual prompt
+sent in the meantime cancels the pending wakeup.  When nil, ScheduleWakeup
+calls render but nothing fires."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-auto-accept-plans nil
+  "When to auto-accept Cursor `cursor/create_plan' without prompting.
+
+nil — always show the plan with Accept/Reject (default; matches Cursor IDE)
+t — always accept
+permissions — accept when the session is Allow-all or
+`emagent-acp-auto-approve-permissions' is t
+
+Batch/noninteractive sessions always auto-accept so ERT does not hang."
+  :type '(choice (const :tag "Always prompt" nil)
+                 (const :tag "Always accept" t)
+                 (const :tag "Follow permission auto-approve" permissions))
+  :group 'emagent)
+
+(defcustom emagent-acp-auto-build-plans t
+  "When non-nil, accept of `cursor/create_plan' queues a Build turn.
+
+Cursor ends the planning turn after create_plan; the IDE's Build button
+is a separate follow-up.  Emagent mirrors that by sending an execute
+prompt (and switching to agent mode) once the current turn finishes."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-stream-to-buffer nil
+  "When non-nil, stream agent chunks into the chat buffer while a prompt is busy.
+
+Disabled by default because interleaved ACP notifications can finalize before
+the full reply arrives.  Thinking and answers are rendered once the prompt
+completes."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-thought-progress 'buffer
+  "How to surface agent reasoning from `agent_thought_chunk' updates.
+
+- nil — silent in `emagent-log-buffer-name' (Thinking still appears on finish)
+- buffer — stream and show Thinking in the chat buffer (default)
+- minimal — truncated one-line log entries in `emagent-log-buffer-name'
+- trail — log entries keeping the sentence tail visible
+- both — Thinking block in the chat buffer and minimal log lines"
+  :type '(choice (const :tag "Silent" nil)
+                 (const :tag "Chat buffer" buffer)
+                 (const :tag "Log per sentence" minimal)
+                 (const :tag "Log sentence tail" trail)
+                 (const :tag "Chat buffer and log" both))
+  :group 'emagent)
+
+(defcustom emagent-acp-render-delay 0.05
+  "Seconds to wait after the last prompt chunk before rendering the response."
+  :type 'number
+  :group 'emagent)
+
+(defcustom emagent-acp-message-drain-batch-size 1
+  "ACP wire messages handled per timer event before yielding to Emacs.
+
+1 keeps the UI responsive during heavy agent output.  Raise only if you
+prefer throughput and accept longer stretches without timer service."
+  :type 'integer
+  :group 'emagent)
+
+(defcustom emagent-acp-message-drain-yield 0.01
+  "Seconds to wait before draining the next ACP message batch.
+
+After each batch (`emagent-acp-message-drain-batch-size'), if more wire
+messages remain, the drain reschedules with this delay so redisplay and
+other timers can run during heavy Cursor/Claude output.  The first
+enqueued message still starts a drain immediately (delay 0)."
+  :type 'number
+  :group 'emagent)
+
+(defcustom emagent-acp-permission-drain-batch-size 16
+  "Auto-approve permission requests handled per drain turn before yielding.
+
+A flood of ACP `session/request_permission' messages (common with MCP tools)
+used to run a tight `while' on the Emacs command loop.  Process at most this
+many auto-approved requests, then reschedule so the UI can breathe.
+Interactive permission prompts still insert one dialog and return."
+  :type 'integer
+  :group 'emagent)
+
+(defcustom emagent-log-agent-stderr nil
+  "When non-nil, log filtered cursor-agent stderr to `emagent-log-buffer-name'."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-watchdog-timeout 300
+  "Seconds of inactivity before the prompt watchdog fires.
+
+The watchdog resets on each tool-call notification, so this measures idle
+time since the last tool call, not total prompt duration.  When ACP work is
+still outstanding (pending request, permission prompt, tool-resolve), the
+watchdog extends instead of closing the Response.  Increase if your agent
+regularly makes long chains of tool calls."
+  :type 'integer
+  :group 'emagent)
+
+(defcustom emagent-acp-prompt-retry-attempts 3
+  "How many times to try a prompt before showing a network error to the user.
+
+A prompt request that fails with a transient network error (see
+`emagent-acp--retriable-prompt-error-p', e.g. Cursor's
+\"RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh\")
+is retried automatically with exponential backoff up to this many total
+attempts.  Only after the last attempt fails is the error surfaced in the
+chat buffer.  Set to 1 to disable retries."
+  :type 'integer
+  :group 'emagent)
+
+(defcustom emagent-acp-prompt-retry-base-delay 1.5
+  "Base seconds for exponential backoff between retriable prompt retries.
+
+The delay before retry N (1-based) is BASE * 2^(N-1), so with the default
+1.5 the waits are roughly 1.5s, then 3s, then 6s.  See
+`emagent-acp-prompt-retry-attempts'."
+  :type 'number
+  :group 'emagent)
+
+(defcustom emagent-acp-trace nil
+  "Log ACP wire events to `emagent-log-buffer-name'.
+
+Shows outgoing methods, each `session/update' type with payload size, and
+when `session/prompt' completes.  Also enables `emagent-acp-logging-enabled' for
+the full wire log in the ACP logs buffer (`emagent-acp-logs-buffer')."
+  :type 'boolean
+  :group 'emagent)
+
+(defconst emagent-acp-auto-model-id "auto"
+  "Model id used by cursor-agent-acp for automatic model selection.
+
+Claude and other agents that do not advertise this id fall back to the
+session's current model instead.")
+
+(defvar-local emagent-acp--session nil
+  "ACP session state for the current emagent buffer.")
+
+(defvar-local emagent-acp--when-connected-queue nil
+  "Callbacks waiting for `emagent-acp--connected-p' in this buffer.")
+
+(defun emagent-acp--make-usage ()
+  "Return a fresh usage hash table."
+  (let ((u (make-hash-table :test 'eq)))
+    (puthash :context-used nil u)
+    (puthash :context-size nil u)
+    (puthash :total-tokens 0 u)
+    u))
+
+;; Defined before any code that reads or `setf's its slots: the accessors' gv
+;; setter expanders must be registered at compile time, else a `setf' on a slot
+;; earlier in the file falls back to a nonexistent `(setf ...)' function.
+(cl-defstruct (emagent-acp-state
+               (:constructor emagent-acp--state-create)
+               (:copier nil))
+  "Mutable per-buffer ACP session state.
+
+Replaces the former untyped hash table so field access is checked
+at byte-compile time.  Slots that are themselves maps (the usage
+and tool-call/tool-resolve tables, keyed by id) stay hash tables."
+  ;; Connection
+  client chat-buffer on-reveal provider mcp-http initialized
+  ;; Session
+  session-id config-options (usage (emagent-acp--make-usage))
+  session-auto-approve permission-auto-allow
+  external-tool-gate-reasons external-tool-gate-logged
+  external-tool-refusal-logged
+  agent-rss agent-rss-timer
+  ;; Turn
+  ready busy
+  (assistant-text "") (thought-text "") (thought-buffer "")
+  prompt-finalized prompt-finishing (prompt-generation 0)
+  prompt-retry-gen
+  finish-token finish-timer prompt-watchdog prompt-watchdog-timer
+  extra-context compress-pending quiet-prompt replaying-history
+  continue-attempts deferred-complete-response
+  current-tool current-tool-kind tool-call-since-last-chunk
+  (tool-call-titles (make-hash-table :test 'equal))
+  (tool-call-inputs (make-hash-table :test 'equal))
+  (tool-call-labels (make-hash-table :test 'equal))
+  (tool-call-decisions (make-hash-table :test 'equal))
+  (tool-call-pending (make-hash-table :test 'equal))
+  tool-resolve-queue tool-resolve-worker
+  (tool-resolve-attempts (make-hash-table :test 'equal))
+  ;; Permission gate
+  permission-queue permission-busy permission-drain-timer
+  ;; Agent-scheduled wakeup (ScheduleWakeup tool)
+  wakeup-request wakeup-timer
+  ;; Callbacks (wired by the app; see emagent.el)
+  cb-chunk cb-thought cb-finish cb-fail cb-slash-commands
+  cb-tool-call cb-permission cb-status
+  ;; After cursor/create_plan accept: follow-up Build turn
+  plan-build-prompt plan-build-timer
+  ;; Session mode (ACP modes / current_mode_update); kept last for hot-reload.
+  session-mode-id available-modes)
+
+(defun emagent-acp--strip-pino-colors (string)
+  "Remove literal pino color tokens like [32m from STRING."
+  (replace-regexp-in-string "\\[[0-9]+m" "" string))
+
+(defun emagent-acp--agent-log-line-p (line)
+  "Return non-nil when LINE is cursor-agent info/warn stderr."
+  (let ((line (string-trim (emagent-acp--strip-pino-colors line))))
+    (or (string-empty-p line)
+        (string-match-p "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] .*\\[ *\\(info\\|warn\\) *\\]:" line))))
+
+(defun emagent-acp--stderr-notify-p (emagent-acp-error)
+  "Return non-nil when ACP-ERROR should be shown to the user.
+
+Arguments: EMAGENT-ACP-ERROR."
+  (let ((message (string-trim (or (map-elt emagent-acp-error 'message) (format "%s" emagent-acp-error)))))
+    (cond
+     ((string-empty-p message) nil)
+     ((string-match-p "\\`\\(?:finished\\|Process\\|acp-client(\\)" message) nil)
+     ((string-match-p "\\[32minfo\\|\\[33mwarn" message) nil)
+     ((string-match-p "RetriableError" message) nil)
+     ((string-match-p "ApiError\\|failed with status\\|\\[31merror" message) t)
+     (t
+      (let ((lines (split-string message "\n" t)))
+        (not (and lines (seq-every-p #'emagent-acp--agent-log-line-p lines))))))))
+
+(defun emagent-acp--log-agent-stderr (message)
+  
+  "Internal helper for MESSAGE."
+  (when emagent-log-agent-stderr
+    (emagent-log "agent: %s" (string-trim message))))
+
+(defun emagent-acp--session ()
+  
+  "Internal helper."
+  (or emagent-acp--session
+      (error "No active emagent session for this buffer")))
+
+(defun emagent-acp--turn-phase (state)
+  "Return the lifecycle phase of STATE's current turn.
+
+One of:
+  `idle'        no turn in flight;
+  `streaming'   a prompt is in flight (`:busy'), receiving output and possibly
+                paused on a permission prompt;
+  `finalizing'  streaming ended, the response is being rendered;
+  `done'        the response has been fully rendered.
+
+This derives the phase from the turn flags so callers share one
+vocabulary for the turn state machine.  The flags remain the
+underlying representation for now."
+  (cond
+   ((emagent-acp-state-busy state) 'streaming)
+   ((emagent-acp-state-prompt-finishing state)
+    (if (emagent-acp-state-prompt-finalized state) 'done 'finalizing))
+   (t 'idle)))
+
+(defun emagent-acp--connecting-p ()
+  "Return non-nil when an ACP session is starting but not yet ready."
+  (and emagent-acp--session
+       (not (emagent-acp-state-ready emagent-acp--session))
+       ;; From first `emagent-acp-start' until `session-ready': keep any
+       ;; additional `ensure-connected' calls from tearing the attempt down.
+       ;; After init, require a live client so a dead half-session can reconnect.
+       (or (not (emagent-acp-state-initialized emagent-acp--session))
+           (and (emagent-acp-state-client emagent-acp--session)
+                (emagent-acp--client-started-p
+                 (emagent-acp-state-client emagent-acp--session))))))
+
+(defun emagent-acp--run-when-connected-queue ()
+  "Run and clear `emagent-acp--when-connected-queue'."
+  (while emagent-acp--when-connected-queue
+    (let ((fn (pop emagent-acp--when-connected-queue)))
+      (condition-case err
+          (funcall fn)
+        (error
+         (emagent-log "connect callback failed: %s"
+                      (error-message-string err)))))))
+
+(defun emagent-acp--clear-when-connected-queue ()
+  "Drop queued `emagent-acp-ensure-connected' callbacks without running them."
+  (setq emagent-acp--when-connected-queue nil))
+
+(defun emagent-acp--connected-p ()
+  "Return non-nil when the current buffer has a live, ready ACP session."
+  (and emagent-acp--session
+       (emagent-acp-state-ready emagent-acp--session)
+       (let ((client (emagent-acp-state-client emagent-acp--session)))
+         (and client (emagent-acp--client-started-p client)))))
+
+(defun emagent-acp--permission-pending-p (state)
+  "Return non-nil when STATE has unanswered permission requests."
+  (or (emagent-acp-state-permission-busy state)
+      (emagent-acp-state-permission-queue state)))
+
+(defun emagent-acp--cancel-wakeup (state)
+  "Cancel a pending or armed agent wakeup (ScheduleWakeup) for STATE."
+  (when-let ((timer (emagent-acp-state-wakeup-timer state)))
+    (when (timerp timer) (cancel-timer timer)))
+  (setf (emagent-acp-state-wakeup-timer state) nil)
+  (setf (emagent-acp-state-wakeup-request state) nil))
+
+(defun emagent-acp--cancel-plan-build (state)
+  "Cancel a pending post-create_plan Build turn for STATE.
+
+Clears deferred user-stub suppression and inserts a stub when the chat
+response is already closed so the buffer is not left without a prompt."
+  (when-let ((timer (emagent-acp-state-plan-build-timer state)))
+    (when (timerp timer) (cancel-timer timer)))
+  (setf (emagent-acp-state-plan-build-timer state) nil)
+  (setf (emagent-acp-state-plan-build-prompt state) nil)
+  (when (fboundp 'emagent-acp--chat-buffer)
+    (when-let ((buf (emagent-acp--chat-buffer state)))
+      (when (buffer-live-p buf)
+        (with-current-buffer buf
+          (when (and (boundp 'emagent-chat--defer-user-stub)
+                     emagent-chat--defer-user-stub)
+            (setq emagent-chat--defer-user-stub nil)
+            (when (and (fboundp 'emagent-chat--open-response-p)
+                       (not (emagent-chat--open-response-p))
+                       (fboundp 'emagent-chat--insert-user-heading-stub))
+              (emagent-chat--insert-user-heading-stub))))))))
+
+(defun emagent-acp--cancel-state-timers (state)
+  "Cancel every timer stored in STATE and clear its slot.
+Prevents a reconnect or shutdown from leaving repeating/pending timers
+\(RSS poll, watchdog, finish, permission drain, wakeup, plan-build)
+pointed at dead state."
+  (dolist (timer (list (emagent-acp-state-agent-rss-timer state)
+                       (emagent-acp-state-prompt-watchdog-timer state)
+                       (emagent-acp-state-finish-timer state)
+                       (emagent-acp-state-permission-drain-timer state)
+                       (emagent-acp-state-wakeup-timer state)
+                       (emagent-acp-state-plan-build-timer state)))
+    (when (timerp timer) (cancel-timer timer)))
+  (setf (emagent-acp-state-agent-rss-timer state) nil
+        (emagent-acp-state-prompt-watchdog-timer state) nil
+        (emagent-acp-state-finish-timer state) nil
+        (emagent-acp-state-permission-drain-timer state) nil
+        (emagent-acp-state-wakeup-timer state) nil
+        (emagent-acp-state-wakeup-request state) nil
+        (emagent-acp-state-plan-build-timer state) nil
+        (emagent-acp-state-plan-build-prompt state) nil))
+
+(defun emagent-acp--teardown-stale-session ()
+  "Shut down a dead or incomplete ACP session without clearing persisted ids."
+  (when-let* ((state emagent-acp--session))
+    (emagent-acp--cancel-state-timers state)
+    (when-let ((client (emagent-acp-state-client state)))
+      (ignore-errors (emagent-acp-shutdown :client client))))
+  (setq emagent-acp--session nil))
+
+(cl-defun emagent-acp--make-state (&key client chat-buffer on-reveal)
+  "Return a fresh `emagent-acp-state' for a session.
+
+Arguments: CLIENT, CHAT-BUFFER, ON-REVEAL."
+  (emagent-acp--state-create :client client
+                             :chat-buffer chat-buffer
+                             :on-reveal on-reveal))
+
+(defun emagent-acp--set-callback (state key value)
+  "Set the :cb-* callback slot KEY on STATE to VALUE.
+Bridges the keyword-keyed callback alist wired by the app to typed slots."
+  (pcase key
+    (:cb-chunk          (setf (emagent-acp-state-cb-chunk state) value))
+    (:cb-thought        (setf (emagent-acp-state-cb-thought state) value))
+    (:cb-finish         (setf (emagent-acp-state-cb-finish state) value))
+    (:cb-fail           (setf (emagent-acp-state-cb-fail state) value))
+    (:cb-slash-commands (setf (emagent-acp-state-cb-slash-commands state) value))
+    (:cb-tool-call      (setf (emagent-acp-state-cb-tool-call state) value))
+    (:cb-permission     (setf (emagent-acp-state-cb-permission state) value))
+    (:cb-status         (setf (emagent-acp-state-cb-status state) value))
+    (_ (emagent-log "unknown callback key %S" key))))
+
+(defconst emagent-acp--agent-error-signature-re
+  (concat "RetriableError\\|getaddrinfo\\|ENOTFOUND\\|EAI_AGAIN"
+          "\\|ECONNRESET\\|ECONNREFUSED\\|ConnectionRefused"
+          "\\|ETIMEDOUT\\|EPIPE"
+          "\\|\\[unavailable\\]\\|socket hang up\\|WritableIterable is closed")
+  "Machine-generated markers of a transient error emitted as agent output.
+Deliberately stricter than `emagent-acp--retriable-prompt-error-p': it must
+not match prose such as \"network error\" or \"timeout\" that can legitimately
+appear inside a real answer.")
+
+(defun emagent-acp--turn-did-no-work-p (state)
+  "Return non-nil when STATE's turn did no real work.
+No tool invocations and little text means replaying the prompt is safe."
+  (let ((text (string-trim (or (emagent-acp-state-assistant-text state) "")))
+        (titles (emagent-acp-state-tool-call-titles state)))
+    (and (or (null titles) (zerop (hash-table-count titles)))
+         (< (length text) 400))))
+
+(defun emagent-acp--agent-error-only-response-p (state)
+  "Return non-nil when STATE's finished turn is only a transient agent error.
+
+Some agents (e.g. cursor-agent-acp) accept the prompt, then hit a transient
+network failure and emit the error as the whole turn's output instead of
+failing the request.  Such a turn carries no real content and no tool calls
+\(`emagent-acp--turn-did-no-work-p'), so it is safe for emagent to re-issue the
+prompt with backoff rather than surface the error.  Matching uses
+`emagent-acp--agent-error-signature-re', which only recognises
+machine-generated error markers."
+  (let ((text (string-trim (or (emagent-acp-state-assistant-text state) ""))))
+    (and (not (emagent-acp-state-compress-pending state))
+         (not (emagent-acp-state-quiet-prompt state))
+         (emagent-acp--turn-did-no-work-p state)
+         (not (string-empty-p text))
+         (string-match-p emagent-acp--agent-error-signature-re text))))
+
+(defun emagent-acp--turn-hit-transient-error-p (state)
+  "Return non-nil when STATE's finished turn ended on a transient error marker.
+
+Unlike `emagent-acp--agent-error-only-response-p' this does not require the
+turn to be empty: it is true even when tool calls ran or real content was
+produced.  Such a turn must NOT be replayed (that would repeat side effects
+like commits or pushes); instead emagent resumes it by sending \"continue\",
+mirroring what a user does by hand."
+  (let ((text (or (emagent-acp-state-assistant-text state) "")))
+    (and (not (emagent-acp-state-compress-pending state))
+         (not (emagent-acp-state-quiet-prompt state))
+         (string-match-p emagent-acp--agent-error-signature-re text))))
 
 (defgroup emagent-acp nil
   "ACP (Agent Client Protocol) implementation."

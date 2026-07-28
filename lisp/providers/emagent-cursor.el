@@ -454,7 +454,7 @@ PROCESS-DIRECTORY is passed to `make-process' as the working directory
   (emagent-mcp-ensure-cursor-config)
   (when (buffer-live-p context-buffer)
     (with-current-buffer context-buffer
-      (require 'emagent-chat-mode)
+      (require 'emagent-chat)
       (emagent-cursor-approve-configured-mcp-servers)))
   (emagent-acp-make-client :context-buffer context-buffer
                    :process-directory process-directory

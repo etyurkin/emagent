@@ -28,7 +28,7 @@
 
 (ert-deftest emagent-context-test-org-info-skipped-in-emagent-mode ()
   "org-element-at-point is not consulted in emagent session buffers."
-  (require 'emagent-chat-mode)
+  (require 'emagent-chat)
   (with-temp-buffer
     (delay-mode-hooks (emagent-mode))
     (insert "* heading\n")
