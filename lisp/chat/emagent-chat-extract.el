@@ -130,7 +130,6 @@
                   blocks)))))
     (nreverse blocks)))
 
-;;;###autoload
 (defun emagent-chat-insert-last-response ()
   "Insert the last completed agent response into another buffer.
 
@@ -148,7 +147,6 @@ Prompts for a target buffer with `completing-read'."
         (message "emagent: inserted response into %s" choice))
     (message "emagent: no completed response found")))
 
-;;;###autoload
 (defun emagent-chat-insert-src-block ()
   "Pick a src block from the last response and insert it into another buffer."
   (interactive)

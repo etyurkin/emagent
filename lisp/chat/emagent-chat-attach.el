@@ -42,8 +42,6 @@
 
 (defvar emagent-chat--on-attach)
 
-;;;###autoload
-
 (defun emagent-chat-attach-buffer ()
   "Attach a buffer summary to the next prompt."
   (interactive)
@@ -52,7 +50,6 @@
     (when emagent-chat--on-attach
       (funcall emagent-chat--on-attach text))))
 
-;;;###autoload
 (defun emagent-chat-yank (&optional arg)
   "Yank text or paste a clipboard image.
 
@@ -112,7 +109,6 @@ Returns the file path."
       (write-region (point-min) (point-max) file nil 'silent))
     file))
 
-;;;###autoload
 (defun emagent-chat-attach-image ()
   "Insert an image link at point for the next prompt (C-c C-e i).
 
@@ -172,7 +168,6 @@ the prompt text."
                     lines)))))
       (nreverse lines))))
 
-;;;###autoload
 (defun emagent-chat-attach-error-context ()
   "Attach compilation errors and flymake diagnostics to the next prompt.
 
@@ -189,7 +184,6 @@ active flymake diagnostics.  Attaches a combined error context block."
             (funcall emagent-chat--on-attach text)))
       (message "emagent: no errors found in compilation buffer or flymake"))))
 
-;;;###autoload
 (defun emagent-chat-attach-files ()
   "Pick project files and attach summaries to the next prompt.
 

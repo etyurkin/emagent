@@ -36,9 +36,24 @@
 ;; external agents such as cursor-agent-acp or claude-agent-acp and executes
 ;; Emacs operations locally via org-mode scratch buffers.
 ;;
-;; Entry points: `emagent' to start a session (it probes installed agents and
-;; prompts to pick one), and `emagent-mode' to reconnect a saved buffer.  Every
-;; other command is scoped to `emagent-mode' buffers via `C-c ?' / M-x.
+;; Public entry points (autoloaded):
+;; - `emagent' — start a session (probes agents / models, then connects)
+;; - `emagent-mode' — reconnect a saved chat buffer
+;; - `emagent-connect' — connect/reconnect without starting a new buffer
+;; - `emagent-trust-workspace' / `emagent-trust-claude-reconnect'
+;;   — workspace trust helpers
+;; - `emagent-set-project-directory' — move a session to a new project cwd
+;;
+;; Every other command is scoped to `emagent-mode' buffers (`C-c ?' / M-x once
+;; the package is loaded).  Internals use the `emagent--*' prefix and are not
+;; a supported API.
+;;
+;; Layers (one-way require DAG):
+;; - L0 protocol/state/log primitives
+;; - L1 tools, session permissions, MCP server
+;; - L2 chat buffer/mode/markup UI (does not require ACP runtime)
+;; - L3 ACP connect/prompt/permission runtime (wires chat callbacks)
+;; - L4 this file — package facade and public commands
 
 ;;; Code:
 

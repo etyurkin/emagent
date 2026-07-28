@@ -163,7 +163,6 @@ Arguments: FORMAT-STRING, ARGS."
     (when emagent-log-echo-minibuffer
       (message "%s" text))))
 
-;;;###autoload
 (defun emagent-log-view ()
   "Display the emagent status log buffer."
   (interactive)
