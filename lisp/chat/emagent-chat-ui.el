@@ -1571,24 +1571,25 @@ the render loop closes the response only after assistant text is stable.")
   "Return current session context fill percent, or nil when unknown.
 
 When the provider does not report context usage (Cursor ACP today), estimate
-from MCP payload bytes and buffer size against `emagent-acp-ctx-proxy-size'."
+from MCP payload bytes against `emagent-acp-ctx-proxy-size'.  The Org
+transcript size is not used — a resumed buffer is not the model context."
   (or
    (when-let* ((pair (and (fboundp 'emagent-acp-context-usage)
                           (emagent-acp-context-usage)))
                (used (car pair))
                (size (cdr pair))
                ((and (numberp used) (numberp size) (> size 0))))
-     (* 100.0 (/ (float used) size)))
+     (min 100.0 (* 100.0 (/ (float used) size))))
    (when-let* ((size (and (boundp 'emagent-acp-ctx-proxy-size)
                           emagent-acp-ctx-proxy-size))
                ((and (integerp size) (> size 0)))
                (mcp (if (fboundp 'emagent-tools-age-bytes)
                         (emagent-tools-age-bytes)
                       0))
-               ;; Rough chars→tokens; MCP bytes dominate Cursor sessions.
-               (est (+ (/ mcp 4) (/ (buffer-size) 8)))
-               ((> est 0)))
-     (* 100.0 (/ (float est) size)))))
+               ((and (numberp mcp) (> mcp 0)))
+               ;; Rough bytes→tokens; ignore transcript buffer size.
+               (est (/ mcp 4)))
+     (min 100.0 (* 100.0 (/ (float est) size))))))
 
 (defvar-local emagent-chat--last-compact-hint nil
   "Time of the last /compact hint inserted in this buffer, or nil.")
