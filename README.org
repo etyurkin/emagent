@@ -157,8 +157,10 @@ system).  =/usage baseline= then later =/usage= prints =since baseline:= deltas
 so you can measure a change.  Mode line can show tok/$ when samples exist
 (=emagent-usage-show-mode-line=).
 
-Claude reports real context fill as =ctx:N%=.  Cursor often omits usage; emagent
-estimates from MCP payload bytes + buffer size against
+Claude reports real context fill as =ctx:N%=.  Cursor ACP does *not* provide
+usage statistics
+([[https://forum.cursor.com/t/cli-emit-acp-usage-update-so-clients-like-zed-can-show-a-context-window-indicator/165358][upstream request]]);
+emagent estimates fill from MCP payload bytes + buffer size against
 =emagent-acp-ctx-proxy-size= and shows =ctx:~N%=.  When fill is high, a
 =/compact= hint may appear under Response (cooldown-gated; auto-compact is off
 by default).
@@ -192,7 +194,8 @@ and re-prompts on expiry.  Your own prompt supersedes a pending wakeup;
 
 Authenticate once: =cursor-agent login=.  Without it, Auto may be rejected.
 Mode-line model IDs drop technical suffixes (=claude-sonnet-4-6=, =auto=).
-Context fill uses the =ctx:~N%= proxy when the agent omits usage (see above).
+Context fill uses the =ctx:~N%= proxy because Cursor ACP has no usage feed
+(see above).
 
 ** Claude (Agent SDK)
 

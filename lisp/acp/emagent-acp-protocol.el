@@ -342,8 +342,10 @@ Used to defer expensive org font-lock until the turn settles."
 
 (defun emagent-acp-context-usage-unavailable-p ()
   "Return non-nil when a connected session cannot report context usage.
-Cursor does not expose context-window figures over ACP, so emagent has no data
-to compute a percentage and the mode line shows `ctx:n/a' instead."
+
+Cursor ACP does not provide context-window or token usage figures (upstream
+feature request).  Emagent may still show an estimated `ctx:~N%' via
+`emagent-acp-ctx-proxy-size'."
   (and emagent-acp--session
        (or (emagent-acp-state-busy emagent-acp--session)
            (emagent-acp-state-ready emagent-acp--session))
@@ -1017,10 +1019,11 @@ enabled so ACP file read/write route through Emacs buffers."
   :group 'emagent)
 
 (defcustom emagent-acp-ctx-proxy-size 200000
-  "Assumed context window size for Cursor-style providers without usage.
+  "Assumed context window size when the provider has no ACP usage feed.
 
-Used to estimate fill percent from MCP bytes + recent prompt size when
-the provider reports no context used/size.  Nil or 0 disables the proxy."
+Used for Cursor ACP, which does not provide context used/size today.
+Emagent estimates fill from MCP bytes + buffer size.  Nil or 0 disables
+the proxy."
   :type '(choice (const :tag "Off" nil)
                  (integer :tag "Tokens"))
   :group 'emagent)
