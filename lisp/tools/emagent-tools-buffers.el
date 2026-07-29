@@ -36,13 +36,10 @@
 (require 'cl-lib)
 (require 'seq)
 
+;; cl-defstruct accessors are invisible to check-declare; load at compile time.
+(eval-when-compile (require 'flymake))
 (declare-function flymake--lookup-type-property "flymake" (type prop &optional default))
 (declare-function flymake--severity "flymake" (type))
-(declare-function flymake-diagnostic-beg "flymake" (diag))
-(declare-function flymake-diagnostic-end "flymake" (diag))
-(declare-function flymake-diagnostic-type "flymake" (diag))
-(declare-function flymake-diagnostic-text "flymake" (diag))
-(declare-function flymake-diagnostic-backend "flymake" (diag))
 (declare-function flymake-diagnostics "flymake" (&optional beg end))
 (declare-function bookmark-get-filename "bookmark" (bookmark-name-or-record))
 (declare-function bookmark-get-position "bookmark" (bookmark-name-or-record))
