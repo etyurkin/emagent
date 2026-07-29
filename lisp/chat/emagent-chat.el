@@ -2879,26 +2879,59 @@ the mode line pulling session state back out of the ACP layer."
                             (or cost-str ""))
                     'face 'shadow)))))
 
+(defun emagent-chat--mode-line-escape (text)
+  "Return TEXT with `%' doubled for mode-line, preserving faces.
+
+doom-modeline's `doom-modeline-display-text' also doubles `%', but
+`string-replace' drops faces on the inserted characters — so we escape
+ourselves and keep the face on both bytes of each `%%'."
+  (when text
+    (let ((chunks nil)
+          (i 0)
+          (n (length text)))
+      (while (< i n)
+        (let* ((ch (aref text i))
+               (face (get-text-property i 'face text))
+               (piece (if (eq ch ?%) "%%" (string ch))))
+          (push (if face (propertize piece 'face face) piece) chunks)
+          (setq i (1+ i))))
+      (apply #'concat (nreverse chunks)))))
+
+(defun emagent-chat--mode-line-display (text)
+  "Escape TEXT for the mode line; dim when doom-modeline is inactive."
+  (let ((escaped (emagent-chat--mode-line-escape text)))
+    (cond
+     ((null escaped) nil)
+     ((and (bound-and-true-p doom-modeline-mode)
+           (fboundp 'doom-modeline--active)
+           (not (doom-modeline--active)))
+      (propertize escaped
+                  'face
+                  `(:inherit (mode-line-inactive
+                              ,(get-text-property 0 'face text)))))
+     (t escaped))))
+
 (defun emagent-chat--mode-line-context-usage ()
   "Return a propertized context fill string, or nil.
 Shows a percentage when known, `ctx:~N%' for Cursor proxy estimates,
 `ctx:n/a' when connected but unestimable, and nil otherwise.
 
-Percent signs are doubled (`%%') so `mode-line-format' displays a literal
-`%' without dropping the face."
+Callers must run the result through `emagent-chat--mode-line-escape'
+before installing it into `mode-line-format' (doom-modeline also escapes,
+but drops faces on `%%')."
   (if-let* ((pair (emagent-chat--stat :ctx-usage))
             (used (car pair))
             (size (cdr pair))
             ((and (numberp used) (numberp size) (> size 0))))
       (let ((pct (min 100.0 (* 100.0 (/ (float used) size)))))
-        (propertize (format " ctx:%.0f%%%%" pct)
+        (propertize (format " ctx:%.0f%%" pct)
                     'face (cond
                            ((>= pct 80) 'error)
                            ((>= pct 50) 'warning)
                            (t           'success))))
     (if-let ((pct (and (fboundp 'emagent-chat--context-fill-percent)
                        (emagent-chat--context-fill-percent))))
-        (propertize (format " ctx:~%.0f%%%%" pct)
+        (propertize (format " ctx:~%.0f%%" pct)
                     'face (cond
                            ((>= pct 80) 'error)
                            ((>= pct 50) 'warning)
@@ -2908,9 +2941,10 @@ Percent signs are doubled (`%%') so `mode-line-format' displays a literal
 
 (defun emagent-mode-line ()
   "Return cached emagent status text for the mode line."
-  (or emagent-chat--mode-line-cache
-      (progn (emagent-chat--mode-line-recompute)
-             emagent-chat--mode-line-cache)))
+  (emagent-chat--mode-line-escape
+   (or emagent-chat--mode-line-cache
+       (progn (emagent-chat--mode-line-recompute)
+              emagent-chat--mode-line-cache))))
 
 (defvar emagent-chat--doom-modeline-registered-p nil)
 
@@ -2926,7 +2960,10 @@ Percent signs are doubled (`%%') so `mode-line-format' displays a literal
           (when emagent-chat--mode-line-head
             (concat (doom-modeline-spc)
                     emagent-chat--mode-line-head
-                    (doom-modeline-display-text emagent-chat--mode-line-tail)))))
+                    ;; Avoid doom-modeline-display-text: it doubles % via
+                    ;; string-replace and drops faces on the inserted chars.
+                    (emagent-chat--mode-line-display
+                     emagent-chat--mode-line-tail)))))
       (unless emagent-chat--doom-modeline-registered-p
         (setq emagent-chat--doom-modeline-registered-p t)
         (unless (assoc 'emagent-mode doom-modeline-mode-alist)
