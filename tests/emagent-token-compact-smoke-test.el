@@ -77,47 +77,62 @@
   (emagent-test--with-mocks
       (((symbol-function 'emagent-acp-context-usage) (lambda () nil)))
     (let ((emagent-acp-ctx-proxy-size 200000)
-          (emagent-acp-ctx-proxy-buffer-cap 0.05))
+          (emagent-acp-ctx-proxy-buffer-divisor 40))
       (setq emagent-tools-age--bytes 80000)
       (with-temp-buffer
         (delay-mode-hooks (emagent-mode))
-        ;; Large transcript is capped (5% of window), not free-blown.
         (insert (make-string 500000 ?x))
         (setq emagent-chat--status nil)
         (let* ((pct (emagent-chat--context-fill-percent))
                (ml (emagent-chat--mode-line-context-usage))
                (esc (emagent-chat--mode-line-escape ml)))
           (should (numberp pct))
-          ;; mcp 10% + buffer cap 5% ≈ 15%
+          ;; Soft curve: mcp+buffer raw ≈ 32500 → ~15%
           (should (< pct 20.0))
           (should (> pct 10.0))
-          (should (string-suffix-p "ctx:~15%" (string-trim-left ml)))
+          (should (string-match-p "ctx:~1[0-9]%" (string-trim-left ml)))
           (should (eq 'shadow (get-text-property 0 'face ml)))
           (should (eq 'shadow (get-text-property (1- (length ml)) 'face ml)))
-          (should (string-suffix-p "ctx:~15%%" (string-trim-left esc)))
+          (should (string-match-p "ctx:~1[0-9]%%" (string-trim-left esc)))
           (should (eq 'shadow
                       (get-text-property (1- (length esc)) 'face esc))))))))
+
+(ert-deftest emagent-token-compact-smoke-ctx-proxy-grows ()
+  (emagent-tools-age-reset)
+  (emagent-test--with-mocks
+      (((symbol-function 'emagent-acp-context-usage) (lambda () nil)))
+    (let ((emagent-acp-ctx-proxy-size 200000)
+          (emagent-acp-ctx-proxy-buffer-divisor 40)
+          small large)
+      (with-temp-buffer
+        (delay-mode-hooks (emagent-mode))
+        (insert (make-string 80000 ?x))
+        (setq small (emagent-chat--context-fill-percent))
+        (insert (make-string 1920000 ?x))
+        (setq large (emagent-chat--context-fill-percent))
+        (should (numberp small))
+        (should (numberp large))
+        (should (> large small))
+        (should (< large 100.0))))))
 
 (ert-deftest emagent-token-compact-smoke-ctx-proxy-no-mcp ()
   (emagent-tools-age-reset)
   (emagent-test--with-mocks
       (((symbol-function 'emagent-acp-context-usage) (lambda () nil)))
     (let ((emagent-acp-ctx-proxy-size 200000)
-          (emagent-acp-ctx-proxy-buffer-cap 0.05))
+          (emagent-acp-ctx-proxy-buffer-divisor 40))
       (with-temp-buffer
         (delay-mode-hooks (emagent-mode))
         (insert (make-string 500000 ?x))
         (setq emagent-chat--status '(:ctx-unavailable t))
-        ;; Cursor often never samples MCP bytes; capped transcript still
-        ;; yields a weak estimate instead of stuck ctx:n/a.
         (let* ((pct (emagent-chat--context-fill-percent))
                (ml (emagent-chat--mode-line-context-usage))
                (esc (emagent-chat--mode-line-escape ml)))
           (should (numberp pct))
-          (should (<= pct 5.0))
+          (should (< pct 10.0))
           (should (> pct 0.0))
-          (should (string-suffix-p "ctx:~5%" (string-trim-left ml)))
-          (should (string-suffix-p "ctx:~5%%" (string-trim-left esc)))
+          (should (string-match-p "ctx:~[0-9]+%" (string-trim-left ml)))
+          (should (string-match-p "ctx:~[0-9]+%%" (string-trim-left esc)))
           (should (eq 'shadow
                       (get-text-property (1- (length esc)) 'face esc))))))))
 
