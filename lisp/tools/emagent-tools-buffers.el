@@ -28,12 +28,14 @@
 
 ;;; Commentary:
 ;;
-;; Filterable wide alist records for Emacs buffers (list_buffers / buffer_info).
+;; Filterable wide alist records for Emacs session UI state: buffers,
+;; windows, frames, marks, and registers.
 ;;
 ;;; Code:
 
 (require 'cl-lib)
 (require 'seq)
+(require 'register)
 
 (defun emagent-tools--buffer-type (buffer)
   "Return coarse type of BUFFER as a symbol: `file', `internal', or `non-file'.
@@ -382,6 +384,171 @@ to LIMIT when set."
     (if limit
         (seq-take rows limit)
       rows)))
+
+
+(defun emagent-tools--frame-record (frame selected-frame)
+  "Return a wide alist describing FRAME for MCP/JSON consumers.
+
+SELECTED-FRAME is `(selected-frame)' at call time so every row shares one
+snapshot.  Boolean fields use t/:false."
+  (let* ((windows (window-list frame))
+         (buffers (delete-dups (mapcar #'window-buffer windows))))
+    `(("name" . ,(or (frame-parameter frame 'name)
+                     (prin1-to-string frame)))
+      ("selected" . ,(if (eq frame selected-frame) t :false))
+      ("visible" . ,(if (frame-visible-p frame) t :false))
+      ("width" . ,(frame-width frame))
+      ("height" . ,(frame-height frame))
+      ("left" . ,(frame-parameter frame 'left))
+      ("top" . ,(frame-parameter frame 'top))
+      ("window_count" . ,(length windows))
+      ("buffer_names" . ,(mapcar #'buffer-name buffers)))))
+
+(defun emagent-tools--list-frames-match-p (frame name-filter-regex
+                                                selected-only
+                                                selected-frame)
+  "Return non-nil if FRAME matches NAME-FILTER-REGEX and selected filter.
+
+SELECTED-ONLY non-nil keeps only SELECTED-FRAME."
+  (let ((fname (frame-parameter frame 'name)))
+    (and (or (null name-filter-regex)
+             (and fname (string-match-p name-filter-regex fname)))
+         (or (not selected-only)
+             (eq frame selected-frame)))))
+
+(defun emagent-tool-list-frames (&optional name-filter-regex selected limit)
+  "List live frames as wide alist records.
+
+NAME-FILTER-REGEX matches `frame-parameter' name.  When SELECTED is t, keep
+only `(selected-frame)'.  Matching rows are truncated to LIMIT when set."
+  (let* ((selected-frame (selected-frame))
+         (selected-only (eq selected t))
+         (rows nil))
+    (dolist (frame (frame-list))
+      (when (emagent-tools--list-frames-match-p
+             frame name-filter-regex selected-only selected-frame)
+        (push (emagent-tools--frame-record frame selected-frame) rows)))
+    (setq rows (nreverse rows))
+    (if limit
+        (seq-take rows limit)
+      rows)))
+
+(defun emagent-tools--mark-record (buffer position current-p)
+  "Return a wide alist for POSITION in BUFFER.
+
+CURRENT-P non-nil marks the buffer's current mark (`mark')."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char position)
+      `(("buffer_name" . ,(buffer-name))
+        ("position" . ,position)
+        ("line" . ,(line-number-at-pos position t))
+        ("column" . ,(current-column))
+        ("current" . ,(if current-p t :false))))))
+
+(defun emagent-tools--buffer-mark-positions (buffer)
+  "Return \((POSITION . CURRENT-P)...\) for BUFFER's mark and `mark-ring'."
+  (with-current-buffer buffer
+    (let* ((current (mark t))
+           (seen (make-hash-table :test 'eql))
+           (rows nil))
+      (when current
+        (puthash current t seen)
+        (push (cons current t) rows))
+      (dolist (pos mark-ring)
+        (let ((n (cond ((markerp pos) (marker-position pos))
+                       ((integerp pos) pos)
+                       (t nil))))
+          (when (and n (not (gethash n seen)))
+            (puthash n t seen)
+            (push (cons n nil) rows))))
+      (nreverse rows))))
+
+(defun emagent-tool-list-marks (&optional buffer buffer-name-regex limit)
+  "List mark positions as wide alist records.
+
+BUFFER is an optional buffer name; when nil, use the selected window's
+buffer.  BUFFER-NAME-REGEX filters by buffer name.  Matching rows are
+truncated to LIMIT when set."
+  (let* ((target
+          (if buffer
+              (or (get-buffer buffer)
+                  (error "List_marks: no buffer named %S" buffer))
+            (window-buffer (selected-window))))
+         (name (buffer-name target))
+         (rows nil))
+    (when (or (null buffer-name-regex)
+              (string-match-p buffer-name-regex name))
+      (dolist (cell (emagent-tools--buffer-mark-positions target))
+        (push (emagent-tools--mark-record target (car cell) (cdr cell))
+              rows)))
+    (setq rows (nreverse rows))
+    (if limit
+        (seq-take rows limit)
+      rows)))
+
+(defun emagent-tools--register-name (key)
+  "Return a string wire name for register KEY."
+  (cond
+   ((characterp key) (string key))
+   ((stringp key) key)
+   (t (format "%s" key))))
+
+(defun emagent-tools--register-type (value)
+  "Return a coarse type string for register VALUE."
+  (cond
+   ((stringp value) "string")
+   ((numberp value) "number")
+   ((markerp value) "marker")
+   ((and (consp value) (window-configuration-p (car value))) "window")
+   ((window-configuration-p value) "window")
+   ((and (consp value) (frame-configuration-p (car value))) "frame")
+   ((frame-configuration-p value) "frame")
+   (t "other")))
+
+(defun emagent-tools--register-preview (value)
+  "Return a short preview string for register VALUE."
+  (truncate-string-to-width
+   (cond
+    ((stringp value) value)
+    ((numberp value) (number-to-string value))
+    ((markerp value)
+     (format "marker:%s@%s"
+             (or (and (marker-buffer value)
+                      (buffer-name (marker-buffer value)))
+                 "?")
+             (marker-position value)))
+    (t (prin1-to-string value)))
+   80 nil nil t))
+
+(defun emagent-tools--register-record (key value)
+  "Return a wide alist describing register KEY with VALUE."
+  (let* ((type (emagent-tools--register-type value))
+         (marker (and (markerp value) value))
+         (buf (and marker (marker-buffer marker))))
+    `(("name" . ,(emagent-tools--register-name key))
+      ("type" . ,type)
+      ("preview" . ,(emagent-tools--register-preview value))
+      ("buffer_name" . ,(and buf (buffer-name buf)))
+      ("position" . ,(and marker (marker-position marker))))))
+
+(defun emagent-tool-list-registers (&optional type-filter limit)
+  "List `register-alist' entries as wide alist records.
+
+TYPE-FILTER keeps rows whose type string equals it (string, number, marker,
+window, frame, or other).  Matching rows are truncated to LIMIT when set."
+  (let ((rows nil))
+    (dolist (cell register-alist)
+      (let* ((row (emagent-tools--register-record (car cell) (cdr cell)))
+             (type (alist-get "type" row nil nil #'equal)))
+        (when (or (null type-filter)
+                  (equal type-filter type))
+          (push row rows))))
+    (setq rows (nreverse rows))
+    (if limit
+        (seq-take rows limit)
+      rows)))
+
 
 (provide 'emagent-tools-buffers)
 

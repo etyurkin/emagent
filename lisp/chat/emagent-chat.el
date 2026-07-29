@@ -180,13 +180,14 @@ instead; emagent then writes whatever port it gets into the agent config."
                   (description . "Optional seconds to wait before the subprocess is killed. Defaults to emagent-tools-subprocess-timeout; on timeout, retry with a larger value."))))
   "Shared JSON-schema property for a per-call subprocess timeout.")
 
-(defun emagent-mcp--make-cont (fn)
+(defun emagent-mcp--make-cont (fn &rest plist)
   "Wrap FN as an emagent MCP continuation object.
 
-FN is a function of one argument, the reply callback.  The object is the
-list \(emagent-mcp-cont FN\)—a deliberate tag, not a closure alone, so
-`emagent-mcp-cont-p' can recognize it."
-  (list 'emagent-mcp-cont fn))
+FN is a function of one argument, the reply callback.  The object is
+\(emagent-mcp-cont FN . PLIST\)—a deliberate tag so
+`emagent-mcp-cont-p' can recognize it.  PLIST may hold `:id' and
+`:cancelled'."
+  (cons 'emagent-mcp-cont (cons fn plist)))
 
 (defun emagent-mcp-cont-p (obj)
   "Return non-nil if OBJ is an emagent MCP continuation."
@@ -196,16 +197,44 @@ list \(emagent-mcp-cont FN\)—a deliberate tag, not a closure alone, so
   "Return the reply-wrapping function stored in continuation OBJ."
   (nth 1 obj))
 
+(defun emagent-mcp-cont-plist (obj)
+  "Return the property list stored on continuation OBJ."
+  (nthcdr 2 obj))
+
+(defun emagent-mcp-cont-cancelled-p (obj)
+  "Return non-nil when continuation OBJ has been cancelled."
+  (plist-get (emagent-mcp-cont-plist obj) :cancelled))
+
+(defun emagent-mcp-cont-cancel (obj)
+  "Mark continuation OBJ cancelled so later replies are ignored.
+
+Returns OBJ.  Does not stop an in-flight subprocess."
+  (let ((plist (emagent-mcp-cont-plist obj)))
+    (setcdr (cdr obj) (plist-put (copy-sequence plist) :cancelled t)))
+  obj)
+
+(defvar emagent-mcp-cont-reply-functions nil
+  "Abnormal hook run when an MCP continuation replies.
+
+Each function is called as \(FN CONT RESULT IS-ERROR\) before the
+agent-facing callback runs.  Ignored when the continuation is cancelled.")
+
 (defmacro emagent-mcp-cont (args &rest body)
   "Build a continuation whose body receives the MCP reply callback.
 
 ARGS must be a one-element list naming the reply parameter (conventionally
-`reply').  BODY should eventually call
-\(funcall REPLY RESULT &optional IS-ERROR\) to finish the request."
+`reply').  BODY may start with keyword options \(`:id' VALUE\), then forms
+that eventually call \(funcall REPLY RESULT &optional IS-ERROR\)."
   (declare (indent 1) (debug (sexp body)))
   (unless (and (listp args) (= (length args) 1) (symbolp (car args)))
     (error "Emagent-mcp-cont: expected exactly one reply parameter"))
-  `(emagent-mcp--make-cont (lambda ,args ,@body)))
+  (let (plist)
+    (while (and body (keywordp (car body)))
+      (unless (cdr body)
+        (error "Emagent-mcp-cont: keyword %s needs a value" (car body)))
+      (setq plist (plist-put plist (car body) (cadr body)))
+      (setq body (cddr body)))
+    `(emagent-mcp--make-cont (lambda ,args ,@body) ,@plist)))
 
 (defun emagent-mcp--alist-p (value)
   "Return non-nil when VALUE is a string-key alist for JSON objects."
@@ -340,13 +369,6 @@ hash-tables) are JSON-encoded.  Other scalars use `format'."
                     cb
                     (emagent-mcp--arg args "command")
                     (emagent-mcp--arg args "directory")))))))
-
-(defun emagent-mcp--emacs (args)
-  "Dispatch Emacs session/context tool ARGS."
-  (pcase (emagent-mcp--require-op
-          args '("project_directory" "where_is"))
-    ("project_directory" (emagent-tool-project-directory))
-    ("where_is" (emagent-tool-where-is (emagent-mcp--arg args "command")))))
 
 (defun emagent-mcp--elisp (args)
   "Dispatch elisp discovery/check tool ARGS."
@@ -494,8 +516,120 @@ NAME (case-insensitive).  Returns the new entry."
       (setq emagent-mcp--tools (append emagent-mcp--tools (list entry))))
     entry))
 
+(defun emagent-mcp--deftool-symbol-to-wire (sym)
+  "Convert Elisp argument symbol SYM to a snake_case wire name."
+  (replace-regexp-in-string "-" "_" (symbol-name sym)))
+
+(defun emagent-mcp--deftool-type-to-json (type)
+  "Map Elisp type keyword TYPE to a JSON Schema type string."
+  (pcase type
+    ((or 'string 'symbol) "string")
+    ((or 'integer 'number) "integer")
+    ('boolean "boolean")
+    ('array "array")
+    ('object "object")
+    (_ (error "Emagent-mcp-deftool: unsupported type %S" type))))
+
+(defun emagent-mcp--deftool-parse-one-arg (spec)
+  "Parse one typed DEFTOOL arg SPEC into a plist."
+  (cond
+   ((symbolp spec)
+    (list :name spec
+          :wire (emagent-mcp--deftool-symbol-to-wire spec)
+          :type 'string
+          :description (format "Argument %s." spec)
+          :required t))
+   ((and (listp spec) (symbolp (car spec)))
+    (let* ((name (car spec))
+           (rest (cdr spec))
+           (type 'string)
+           (description nil)
+           (required t)
+           (enum nil))
+      (when (and rest (symbolp (car rest)) (not (keywordp (car rest))))
+        (setq type (car rest)
+              rest (cdr rest)))
+      (when (and rest (stringp (car rest)))
+        (setq description (car rest)
+              rest (cdr rest)))
+      (while rest
+        (pcase (car rest)
+          (:optional
+           (setq required nil)
+           (setq rest (cdr rest)))
+          (:required
+           (setq required t)
+           (setq rest (cdr rest)))
+          (:enum
+           (setq enum (cadr rest)
+                 rest (cddr rest)))
+          (_ (error "Emagent-mcp-deftool: bad arg option %S" (car rest)))))
+      (list :name name
+            :wire (emagent-mcp--deftool-symbol-to-wire name)
+            :type type
+            :description (or description (format "Argument %s." name))
+            :required required
+            :enum enum)))
+   (t (error "Emagent-mcp-deftool: bad arg spec %S" spec))))
+
+(defun emagent-mcp--deftool-parse-args (arglist)
+  "Parse typed DEFTOOL ARGLIST into a list of arg plists."
+  (let ((required t)
+        (parsed nil)
+        (items arglist))
+    (while items
+      (let ((item (car items)))
+        (setq items (cdr items))
+        (cond
+         ((eq item '&optional)
+          (setq required nil))
+         ((eq item '&rest)
+          (error "Emagent-mcp-deftool: &rest is not supported"))
+         (t
+          (let ((one (emagent-mcp--deftool-parse-one-arg item)))
+            (unless required
+              (setq one (plist-put one :required nil)))
+            (push one parsed))))))
+    (nreverse parsed)))
+
+(defun emagent-mcp--deftool-schema-from-args (parsed)
+  "Build \(PROPERTIES . REQUIRED\) from PARSED typed arg plists."
+  (let (properties required)
+    (dolist (arg parsed)
+      (let* ((wire (plist-get arg :wire))
+             (spec `((type . ,(emagent-mcp--deftool-type-to-json
+                               (plist-get arg :type)))
+                     (description . ,(plist-get arg :description)))))
+        (when (plist-get arg :enum)
+          (setq spec (append spec
+                             `((enum . ,(apply #'vector
+                                               (plist-get arg :enum)))))))
+        (push (cons wire spec) properties)
+        (when (plist-get arg :required)
+          (push wire required))))
+    (cons (nreverse properties) (nreverse required))))
+
+(defun emagent-mcp--deftool-bind-from-args (parsed)
+  "Return let-binding forms unpacking ARGS hash from PARSED specs."
+  (mapcar
+   (lambda (arg)
+     (let ((name (plist-get arg :name))
+           (wire (plist-get arg :wire))
+           (type (plist-get arg :type)))
+       (if (eq type 'boolean)
+           `(,name (emagent-mcp--bool args ,wire))
+         `(,name (emagent-mcp--arg args ,wire)))))
+   parsed))
+
+(defun emagent-mcp--deftool-typed-p (body)
+  "Return non-nil when BODY is the typed arglist DEFTOOL form."
+  (and (consp body)
+       (listp (car body))
+       (not (keywordp (car-safe body)))
+       (stringp (cadr body))))
+
 (defun emagent-mcp--deftool-split (body)
-  "Split DEFTOOL BODY into (PLIST DOCSTRING ARGLIST FORMS).
+  "Split legacy DEFTOOL BODY into \(PLIST DOCSTRING ARGLIST FORMS\).
 
 BODY is keyword options, then a docstring, then a one-parameter arglist
 and the handler forms."
@@ -521,38 +655,66 @@ and the handler forms."
 (defmacro emagent-mcp-deftool (name &rest body)
   "Define and register MCP tool NAME with schema next to its handler.
 
-NAME is the wire-facing tool string.  BODY is keyword options, a
-docstring (also the MCP description), a one-arg lambda list (usually
-\\=(args)), then handler forms.  Handlers may return a value or an
-`emagent-mcp-cont' continuation.
+NAME is the wire-facing tool string.  Two forms are supported:
 
-Keywords:
-  :properties ALIST  -- JSON-schema properties (required)
-  :required LIST     -- required property names (default nil)
-  :available PRED    -- optional list-time visibility predicate"
+Typed arglist \(preferred for simple tools\):
+  \(emagent-mcp-deftool \"where_is\"
+    \(\(command string \"Command name.\"\)\)
+    \"doc\"
+    BODY...\)
+Handler BODY sees positional Elisp bindings; the registered function
+still receives the MCP args hash-table and unpacks it.
+
+Legacy keywords \(op-dispatchers\):
+  BODY is `:properties' / `:required' / `:available', a docstring, a
+  one-arg lambda list \(usually \\=(args)\\), then handler forms.
+
+Handlers may return a value or an `emagent-mcp-cont' continuation."
   (declare (indent 1) (debug (&define string body)))
-  (let* ((split (emagent-mcp--deftool-split body))
-         (opts (nth 0 split))
-         (docstring (nth 1 split))
-         (arglist (nth 2 split))
-         (forms (nth 3 split))
-         (properties (plist-get opts :properties))
-         (required (or (plist-get opts :required) '()))
-         (available (plist-get opts :available))
-         (handler (emagent-mcp--deftool-handler-symbol name)))
-    (unless properties
-      (error "Emagent-mcp-deftool: :properties is required"))
-    `(progn
-       (defun ,handler ,arglist
-         ,docstring
-         ,@forms)
-       (emagent-mcp--register-tool
-        ,name
-        ,docstring
-        ,properties
-        ,required
-        #',handler
-        ,@(when available `(:available ,available))))))
+  (if (emagent-mcp--deftool-typed-p body)
+      (let* ((typed (car body))
+             (docstring (cadr body))
+             (forms (cddr body))
+             (parsed (emagent-mcp--deftool-parse-args typed))
+             (schema (emagent-mcp--deftool-schema-from-args parsed))
+             (properties (car schema))
+             (required (cdr schema))
+             (binds (emagent-mcp--deftool-bind-from-args parsed))
+             (handler (emagent-mcp--deftool-handler-symbol name)))
+        `(progn
+           (defun ,handler (args)
+             ,docstring
+             ,@(unless binds '((ignore args)))
+             (let ,binds
+               ,@forms))
+           (emagent-mcp--register-tool
+            ,name
+            ,docstring
+            ',properties
+            ',required
+            #',handler)))
+    (let* ((split (emagent-mcp--deftool-split body))
+           (opts (nth 0 split))
+           (docstring (nth 1 split))
+           (arglist (nth 2 split))
+           (forms (nth 3 split))
+           (properties (plist-get opts :properties))
+           (required (or (plist-get opts :required) '()))
+           (available (plist-get opts :available))
+           (handler (emagent-mcp--deftool-handler-symbol name)))
+      (unless properties
+        (error "Emagent-mcp-deftool: :properties is required"))
+      `(progn
+         (defun ,handler ,arglist
+           ,docstring
+           ,@forms)
+         (emagent-mcp--register-tool
+          ,name
+          ,docstring
+          ,properties
+          ,required
+          #',handler
+          ,@(when available `(:available ,available)))))))
 
 (emagent-mcp-deftool "fs"
   :properties
@@ -615,28 +777,11 @@ op=run (shell) or op=compile (compilation-mode). Prefer compile for builds."
   (emagent-mcp--shell args))
 
 (emagent-mcp-deftool "eval"
-  :properties
-  '(("form" . ((type . "string")
-               (description . "An Emacs Lisp form as a string."))))
-  :required '("form")
+  ((form string "An Emacs Lisp form as a string."))
   "Evaluate an Emacs Lisp form in the live Emacs.
 
 Filesystem and process ops are blocked; use fs/shell/structural."
-  (args)
-  (emagent-tool-eval (emagent-mcp--arg args "form")))
-
-(emagent-mcp-deftool "emacs"
-  :properties
-  (append
-   (emagent-mcp--op-prop
-    '("project_directory" "where_is")
-    "Emacs context operation.")
-   '(("command" . ((type . "string")
-                   (description . "Command name for where_is.")))))
-  :required '("op")
-  "Emacs session context. op=project_directory|where_is."
-  (args)
-  (emagent-mcp--emacs args))
+  (emagent-tool-eval form))
 
 (emagent-mcp-deftool "elisp"
   :properties
@@ -695,141 +840,111 @@ Mutate needs expected_tick from op=get/fs read. Discover with tree|get."
   (emagent-mcp--structural args))
 
 (emagent-mcp-deftool "fetch_url"
-  :properties
-  (append
-   '(("url" . ((type . "string") (description . "http:// or https:// URL.")))
-     ("max_bytes" . ((type . "integer")
-                     (description . "Optional max response size in bytes."))))
-   emagent-mcp--timeout-prop)
-  :required '("url")
+  ((url string "http:// or https:// URL.")
+   (max-bytes integer "Optional max response size in bytes." :optional)
+   (timeout integer "Optional seconds before the subprocess is killed." :optional))
   "Fetch an http(s) URL and return the response body."
-  (args)
   (emagent-mcp-cont (reply)
-    (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
+    (let ((emagent-tools--timeout-override timeout))
       (emagent-tool-fetch-url-async
        (emagent-mcp--reply-wrap reply)
-       (emagent-mcp--arg args "url")
-       (emagent-mcp--arg args "max_bytes")))))
+       url
+       max-bytes))))
+
+(emagent-mcp-deftool "project_directory"
+  ()
+  "Return the session project directory path."
+  (emagent-tool-project-directory))
+
+(emagent-mcp-deftool "where_is"
+  ((command string "Command name for where_is."))
+  "Describe key bindings for COMMAND."
+  (emagent-tool-where-is command))
 
 (emagent-mcp-deftool "list_buffers"
-  :properties
-  '(("type_filter"
-     . ((type . "string")
-        (description . "Keep file, non-file, or internal buffers only.")))
-    ("window_filter"
-     . ((type . "string")
-        (description . "Keep visible or hidden buffers only.")))
-    ("frame_filter_regex"
-     . ((type . "string")
-        (description . "Regexp matched against frame name.")))
-    ("name_filter_regex"
-     . ((type . "string")
-        (description . "Regexp matched against buffer-name.")))
-    ("path_filter_glob"
-     . ((type . "string")
-        (description . "Glob matched against buffer-file-name.")))
-    ("mode_filter_regex"
-     . ((type . "string")
-        (description . "Regexp matched against major-mode name.")))
-    ("sort_by"
-     . ((type . "string")
-        (description . "Sort key: mru, name, mode, or file_mtime.")))
-    ("sort_descending"
-     . ((type . "boolean")
-        (description . "Reverse sort_by (ignored for mru).")))
-    ("limit"
-     . ((type . "integer")
-        (description . "Max rows after filter/sort."))))
-  :required '()
+  ((type-filter string "Keep file, non-file, or internal buffers only." :optional)
+   (window-filter string "Keep visible or hidden buffers only." :optional)
+   (frame-filter-regex string "Regexp matched against frame name." :optional)
+   (name-filter-regex string "Regexp matched against buffer-name." :optional)
+   (path-filter-glob string "Glob matched against buffer-file-name." :optional)
+   (mode-filter-regex string "Regexp matched against major-mode name." :optional)
+   (sort-by string "Sort key: mru, name, mode, or file_mtime." :optional)
+   (sort-descending boolean "Reverse sort_by (ignored for mru)." :optional)
+   (limit integer "Max rows after filter/sort." :optional))
   "List Emacs buffers as wide JSON records (filters AND-ed; sort; limit).
 
 Each element is an object with name, mru_index, selected, current, other,
 path, file_mtime, char_count, line_count, mode, read_only, modified,
 modified_tick, chars_modified_tick, visible, frame_names, and type."
-  (args)
   (apply #'vector
          (emagent-tool-list-buffers
-          (emagent-mcp--arg args "type_filter")
-          (emagent-mcp--arg args "window_filter")
-          (emagent-mcp--arg args "frame_filter_regex")
-          (emagent-mcp--arg args "name_filter_regex")
-          (emagent-mcp--arg args "path_filter_glob")
-          (emagent-mcp--arg args "mode_filter_regex")
-          (emagent-mcp--arg args "sort_by")
-          (emagent-mcp--bool args "sort_descending")
-          (emagent-mcp--arg args "limit"))))
+          type-filter window-filter frame-filter-regex name-filter-regex
+          path-filter-glob mode-filter-regex sort-by sort-descending limit)))
 
 (emagent-mcp-deftool "buffer_info"
-  :properties
-  '(("name"
-     . ((type . "string")
-        (description . "Buffer name (mutually exclusive selector).")))
-    ("mru"
-     . ((type . "integer")
-        (description . "0-based buffer-list index selector.")))
-    ("selected"
-     . ((type . "boolean")
-        (description . "Describe the selected-window buffer.")))
-    ("other"
-     . ((type . "boolean")
-        (description . "Describe other-buffer of selected.")))
-    ("current"
-     . ((type . "boolean")
-        (description . "Describe current-buffer; prefer selected."))))
-  :required '()
+  ((name string "Buffer name (mutually exclusive selector)." :optional)
+   (mru integer "0-based buffer-list index selector." :optional)
+   (selected boolean "Describe the selected-window buffer." :optional)
+   (other boolean "Describe other-buffer of selected." :optional)
+   (current boolean "Describe current-buffer; prefer selected." :optional))
   "Describe one Emacs buffer: list_buffers row plus point/region/view.
 
 Use exactly one of name, mru, selected, other, or current.  With no
 selector, defaults to selected.  Multiple selectors or a missing match
 is an error.  Adds point/mark/region/narrow/directory/coding/window
 fields; does not return region text."
-  (args)
-  (emagent-tool-buffer-info
-   (emagent-mcp--arg args "name")
-   (emagent-mcp--arg args "mru")
-   (emagent-mcp--arg args "selected")
-   (emagent-mcp--arg args "other")
-   (emagent-mcp--arg args "current")))
+  (emagent-tool-buffer-info name mru selected other current))
 
 (emagent-mcp-deftool "list_windows"
-  :properties
-  '(("buffer_name_regex"
-     . ((type . "string")
-        (description . "Regexp matched against window buffer-name.")))
-    ("frame_filter_regex"
-     . ((type . "string")
-        (description . "Regexp matched against frame name.")))
-    ("selected"
-     . ((type . "boolean")
-        (description . "When true, keep only the selected window.")))
-    ("limit"
-     . ((type . "integer")
-        (description . "Max rows after filters."))))
-  :required '()
+  ((buffer-name-regex string "Regexp matched against window buffer-name." :optional)
+   (frame-filter-regex string "Regexp matched against frame name." :optional)
+   (selected boolean "When true, keep only the selected window." :optional)
+   (limit integer "Max rows after filters." :optional))
   "List live Emacs windows as wide JSON records.
 
 Each element has buffer_name, buffer_path, frame_name, selected, dedicated,
 width, height, left, top, point, window_start, and window_end."
-  (args)
   (apply #'vector
          (emagent-tool-list-windows
-          (emagent-mcp--arg args "buffer_name_regex")
-          (emagent-mcp--arg args "frame_filter_regex")
-          (emagent-mcp--arg args "selected")
-          (emagent-mcp--arg args "limit"))))
+          buffer-name-regex frame-filter-regex selected limit)))
+
+(emagent-mcp-deftool "list_frames"
+  ((name-filter-regex string "Regexp matched against frame name." :optional)
+   (selected boolean "When true, keep only the selected frame." :optional)
+   (limit integer "Max rows after filters." :optional))
+  "List live Emacs frames as wide JSON records.
+
+Each element has name, selected, visible, width, height, left, top,
+window_count, and buffer_names."
+  (apply #'vector
+         (emagent-tool-list-frames name-filter-regex selected limit)))
+
+(emagent-mcp-deftool "list_marks"
+  ((buffer string "Buffer name; omit for the selected window buffer." :optional)
+   (buffer-name-regex string "Regexp matched against buffer-name." :optional)
+   (limit integer "Max rows after filters." :optional))
+  "List mark and mark-ring positions as wide JSON records.
+
+Each element has buffer_name, position, line, column, and current."
+  (apply #'vector
+         (emagent-tool-list-marks buffer buffer-name-regex limit)))
+
+(emagent-mcp-deftool "list_registers"
+  ((type-filter string "Keep string, number, marker, window, frame, or other." :optional)
+   (limit integer "Max rows after filters." :optional))
+  "List Emacs registers as wide JSON records.
+
+Each element has name, type, preview, and optional buffer_name/position."
+  (apply #'vector
+         (emagent-tool-list-registers type-filter limit)))
 
 (emagent-mcp-deftool "imenu_index"
-  :properties
-  '(("file"
-     . ((type . "string")
-        (description . "File for imenu; omit for current buffer."))))
-  :required '()
+  ((file string "File for imenu; omit for current buffer." :optional))
   "Return imenu outline as wide JSON records (name, path, line, position).
 
 Prefer this over dumping whole files when orienting in a buffer."
-  (args)
   (apply #'vector
-         (emagent-tool-imenu-records (emagent-mcp--arg args "file"))))
+         (emagent-tool-imenu-records file)))
 
 (defcustom emagent-mcp-compact-schemas t
   "When non-nil, shorten tools/list descriptions and property docs."
@@ -968,16 +1083,24 @@ is returned, CALLBACK is invoked later via its reply function."
                 (and (boundp 'emagent-acp-prefer-emacs)
                      emagent-acp-prefer-emacs)))
              (handler (nth 4 entry))
+             (cont-cell nil)
              (reply
               (lambda (result &optional is-error)
-                (funcall callback
-                         (emagent-mcp--string-result result)
-                         is-error))))
+                (when (or (null cont-cell)
+                          (not (emagent-mcp-cont-cancelled-p cont-cell)))
+                  (when cont-cell
+                    (run-hook-with-args 'emagent-mcp-cont-reply-functions
+                                        cont-cell result is-error))
+                  (funcall callback
+                           (emagent-mcp--string-result result)
+                           is-error)))))
         (emagent-mcp--maybe-guard-file-tick name args)
         (condition-case err
             (let ((result (funcall handler args)))
               (if (emagent-mcp-cont-p result)
-                  (funcall (emagent-mcp-cont-function result) reply)
+                  (progn
+                    (setq cont-cell result)
+                    (funcall (emagent-mcp-cont-function result) reply))
                 (funcall reply result nil)))
           (error (funcall callback (error-message-string err) t))))))))
 
