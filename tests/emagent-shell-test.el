@@ -45,7 +45,7 @@
 (ert-deftest emagent-shell-test-suggest-alternative ()
   (let ((emagent-acp-prefer-emacs t)
         (emagent-shell-suggest t))
-    (should (string-match-p "grep" (emagent-shell--suggest-alternative "rg foo")))
+    (should (string-match-p "search" (emagent-shell--suggest-alternative "rg foo")))
     (should (string-match-p "fs op=find"
                             (emagent-shell--suggest-alternative "find . -name foo")))
     (should (string-match-p "git op="

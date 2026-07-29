@@ -18,6 +18,8 @@
     (should (string-match-p "Tool preference" prompt))
     (should (string-match-p "Context discipline" prompt))
     (should (string-match-p "imenu_index" prompt))
+    (should (string-match-p "search" prompt))
+    (should-not (string-match-p "search op=grep" prompt))
     (should (string-match-p "project_directory" prompt))
     (should (string-match-p "list_frames" prompt))
     (should-not (string-match-p "emacs op=project_directory" prompt))

@@ -363,6 +363,24 @@
         (kill-buffer chat)))))
 
 
+(ert-deftest emagent-mcp-test-search-no-op-arg ()
+  (let* ((session (list :root "/tmp" :buffer (current-buffer)))
+         (args (make-hash-table :test 'equal))
+         (got nil)
+         (entry (emagent-mcp--tool-entry "search")))
+    (should entry)
+    (should-not (assoc-string "op" (nth 2 entry) t))
+    (should (equal (nth 3 entry) '("pattern")))
+    (cl-letf (((symbol-function 'emagent-tool-grep-async)
+               (lambda (cb pattern path)
+                 (funcall cb (format "pattern=%s path=%s" pattern path) nil))))
+      (puthash "pattern" "foo" args)
+      (emagent-mcp--run-tool-async
+       "search" args session
+       (lambda (result is-error) (setq got (list result is-error))))
+      (should (equal got '("pattern=foo path=nil" nil))))))
+
+
 (provide 'emagent-tools-buffers-test)
 
 ;;; emagent-tools-buffers-test.el ends here
