@@ -145,9 +145,10 @@ turn when over threshold; unsaved buffers only get a save hint.
 
 - *Session notes* (=/notes=): durable facts for this chat, injected as
   =[Session notes]= on =session/new= (not scraped from the visible buffer).
-- *Project notes*: =.emagent/notes.org= under the project root
-  (=emagent-project-notes-relative=), merged into the same prompt block so
-  =/compact= does not keep re-summarizing repo facts.
+- *Project notes*: =~/.emagent/projects/HASH.notes.org= (same HASH as the
+  per-project permissions JSON), merged into the same prompt block so
+  =/compact= does not keep re-summarizing repo facts.  Nothing is written
+  into the project tree.
 
 ** Usage and context fill
 
@@ -259,6 +260,7 @@ Storage under =emagent-permissions-directory= (default =~/.emagent=):
 | =global.json= | *Allow always* fingerprints |
 | =sessions/SESSION.json= | Session fingerprints + auto-approve |
 | =projects/HASH.json= | Per-project MCP allowlist + fingerprints |
+| =projects/HASH.notes.org= | Per-project durable notes (not in the repo) |
 
 =M-x emagent-reset-permissions= clears project / session / global entries.
 =emagent-acp-auto-approve-permissions=: =nil= prompt; ='safe= auto-approve
@@ -298,7 +300,7 @@ Allow-always fingerprints never override hard denies.  Workspace trust helpers:
 | =emagent-archive-auto= | =t= | Roll archive when over threshold |
 | =emagent-archive-threshold-bytes= | =1048576= | Archive size gate (1MB) |
 | =emagent-archive-keep-turns= | =3= | Turns kept in the hot buffer |
-| =emagent-project-notes-relative= | =.emagent/notes.org= | Per-project notes file |
+| =emagent-project-notes-filename-suffix= | =.notes.org= | Suffix for =~/.emagent/projects/HASH…= notes |
 | =emagent-usage-enabled= | =t= | Append samples to =emagent-usage-file= |
 | =emagent-usage-budget-context= | =1500= | Cap Emacs context chars in prompts |
 | =emagent-usage-budget-notes= | =2000= | Cap notes block chars |
