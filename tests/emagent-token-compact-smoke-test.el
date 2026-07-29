@@ -84,17 +84,19 @@
         ;; Large transcript is capped (5% of window), not free-blown.
         (insert (make-string 500000 ?x))
         (setq emagent-chat--status nil)
-        (let ((pct (emagent-chat--context-fill-percent))
-              (ml (emagent-chat--mode-line-context-usage)))
+        (let* ((pct (emagent-chat--context-fill-percent))
+               (ml (emagent-chat--mode-line-context-usage))
+               (esc (emagent-chat--mode-line-escape ml)))
           (should (numberp pct))
           ;; mcp 10% + buffer cap 5% ≈ 15%
           (should (< pct 20.0))
           (should (> pct 10.0))
-          (should (stringp ml))
-          (should (string-match-p "ctx:~15%%\\'" ml))
+          (should (string-suffix-p "ctx:~15%" (string-trim-left ml)))
           (should (eq 'shadow (get-text-property 0 'face ml)))
+          (should (eq 'shadow (get-text-property (1- (length ml)) 'face ml)))
+          (should (string-suffix-p "ctx:~15%%" (string-trim-left esc)))
           (should (eq 'shadow
-                      (get-text-property (1- (length ml)) 'face ml))))))))
+                      (get-text-property (1- (length esc)) 'face esc))))))))
 
 (ert-deftest emagent-token-compact-smoke-ctx-proxy-no-mcp ()
   (emagent-tools-age-reset)
@@ -108,12 +110,16 @@
         (setq emagent-chat--status '(:ctx-unavailable t))
         ;; Cursor often never samples MCP bytes; capped transcript still
         ;; yields a weak estimate instead of stuck ctx:n/a.
-        (let ((pct (emagent-chat--context-fill-percent)))
+        (let* ((pct (emagent-chat--context-fill-percent))
+               (ml (emagent-chat--mode-line-context-usage))
+               (esc (emagent-chat--mode-line-escape ml)))
           (should (numberp pct))
           (should (<= pct 5.0))
-          (should (> pct 0.0)))
-        (should (string-match-p "ctx:~5%%"
-                                (emagent-chat--mode-line-context-usage)))))))
+          (should (> pct 0.0))
+          (should (string-suffix-p "ctx:~5%" (string-trim-left ml)))
+          (should (string-suffix-p "ctx:~5%%" (string-trim-left esc)))
+          (should (eq 'shadow
+                      (get-text-property (1- (length esc)) 'face esc))))))))
 
 (provide 'emagent-token-compact-smoke-test)
 
