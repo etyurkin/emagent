@@ -1022,10 +1022,19 @@ enabled so ACP file read/write route through Emacs buffers."
   "Assumed context window size when the provider has no ACP usage feed.
 
 Used for Cursor ACP, which does not provide context used/size today.
-Emagent estimates fill from MCP payload bytes only.  Nil or 0 disables
-the proxy."
+Emagent estimates fill from MCP payload bytes plus a capped transcript
+term (`emagent-acp-ctx-proxy-buffer-cap').  Nil or 0 disables the proxy."
   :type '(choice (const :tag "Off" nil)
                  (integer :tag "Tokens"))
+  :group 'emagent)
+
+(defcustom emagent-acp-ctx-proxy-buffer-cap 0.05
+  "Max fraction of `emagent-acp-ctx-proxy-size' from the Org transcript.
+
+Cursor sessions often have no MCP byte samples; a small capped buffer
+contribution keeps `ctx:~N%' alive without large resumes reporting
+over 100%.  0 disables the transcript term."
+  :type 'float
   :group 'emagent)
 
 (defcustom emagent-acp-compact-hint-threshold 80
