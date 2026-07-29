@@ -412,16 +412,6 @@ hash-tables) are JSON-encoded.  Other scalars use `format'."
     ("find" (emagent-tool-find-files (emagent-mcp--arg args "glob")
                                      (emagent-mcp--arg args "path")))))
 
-(defun emagent-mcp--search (args)
-  "Dispatch search tool ARGS as a continuation."
-  (emagent-mcp--require-op args '("grep"))
-  (emagent-mcp-cont (reply)
-    (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
-      (emagent-tool-grep-async
-       (emagent-mcp--reply-wrap reply)
-       (emagent-mcp--arg args "pattern")
-       (emagent-mcp--arg args "path")))))
-
 (defun emagent-mcp--git (args)
   "Dispatch git tool ARGS as a continuation."
   (emagent-mcp-cont (reply)
@@ -815,16 +805,16 @@ Write needs expected_tick. Lisp files use structural."
   (emagent-mcp--fs args))
 
 (emagent-mcp-deftool "search"
-  :properties
-  (append
-   (emagent-mcp--op-prop '("grep") "Search operation.")
-   '(("pattern" . ((type . "string") (description . "Regexp to search for."))))
-   (emagent-mcp--path-prop)
-   emagent-mcp--timeout-prop)
-  :required '("op" "pattern")
-  "Search the session tree. op=grep."
-  (args)
-  (emagent-mcp--search args))
+  ((pattern string "Regexp to search for.")
+   (path string "Absolute path, or relative to the session root." :optional)
+   (timeout integer "Optional seconds before the subprocess is killed." :optional))
+  "Search the session tree with a regexp (rg when available)."
+  (emagent-mcp-cont (reply)
+    (let ((emagent-tools--timeout-override timeout))
+      (emagent-tool-grep-async
+       (emagent-mcp--reply-wrap reply)
+       pattern
+       path))))
 
 (emagent-mcp-deftool "git"
   :properties

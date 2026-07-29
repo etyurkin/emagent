@@ -3,6 +3,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'seq)
 (require 'emagent-test-utils)
 (require 'emagent-chat)
 
@@ -65,6 +66,16 @@
     (should (<= (length tools) 17))
     (should (member "fs" names))
     (should (member "search" names))
+    (let* ((search (seq-find (lambda (tool)
+                               (string= "search" (alist-get 'name tool)))
+                             (append tools nil)))
+           (schema (alist-get 'inputSchema search))
+           (props (alist-get 'properties schema))
+           (required (append (alist-get 'required schema) nil)))
+      (should (gethash "pattern" props))
+      (should-not (gethash "op" props))
+      (should (member "pattern" required))
+      (should-not (member "op" required)))
     (should (member "list_buffers" names))
     (should (member "buffer_info" names))
     (should (member "list_windows" names))

@@ -106,7 +106,7 @@ Substitution guide:
 | Instead of              | Use                                       |
 |-------------------------+-------------------------------------------|
 | cat, head, tail         | fs op=read (optional line, limit)         |
-| grep, rg, ag            | search op=grep                            |
+| grep, rg, ag            | search                                    |
 | find -name GLOB         | fs op=find                                |
 | ls / tree               | fs op=list                                |
 | git status/diff/log     | git op=status|diff|log                    |
@@ -224,12 +224,12 @@ Follow these rules to avoid them:
 (defun emagent-prompts--prefer-emacs-tool-list ()
   "Return the full emagent tool list paragraph for the system prompt."
   (if (emagent-struct-available-p)
-      "fs (read/write/undo/delete/list/find), search (grep), git (status/diff/log),
+      "fs (read/write/undo/delete/list/find), search, git (status/diff/log),
 shell (run/compile), eval, list_buffers, buffer_info, list_windows, list_frames,
 list_marks, list_registers, imenu_index, project_directory, where_is,
 elisp (check/guide/apropos/apropos_doc/describe/find_function),
 structural (lisp-sitter: tree/get/replace/insert/edit/...), fetch_url."
-    "fs (read/write/undo/delete/list/find), search (grep), git (status/diff/log),
+    "fs (read/write/undo/delete/list/find), search, git (status/diff/log),
 shell (run/compile), eval, list_buffers, buffer_info, list_windows, list_frames,
 list_marks, list_registers, imenu_index, project_directory, where_is,
 elisp (check/guide/apropos/apropos_doc/describe/find_function), fetch_url.
@@ -1214,7 +1214,7 @@ Arguments: DIRECTORY."
      ((string-match-p "\\<git\\>" cmd)
       "Use emagent git op=status|diff|log instead of shell git.")
      ((string-match-p "\\`\\(?:grep\\|rg\\|ag\\)\\>" cmd)
-      "Use emagent grep instead of shell search commands.")
+      "Use emagent search instead of shell grep/rg/ag.")
      ((string-match-p "\\`find\\>" cmd)
       "Use emagent fs op=find or fs op=list instead of shell find.")
      ((string-match-p "\\`\\(?:cat\\|head\\|tail\\)\\>" cmd)
@@ -1482,7 +1482,7 @@ Arguments: LINE, LIMIT."
      (t
       (concat "[outline: imenu]\n"
               (emagent-tool-imenu-index resolved)
-              "\n\n[Use fs read with line=/limit= or search op=grep for body.]")))))
+              "\n\n[Use fs read with line=/limit= or search for body.]")))))
 
 (defun emagent-tool-read-file (path &optional line limit refresh)
   "Return contents of PATH as a string.
