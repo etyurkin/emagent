@@ -55,8 +55,8 @@
     (puthash token session emagent-mcp--sessions)
     (unwind-protect
         (emagent-test--with-mocks
-            (((symbol-function 'emagent-tool-compile)
-              (lambda (&rest _args) "ok")))
+            (((symbol-function 'emagent-tool-compile-async)
+              (lambda (callback &rest _args) (funcall callback "ok" nil))))
           (should (string= "ok" (emagent-mcp--run-tool "shell" args session))))
       (remhash token emagent-mcp--sessions))))
 
