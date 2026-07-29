@@ -24,6 +24,7 @@
     (should (string-match-p "list_frames" prompt))
     (should (string-match-p "list_diagnostics" prompt))
     (should (string-match-p "list_bookmarks" prompt))
+    (should (string-match-p "list_processes" prompt))
     (should-not (string-match-p "emacs op=project_directory" prompt))
     (should-not (string-match-p "emacs (project_directory" prompt))
     (should (string-match-p "shell op=compile" prompt))

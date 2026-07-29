@@ -1032,6 +1032,22 @@ rear_context."
          (emagent-tool-list-bookmarks
           name-filter-regex path-filter-glob type-filter limit)))
 
+(emagent-mcp-deftool "list_processes"
+  ((name-filter-regex string "Regexp matched against process name." :optional)
+   (status-filter string "Exact process-status name (run, exit, open, …)." :optional)
+   (type-filter string "Keep real, network, serial, or pipe." :optional)
+   (buffer-name-regex string "Regexp matched against process buffer-name." :optional)
+   (live-only boolean "When true, keep only live processes." :optional)
+   (limit integer "Max rows after filters." :optional))
+  "List Emacs processes as wide JSON records.
+
+Each element has name, pid, type, status, command, buffer_name, tty,
+contact, live, and query_on_exit."
+  (apply #'vector
+         (emagent-tool-list-processes
+          name-filter-regex status-filter type-filter buffer-name-regex
+          live-only limit)))
+
 (emagent-mcp-deftool "imenu_index"
   ((file string "File for imenu; omit for current buffer." :optional))
   "Return imenu outline as wide JSON records (name, path, line, position).

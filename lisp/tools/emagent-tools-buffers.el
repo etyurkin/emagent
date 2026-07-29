@@ -29,7 +29,7 @@
 ;;; Commentary:
 ;;
 ;; Filterable wide alist records for Emacs session UI state: buffers,
-;; windows, frames, marks, registers, diagnostics, and bookmarks.
+;; windows, frames, marks, registers, diagnostics, bookmarks, and processes.
 ;;
 ;;; Code:
 
@@ -744,6 +744,98 @@ other) constrain the result.  Truncate to LIMIT when set."
         (seq-take rows limit)
       rows)))
 
+
+
+(defun emagent-tools--process-command-string (proc)
+  "Return PROC's command as a single string, or nil."
+  (let ((cmd (process-command proc)))
+    (cond
+     ((null cmd) nil)
+     ((stringp cmd) cmd)
+     ((listp cmd) (mapconcat #'identity cmd " "))
+     (t (format "%s" cmd)))))
+
+(defun emagent-tools--process-contact-string (proc)
+  "Return a short contact string for PROC when meaningful."
+  (let ((contact (process-contact proc)))
+    (cond
+     ((null contact) nil)
+     ((eq contact t) nil)
+     ((stringp contact) contact)
+     ((listp contact)
+      (truncate-string-to-width (mapconcat (lambda (x) (format "%s" x))
+                                           contact " ")
+                                120 nil nil t))
+     (t (truncate-string-to-width (format "%s" contact) 120 nil nil t)))))
+
+(defun emagent-tools--process-record (proc)
+  "Return a wide alist describing process PROC."
+  (let* ((buf (process-buffer proc))
+         (status (process-status proc))
+         (type (process-type proc))
+         (pid (process-id proc))
+         (tty (process-tty-name proc))
+         (live (and (process-live-p proc) t)))
+    `(("name" . ,(process-name proc))
+      ("pid" . ,pid)
+      ("type" . ,(and type (symbol-name type)))
+      ("status" . ,(and status (symbol-name status)))
+      ("command" . ,(emagent-tools--process-command-string proc))
+      ("buffer_name" . ,(and (buffer-live-p buf) (buffer-name buf)))
+      ("tty" . ,tty)
+      ("contact" . ,(emagent-tools--process-contact-string proc))
+      ("live" . ,(if live t :false))
+      ("query_on_exit" . ,(if (process-query-on-exit-flag proc) t :false)))))
+
+(defun emagent-tools--list-processes-match-p (row name-filter-regex
+                                                   status-filter
+                                                   type-filter
+                                                   buffer-name-regex
+                                                   live-only)
+  "Return non-nil when process ROW matches list_processes filters.
+
+NAME-FILTER-REGEX, STATUS-FILTER, TYPE-FILTER, BUFFER-NAME-REGEX, and
+LIVE-ONLY are optional constraints on name, status, type, buffer, and
+liveness."
+  (let ((name (alist-get "name" row nil nil #'equal))
+        (status (alist-get "status" row nil nil #'equal))
+        (type (alist-get "type" row nil nil #'equal))
+        (buf (alist-get "buffer_name" row nil nil #'equal))
+        (live (alist-get "live" row nil nil #'equal)))
+    (and (or (null name-filter-regex)
+             (and name (string-match-p name-filter-regex name)))
+         (or (null status-filter)
+             (equal status-filter status))
+         (or (null type-filter)
+             (equal type-filter type))
+         (or (null buffer-name-regex)
+             (and buf (string-match-p buffer-name-regex buf)))
+         (or (not (eq live-only t))
+             (eq live t)))))
+
+(defun emagent-tool-list-processes (&optional name-filter-regex status-filter
+                                             type-filter buffer-name-regex
+                                             live-only limit)
+  "List Emacs processes as wide alist records.
+
+NAME-FILTER-REGEX, STATUS-FILTER, TYPE-FILTER, BUFFER-NAME-REGEX, and
+LIVE-ONLY filter the result.  TYPE-FILTER is real, network, serial, or
+pipe.  Truncate to LIMIT when set."
+  (when (and type-filter
+             (not (member type-filter '("real" "network" "serial" "pipe"))))
+    (error "List_processes: invalid type_filter %S (use real, network, serial, or pipe)"
+           type-filter))
+  (let ((rows nil))
+    (dolist (proc (process-list))
+      (let ((row (emagent-tools--process-record proc)))
+        (when (emagent-tools--list-processes-match-p
+               row name-filter-regex status-filter type-filter
+               buffer-name-regex live-only)
+          (push row rows))))
+    (setq rows (nreverse rows))
+    (if limit
+        (seq-take rows limit)
+      rows)))
 
 (provide 'emagent-tools-buffers)
 

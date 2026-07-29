@@ -74,6 +74,7 @@
   (should (emagent-mcp--tool-entry "list_registers"))
   (should (emagent-mcp--tool-entry "list_bookmarks"))
   (should (emagent-mcp--tool-entry "list_diagnostics"))
+  (should (emagent-mcp--tool-entry "list_processes"))
   (should (emagent-mcp--tool-entry "imenu_index"))
   (should (emagent-mcp--tool-entry "project_directory"))
   (should (emagent-mcp--tool-entry "where_is"))
@@ -88,7 +89,7 @@
   (let* ((payload (emagent-mcp--tools-list-payload))
          (tools (mapcar (lambda (tool) (alist-get 'name tool))
                         (append (alist-get 'tools payload) nil))))
-    (should (<= (length tools) 19))
+    (should (<= (length tools) 20))
     (should (member "list_buffers" tools))
     (should (member "buffer_info" tools))
     (should (member "list_windows" tools))
@@ -97,6 +98,7 @@
     (should (member "list_registers" tools))
     (should (member "list_bookmarks" tools))
     (should (member "list_diagnostics" tools))
+    (should (member "list_processes" tools))
     (should (member "imenu_index" tools))
     (should (member "project_directory" tools))
     (should (member "where_is" tools))))
@@ -447,6 +449,49 @@
                           ("severity" . "error")
                           ("message" . "m"))))))
             (let* ((out (emagent-mcp--run-tool "list_diagnostics" args session))
+                   (parsed (json-parse-string out :object-type 'alist
+                                              :array-type 'list)))
+              (should (listp parsed))
+              (should (= 1 (length parsed))))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+
+
+(ert-deftest emagent-tools-buffers-test-list-processes-filter ()
+  (let* ((buf (generate-new-buffer " *emagent-proc*"))
+         (proc (make-pipe-process :name "emagent-proc-one"
+                                  :buffer buf
+                                  :noquery t)))
+    (unwind-protect
+        (progn
+          (let ((rows (emagent-tool-list-processes
+                       "emagent-proc-one" nil "pipe" nil t 10)))
+            (should (= 1 (length rows)))
+            (should (equal "emagent-proc-one"
+                           (alist-get "name" (car rows) nil nil #'equal)))
+            (should (equal "pipe"
+                           (alist-get "type" (car rows) nil nil #'equal)))
+            (should (eq t (alist-get "live" (car rows) nil nil #'equal))))
+          (let ((rows (emagent-tool-list-processes
+                       "emagent-proc-one" "exit" nil nil nil 10)))
+            (should (= 0 (length rows)))))
+      (when (process-live-p proc) (delete-process proc))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest emagent-mcp-test-list-processes-run-tool-json ()
+  (let* ((buf (get-buffer-create "*emagent-mcp-proc*"))
+         (session (list :root "/tmp" :buffer buf))
+         (args (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (puthash "limit" 5 args)
+          (cl-letf (((symbol-function 'emagent-tool-list-processes)
+                     (lambda (&rest _)
+                       '((("name" . "x")
+                          ("type" . "pipe")
+                          ("status" . "open")
+                          ("live" . t))))))
+            (let* ((out (emagent-mcp--run-tool "list_processes" args session))
                    (parsed (json-parse-string out :object-type 'alist
                                               :array-type 'list)))
               (should (listp parsed))
