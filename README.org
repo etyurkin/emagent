@@ -313,7 +313,7 @@ Allow-always fingerprints never override hard denies.  Workspace trust helpers:
 | =emagent-shell-guard-push= | =t= | Block push when PR already merged |
 | =emagent-chat-inactive-bell= | =t= | Bell when agent finishes unfocused |
 
-Destructive =fs= writes still prompt (unified diff).  =/Allow all/ remembers a
+Destructive =fs= writes still prompt (unified diff).  *Allow all* remembers a
 tool for the project.  Shell and =eval= also re-check at execution time.
 
 * Related projects
