@@ -79,10 +79,11 @@ Example for Emacs Lisp:
 
 Another paragraph starts after a blank line.
 
-You have emagent MCP dispatchers (fs, search, git, shell, eval, emacs, elisp,
-structural, fetch_url). Pass op= for the sub-operation (fs op=read, git op=status,
-structural op=replace). Prefer emagent tools and installed Emacs packages over
-Bash or the agent's built-in terminal. shell and fetch_url run through Emacs.
+You have emagent MCP dispatchers (fs, search, git, shell, eval, elisp,
+structural, fetch_url, project_directory, where_is, list_*). Pass op= for
+sub-operations on dispatchers (fs op=read, git op=status, structural op=replace).
+Prefer emagent tools and installed Emacs packages over Bash or the agent's
+built-in terminal. shell and fetch_url run through Emacs.
 Use fetch_url (or eval with url-retrieve-synchronously) for live HTTP when the
 agent's WebSearch/shell are sandboxed.
 
@@ -95,7 +96,7 @@ Describe what you found before suggesting changes. Ask for confirmation before m
 ## Tool preference
 
 Prefer emagent MCP tools and the live Emacs for every task. Order:
-1. emagent MCP (fs/search/git/shell/eval/emacs/elisp/structural/...)
+1. emagent MCP (fs/search/git/shell/eval/elisp/structural/list_*/...)
 2. Emacs Lisp via eval for in-editor automation
 3. shell op=run when there is no Emacs equivalent
 4. Agent built-ins / plugin slash commands only as last resort
@@ -116,6 +117,8 @@ Substitution guide:
 | open URL                | eval with (browse-url URL)                |
 | live HTTP / web API     | fetch_url                                 |
 | what's open in editor   | list_buffers / buffer_info / list_windows  |
+| frames / marks / regs   | list_frames / list_marks / list_registers |
+| project root / keybinds | project_directory / where_is              |
 | code outline (any lang) | imenu_index                               |
 
 shell op=run auto-redirects cat/grep/git/find and routes
@@ -222,13 +225,13 @@ Follow these rules to avoid them:
   "Return the full emagent tool list paragraph for the system prompt."
   (if (emagent-struct-available-p)
       "fs (read/write/undo/delete/list/find), search (grep), git (status/diff/log),
-shell (run/compile), eval, list_buffers, buffer_info, list_windows, imenu_index,
-emacs (project_directory/where_is),
+shell (run/compile), eval, list_buffers, buffer_info, list_windows, list_frames,
+list_marks, list_registers, imenu_index, project_directory, where_is,
 elisp (check/guide/apropos/apropos_doc/describe/find_function),
 structural (lisp-sitter: tree/get/replace/insert/edit/...), fetch_url."
     "fs (read/write/undo/delete/list/find), search (grep), git (status/diff/log),
-shell (run/compile), eval, list_buffers, buffer_info, list_windows, imenu_index,
-emacs (project_directory/where_is),
+shell (run/compile), eval, list_buffers, buffer_info, list_windows, list_frames,
+list_marks, list_registers, imenu_index, project_directory, where_is,
 elisp (check/guide/apropos/apropos_doc/describe/find_function), fetch_url.
 (structural appears after installing lisp-sitter.)"))
 
