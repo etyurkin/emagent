@@ -307,12 +307,13 @@ When trust is missing on disk, writes Claude (~/.claude.json) or Cursor
 
 (defcustom emagent-permissions-directory
   (expand-file-name ".emagent" "~")
-  "Directory for emagent permission files.
+  "Directory for emagent permission files and durable project notes.
 
 Layout:
 - global.json — fingerprints from \"Allow always\"
 - sessions/SESSION.json — per-ACP-session fingerprints and allow-all flag
-- projects/HASH.json — per-project MCP tools and permission fingerprints"
+- projects/HASH.json — per-project MCP tools and permission fingerprints
+- projects/HASH.notes.org — per-project durable notes (outside the repo)"
   :type 'directory
   :group 'emagent-permissions)
 
@@ -877,17 +878,26 @@ desktop restore) does not mark the session buffer modified."
                        (concat old "\n" facts))))
       (emagent-session-notes-write combined))))
 
-(defcustom emagent-project-notes-relative ".emagent/notes.org"
-  "Project-relative notes file merged into the system prompt."
+(defcustom emagent-project-notes-filename-suffix ".notes.org"
+  "Suffix for durable project notes under `emagent-permissions-directory'.
+
+Notes live at projects/HASH.notes.org next to projects/HASH.json, not
+inside the project tree."
   :type 'string
   :group 'emagent)
 
 (defun emagent-session-project-notes-file ()
-  "Return absolute path of the project notes file, or nil."
+  "Return absolute path of durable project notes under ~/.emagent, or nil.
+
+Path is `emagent-permissions-directory'/projects/HASH.notes.org, using the
+same project HASH as `emagent-permissions--project-file'."
   (when-let* ((root (emagent-session-project-directory))
-              (rel emagent-project-notes-relative)
-              (path (expand-file-name rel root)))
-    path))
+              (norm (emagent-trust--normalize-dir root))
+              (hash (secure-hash 'sha1 norm))
+              (dir (emagent-permissions--ensure-directory "projects")))
+    (expand-file-name
+     (concat hash emagent-project-notes-filename-suffix)
+     dir)))
 
 (defun emagent-session-project-notes-read ()
   "Return project notes text, or \"\"."

@@ -2055,12 +2055,24 @@ Distinct from `emagent-claude-acp-command' (the ACP bridge binary)."
              (cmd (if space (substring body 0 space) body)))
         (string= cmd "usage")))))
 
-(defun emagent-chat--slash-usage-apply (&optional _text)
-  "Show the local token usage report for `/usage'."
+(defun emagent-chat--slash-usage-apply (&optional text)
+  "Handle `/usage', `/usage baseline', and `/usage clear' from TEXT."
   (when-let ((bounds (emagent-chat--slash-token-bounds)))
     (delete-region (car bounds) (cdr bounds)))
   (require 'emagent-usage)
-  (emagent-usage))
+  (let* ((trimmed (string-trim (or text "")))
+         (rest (string-trim (substring trimmed
+                                       (min (length trimmed)
+                                            (length "/usage"))))))
+    (cond
+     ((string-match-p "\\`baseline\\>" rest)
+      (emagent-usage-baseline-set)
+      (message "emagent: usage baseline set"))
+     ((string-match-p "\\`clear\\>" rest)
+      (emagent-usage-baseline-clear)
+      (message "emagent: usage baseline cleared"))
+     (t
+      (emagent-usage)))))
 
 (defun emagent-chat--notes-command-p (text)
   "Return non-nil when TEXT is a `/notes' client command."
@@ -3360,7 +3372,7 @@ relative path, size in lines, and a short content preview."
     ((name . "mcp")
      (description . "list/authenticate MCP servers (Claude or Cursor CLI)"))
     ((name . "usage")
-     (description . "show recent token usage from the local usage log"))
+     (description . "token usage + session tax; `/usage baseline'|`clear' for deltas"))
     ((name . "notes")
      (description . "show/set session notes; `/notes clear' empties them"))
     ((name . "archive")

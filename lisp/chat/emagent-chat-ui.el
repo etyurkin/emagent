@@ -1570,8 +1570,8 @@ the render loop closes the response only after assistant text is stable.")
 (defun emagent-chat--context-fill-percent ()
   "Return current session context fill percent, or nil when unknown.
 
-When the provider omits context usage, estimate from MCP payload bytes
-and buffer size against `emagent-acp-ctx-proxy-size'."
+When the provider does not report context usage (Cursor ACP today), estimate
+from MCP payload bytes and buffer size against `emagent-acp-ctx-proxy-size'."
   (or
    (when-let* ((pair (and (fboundp 'emagent-acp-context-usage)
                           (emagent-acp-context-usage)))

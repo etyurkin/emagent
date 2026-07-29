@@ -167,6 +167,8 @@ output-tokens, cache-read-tokens, cache-creation-tokens, cost-usd."
               (insert (format "  $%.4f" (cadr cell))))
             (insert "\n"))))
       (insert "\n" (emagent-usage-tax-report-string) "\n")
+      (when-let ((delta (emagent-usage-tax-delta-string)))
+        (insert delta "\n"))
       (buffer-string))))
 
 ;;;###autoload
@@ -254,10 +256,14 @@ output-tokens, cache-read-tokens, cache-creation-tokens, cost-usd."
   :type 'integer
   :group 'emagent-usage)
 
+(defvar emagent-usage--baseline nil
+  "Alist of tax counters snapped by `emagent-usage-baseline-set', or nil.")
+
 (defun emagent-usage-tax-reset ()
-  "Reset session system-tax counters."
+  "Reset session system-tax counters and clear any usage baseline."
   (maphash (lambda (k _v) (puthash k 0 emagent-usage--tax))
-           emagent-usage--tax))
+           emagent-usage--tax)
+  (setq emagent-usage--baseline nil))
 
 (defun emagent-usage-tax-add (kind n)
   "Add N to tax counter KIND (symbol)."
@@ -278,6 +284,41 @@ output-tokens, cache-read-tokens, cache-creation-tokens, cost-usd."
                 text)))
     (emagent-usage-tax-add kind (length out))
     out))
+
+
+(defun emagent-usage-baseline-alist ()
+  "Return the current usage baseline alist, or nil."
+  emagent-usage--baseline)
+
+(defun emagent-usage-baseline-set ()
+  "Snapshot current tax counters as the before/after baseline."
+  (setq emagent-usage--baseline
+        (mapcar (lambda (k) (cons k (emagent-usage-tax-get k)))
+                '(context notes compressed user images mcp-bytes system)))
+  emagent-usage--baseline)
+
+(defun emagent-usage-baseline-clear ()
+  "Clear the before/after usage baseline."
+  (setq emagent-usage--baseline nil))
+
+(defun emagent-usage--tax-delta (kind)
+  "Return current minus baseline for KIND (0 baseline when unset)."
+  (- (emagent-usage-tax-get kind)
+     (or (alist-get kind emagent-usage--baseline) 0)))
+
+(defun emagent-usage-tax-delta-string ()
+  "Return tax delta since baseline, or nil when no baseline is set."
+  (when emagent-usage--baseline
+    (format
+     (concat "since baseline: ctx=%s notes=%s compressed=%s user=%s "
+             "images=%s mcp=%s system=%s")
+     (emagent-usage--format-tokens (emagent-usage--tax-delta 'context))
+     (emagent-usage--format-tokens (emagent-usage--tax-delta 'notes))
+     (emagent-usage--format-tokens (emagent-usage--tax-delta 'compressed))
+     (emagent-usage--format-tokens (emagent-usage--tax-delta 'user))
+     (emagent-usage--tax-delta 'images)
+     (emagent-usage--format-tokens (emagent-usage--tax-delta 'mcp-bytes))
+     (emagent-usage--format-tokens (emagent-usage--tax-delta 'system)))))
 
 (defun emagent-usage-tax-report-string ()
   "Return a short system-tax breakdown for the current session."
