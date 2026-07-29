@@ -118,6 +118,8 @@ Substitution guide:
 | live HTTP / web API     | fetch_url                                 |
 | what's open in editor   | list_buffers / buffer_info / list_windows  |
 | frames / marks / regs   | list_frames / list_marks / list_registers |
+| bookmarks               | list_bookmarks                            |
+| flymake diagnostics     | list_diagnostics                          |
 | project root / keybinds | project_directory / where_is              |
 | code outline (any lang) | imenu_index                               |
 
@@ -226,12 +228,14 @@ Follow these rules to avoid them:
   (if (emagent-struct-available-p)
       "fs (read/write/undo/delete/list/find), search, git (status/diff/log),
 shell (run/compile), eval, list_buffers, buffer_info, list_windows, list_frames,
-list_marks, list_registers, imenu_index, project_directory, where_is,
+list_marks, list_registers, list_bookmarks, list_diagnostics, imenu_index,
+project_directory, where_is,
 elisp (check/guide/apropos/apropos_doc/describe/find_function),
 structural (lisp-sitter: tree/get/replace/insert/edit/...), fetch_url."
     "fs (read/write/undo/delete/list/find), search, git (status/diff/log),
 shell (run/compile), eval, list_buffers, buffer_info, list_windows, list_frames,
-list_marks, list_registers, imenu_index, project_directory, where_is,
+list_marks, list_registers, list_bookmarks, list_diagnostics, imenu_index,
+project_directory, where_is,
 elisp (check/guide/apropos/apropos_doc/describe/find_function), fetch_url.
 (structural appears after installing lisp-sitter.)"))
 

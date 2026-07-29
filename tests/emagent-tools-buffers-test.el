@@ -72,6 +72,8 @@
   (should (emagent-mcp--tool-entry "list_frames"))
   (should (emagent-mcp--tool-entry "list_marks"))
   (should (emagent-mcp--tool-entry "list_registers"))
+  (should (emagent-mcp--tool-entry "list_bookmarks"))
+  (should (emagent-mcp--tool-entry "list_diagnostics"))
   (should (emagent-mcp--tool-entry "imenu_index"))
   (should (emagent-mcp--tool-entry "project_directory"))
   (should (emagent-mcp--tool-entry "where_is"))
@@ -86,13 +88,15 @@
   (let* ((payload (emagent-mcp--tools-list-payload))
          (tools (mapcar (lambda (tool) (alist-get 'name tool))
                         (append (alist-get 'tools payload) nil))))
-    (should (<= (length tools) 17))
+    (should (<= (length tools) 19))
     (should (member "list_buffers" tools))
     (should (member "buffer_info" tools))
     (should (member "list_windows" tools))
     (should (member "list_frames" tools))
     (should (member "list_marks" tools))
     (should (member "list_registers" tools))
+    (should (member "list_bookmarks" tools))
+    (should (member "list_diagnostics" tools))
     (should (member "imenu_index" tools))
     (should (member "project_directory" tools))
     (should (member "where_is" tools))))
@@ -379,6 +383,75 @@
        "search" args session
        (lambda (result is-error) (setq got (list result is-error))))
       (should (equal got '("pattern=foo path=nil" nil))))))
+
+
+(ert-deftest emagent-tools-buffers-test-list-diagnostics-filter ()
+  (require 'flymake)
+  (let ((buf (generate-new-buffer "emagent-diag.el")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq buffer-file-name (expand-file-name "emagent-diag.el" temporary-file-directory))
+          (insert "(+ 1 2)\n")
+          (emacs-lisp-mode)
+          (flymake-mode 1)
+          (cl-letf (((symbol-function 'flymake-diagnostics)
+                     (lambda (&optional _beg _end)
+                       (list (flymake-make-diagnostic
+                              (current-buffer) 1 2
+                              'flymake-error "boom")))))
+            (let ((rows (emagent-tool-list-diagnostics
+                         "emagent-diag.el" nil nil "error" 10)))
+              (should (= 1 (length rows)))
+              (should (equal "error"
+                             (alist-get "severity" (car rows) nil nil #'equal)))
+              (should (equal "boom"
+                             (alist-get "message" (car rows) nil nil #'equal))))
+            (let ((rows (emagent-tool-list-diagnostics
+                         nil "emagent-diag" nil "warning" 10)))
+              (should (= 1 (length rows))))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest emagent-tools-buffers-test-list-bookmarks-filter ()
+  (require 'bookmark)
+  (let ((bookmark-alist nil)
+        (tmp (make-temp-file "emagent-bm-" nil ".el" "(+ 1 2)\n")))
+    (unwind-protect
+        (progn
+          (bookmark-store "emagent-bm-one"
+                          `((filename . ,tmp) (position . 1)
+                            (front-context-string . "(")
+                            (rear-context-string . "+"))
+                          nil)
+          (bookmark-store "other-bm"
+                          '((filename . "/no/such/file.el") (position . 1))
+                          nil)
+          (let ((rows (emagent-tool-list-bookmarks "emagent-bm" nil "file" 10)))
+            (should (= 1 (length rows)))
+            (should (equal "emagent-bm-one"
+                           (alist-get "name" (car rows) nil nil #'equal)))
+            (should (equal "file"
+                           (alist-get "type" (car rows) nil nil #'equal)))))
+      (ignore-errors (delete-file tmp)))))
+
+(ert-deftest emagent-mcp-test-list-diagnostics-run-tool-json ()
+  (require 'flymake)
+  (let* ((buf (get-buffer-create "*emagent-mcp-diag*"))
+         (session (list :root "/tmp" :buffer buf))
+         (args (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (puthash "limit" 5 args)
+          (cl-letf (((symbol-function 'emagent-tool-list-diagnostics)
+                     (lambda (&rest _)
+                       '((("buffer_name" . "*x*")
+                          ("severity" . "error")
+                          ("message" . "m"))))))
+            (let* ((out (emagent-mcp--run-tool "list_diagnostics" args session))
+                   (parsed (json-parse-string out :object-type 'alist
+                                              :array-type 'list)))
+              (should (listp parsed))
+              (should (= 1 (length parsed))))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
 
 
 (provide 'emagent-tools-buffers-test)
