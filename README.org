@@ -4,12 +4,11 @@
 
 [[file:assets/emagent.png]]
 
-Emagent splits responsibilities the way a serious integration should:
-intelligence stays in an external ACP agent (Cursor or Claude), execution stays
-local in GNU Emacs.  An in-process MCP server exposes Emacs capabilities to the
-agent; an ACP permission gate validates shell, elisp, and python before
-anything runs; the org buffer is the durable transcript (folded thinking, tool
-audit trail, resumable session metadata).
+Emagent keeps *intelligence* in an external ACP agent (Cursor or Claude) and
+*execution* in GNU Emacs.  An in-process MCP server exposes Emacs to the agent;
+an ACP permission gate validates shell, elisp, and python before anything runs;
+the Org buffer is the durable transcript (folded thinking, tool audit trail,
+resumable session metadata).
 
 * Requirements
 
@@ -20,30 +19,22 @@ audit trail, resumable session metadata).
 
 ** Shell environment
 
-Emagent runs agent shell commands via =/bin/zsh -c= (a non-interactive shell that
-does *not* source =~/.zshrc=).  Tools like =mvn=, =node=, =cargo=, etc
- must be set in =~/.zshenv= to be visible to emagent and
-the agents it spawns.
-
-Typical =~/.zshenv= additions:
+Agent shell commands run as =/bin/zsh -c= (non-interactive; does *not* source
+=~/.zshrc=).  Put tools like =mvn=, =node=, and =cargo= in =~/.zshenv= so both
+emagent and the agent see them.
 
 #+BEGIN_SRC sh
-# PATH — tools emagent shell commands will call
 export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
 export PATH="$HOME/.npm-global/bin:$HOME/.jenv/bin:$HOME/.jenv/shims:$PATH"
 #+END_SRC
 
-Check which shell Emacs uses: =(shell-file-name)=.
-=emagent-extra-exec-paths= is a separate escape hatch for binaries that need
-to be on Emacs's own =exec-path= (e.g. =cursor-agent=, =claude-agent-acp=).
+Check Emacs's shell with =(shell-file-name)=.  Use =emagent-extra-exec-paths=
+only for binaries Emacs itself must find (=cursor-agent=, =claude-agent-acp=).
 
 * Install
 
-emagent is not on MELPA yet — the recipe is under review
-([[https://github.com/melpa/melpa/pull/10081][melpa/melpa#10081]]).  Until it
-lands, install from source with Elpaca.
-
-** From source (Elpaca)
+Not on MELPA yet ([[https://github.com/melpa/melpa/pull/10081][melpa/melpa#10081]]).
+Until then, install from source:
 
 #+BEGIN_SRC emacs-lisp
 (use-package emagent
@@ -52,420 +43,278 @@ lands, install from source with Elpaca.
   :commands (emagent emagent-mode))
 #+END_SRC
 
-** From MELPA (once the recipe is merged)
+Once the recipe lands: =:ensure t= or =M-x package-install RET emagent RET=.
 
-With [[https://melpa.org][MELPA]] in your =package-archives=:
+Emagent probes for =cursor-agent= and =claude-agent-acp=, asks only when both
+are present, and defaults to =emagent-default-provider= (='cursor=).  For a local
+clone, add =:load-path "~/path/to/emagent"= (repo root; =emagent.el= registers
+=lisp/*=).
 
-#+BEGIN_SRC emacs-lisp
-(use-package emagent
-  :ensure t
-  :commands (emagent emagent-mode))
-#+END_SRC
+* Quick start
 
-Or without =use-package=: =M-x package-install RET emagent RET=.
+| Key / command | Action |
+|---------------+--------|
+| =M-x emagent= | Start a session (infers project cwd; picks an agent) |
+| =C-c C-c= | Send the =* user>= prompt (else Org's own =C-c C-c=) |
+| =C-c ?= | Palette: connect, model, attach, new prompt, log, trust, … |
+| =ESC ESC= | Interrupt the agent |
+| =TAB= | Complete =/slash= on the prompt, else =org-cycle= |
+| =C-p= / =C-n= | Prompt history on the input line, else move by line |
+| =C-a= | Start of your input (past =user>=), else start of line |
+| =C-y= | Paste a clipboard image as =[[file:…]]=, else yank |
+| =C-x k= | Kill buffer and disconnect |
+| =M-x emagent-mode= | Reconnect a saved session buffer |
+| =M-x emagent-connect= | Connect/reconnect ACP (=C-c ?= → =c=) |
+| =M-x emagent-set-model= | Change session model (=#+EMAGENT_MODEL=) |
+| =M-x emagent-set-project-directory= | Move project + session files and reconnect |
+| =M-x emagent-trust-workspace= | Write provider trust markers (=C-u= = both) |
+| =M-x emagent-trust-claude-reconnect= | Force Claude =session/new= after trust |
+| =M-x emagent-reset-permissions= | Clear stored allowlists / fingerprints |
 
-emagent probes for =cursor-agent= and =claude-agent-acp= and uses whichever is
-installed, asking which to use only when both are.  To set the default in that
-case, customize =emagent-default-provider= (=cursor= by default).
+Bindings stay minimal: send, interrupt, palette, plus input-line overrides that
+fall through outside the prompt.  Everything else is on =C-c ?=.  Emagent only
+shadows =C-c ?= itself (Org table field info is on the palette).
 
-For a local clone, add =:load-path "~/path/to/emagent"= (the repo root, not =lisp/=).
-Modules live under =lisp/= grouped by feature; =emagent.el= registers those paths at load time.
+** Prompts
 
-* Usage
+Each turn is a =* username>= Org heading — fold the whole exchange with =TAB=.
+Type after the stub and press =C-c C-c= (multiline works; the whole heading is
+captured).  Edit an old heading and =C-c C-c= again to re-run it.  =C-c ?= →
+New prompt inserts a fresh stub if needed.
 
-| Key / command                       | Action                                           |
-|-------------------------------------+--------------------------------------------------|
-| =M-x emagent=                         | Start a session (infers cwd, probes and selects agent) |
-| =M-x emagent-trust-workspace=         | Record trust on disk (=C-u= = Claude and Cursor)   |
-| =M-x emagent-trust-claude-reconnect=  | New Claude session (trust after =emagent-trust-workspace=) |
-| =M-x emagent-mode=                    | Reconnect a saved buffer (agent + session)       |
-| =M-x emagent-connect=                 | Connect/reconnect ACP agent (=C-c ?= → =c=)      |
-| =M-x emagent-set-model=               | Change ACP model mid-session                     |
-| =M-x emagent-set-project-directory=   | Change project directory (moves session, reconnects) |
-| =M-x emagent-reset-permissions=       | Reset stored permissions (project, session, or global) |
-| =C-c C-c=                             | Send =* user>= block; execute src block inside one; else org's =C-c C-c= |
-| =C-c ?=                               | Command palette (transient): connect, model, attach, new prompt, log, project, trust, … |
-| =ESC ESC=                             | Interrupt agent response                         |
-| =TAB=                                 | Complete a =/slash= command, else org-cycle      |
-| =C-p= / =C-n=                          | Prompt history on the input line, else move by line |
-| =C-a=                                 | Start of your input (past =user>=), else start of line |
-| =C-y=                                 | Paste a clipboard image as a =[[file:…]]= link, else yank |
-| =C-x k=                               | Kill buffer and disconnect agent                 |
-| =M-x emagent-chat-insert-last-response= | Insert last response into another buffer        |
-| =M-x emagent-chat-insert-src-block=   | Pick a src block from last response and insert  |
+=C-u M-x emagent= picks the project directory interactively; otherwise it uses
+=default-directory= (or =~/=).  Do *not* edit =#+EMAGENT_PROJECT= by hand —
+use =emagent-set-project-directory= so session files move with it.
 
-Direct bindings are kept minimal: =C-c C-c= (send), =ESC ESC= (interrupt),
-=C-c ?= (palette), plus a few input-line overrides that fall through to their
-default org/motion behavior outside the prompt — =TAB= (complete a =/slash=
-command, else org-cycle), =C-p= / =C-n= (prompt history on the input line, else
-move by line), =C-a= (start of your input past the =user>= prefix, else start
-of line), and =C-y= (paste a clipboard image as a =[[file:…]]= link, else
-yank).  Every other command lives in the =C-c ?= palette.
+** Slash commands
 
-=C-c C-c= sends only on a =* user>= prompt and otherwise falls through to org's
-own =C-c C-c=, so tables, checkboxes, and src blocks keep working — emagent
-shadows only =C-c ?= itself (org's =org-table-field-info=, available from the
-palette's Table entry when point is in a table).
+Type =/= then =TAB=.  Client commands never reach the agent:
 
-** Project directory and agent
+| Command | Action |
+|---------+--------|
+| =/model= | Model for *this turn only* (link marker; stripped before send) |
+| =/mcp= [=server=] | List/authenticate MCP servers; ACP reconnects after login |
+| =/usage= | Token samples + session tax (ctx, notes, MCP bytes, …) |
+| =/usage baseline= | Snapshot tax for before/after measurement |
+| =/usage clear= | Drop baseline (hides =since baseline:=) |
+| =/notes= [=text=] | Show or replace session notes |
+| =/notes clear= | Empty session notes |
+| =/archive= [=force=] | Roll older turns into =NAME-archive/NNN.org= |
 
-Each prompt is formatted as a =* username>= org heading so you can fold an
-entire exchange (question + reply) with a single =TAB=.  Type after the
-=* username>= stub and press =C-c C-c=; multiline prompts work without selecting
-a region — the entire heading block is captured automatically.
+Sent to the agent (may compress/reset the ACP session):
 
-To re-evaluate a previous prompt, edit its =* username>= heading and press
-=C-c C-c= again — the old response is removed and the agent is called with the
-updated text.  Use the =C-c ?= palette (New prompt) to insert a fresh heading if
-the stub was deleted.
+| Command | Action |
+|---------+--------|
+| =/compact=, =/compress=, =/summarize= | Compress prior conversation |
 
-To switch the active project directory mid-session, use =M-x
-emagent-set-project-directory= (or the =C-c ?= palette).  This updates
-=#+EMAGENT_PROJECT=, moves the
-session files to match the new location (so =session/load= keeps working), and
-reconnects the agent — preserving the full conversation context.  Do *not* edit
-=#+EMAGENT_PROJECT= manually; that leaves the session files in the old location
-and causes the next reconnect to fail.
+**/model=** inserts an Org link
+(=[[emagent://AGENT/MODEL][short]]=).  Emagent runs that turn on the chosen
+model, shows =** Thinking (model)=, then restores the buffer model.  Delete the
+link to cancel.  On failure, emagent asks whether to keep it for retry/continue.
 
-=M-x emagent= infers the project directory from the current buffer's
-=default-directory= (or =~/=).  Prefix argument (=C-u M-x emagent=) picks the
-directory interactively.
+* Sessions
 
-** Switching the model
+Save the buffer (=C-x C-s=).  Files start with =# -*- mode: emagent -*-= and
+restore =#+EMAGENT_AGENT=, =#+EMAGENT_SESSION=, =#+EMAGENT_MODEL=, and
+=#+EMAGENT_PROJECT=.  Permission allowlists reload from =~/.emagent/=.
 
-=M-x emagent-set-model= (or =C-c ?= → model) changes the model for the rest of
-the session and persists it to =#+EMAGENT_MODEL=.
+Opening a saved file does *not* connect immediately when
+=emagent-activate-on-display= is non-nil (default): the buffer stays in
+=org-mode= until first displayed, so desktop restore does not spawn N agents.
+Set it to =nil= to activate on open.
 
-** Per-turn model override (=/model=)
+The agent can only resume a session with at least one completed exchange.  A
+buffer saved before any prompt reconnects but starts fresh.
 
-For a one-off, type =/model= inside a prompt and pick from the current agent's
-models.  The token becomes a link (=[[emagent://AGENT/MODEL][short]]=, shown as
-the short model name, full =agent/model= on hover) and emagent runs *that turn*
-on the chosen model, showing =** Thinking (model)=, then restores the buffer
-model.  The link is client-side only: it is stripped from the text sent to the
-agent, so the marker never reaches the model.  Delete the link to cancel the
-override.  If the turn fails, emagent asks whether to keep the model so a
-=retry=/=continue= reuses it.
+* Session size, notes, and usage
 
-If both =cursor-agent= and =claude-agent-acp= are installed, emagent prompts
-which to use (defaulting to =emagent-default-provider=).  Agent, session id,
-model, and project directory are saved in the buffer header as
-=#+EMAGENT_AGENT=, =#+EMAGENT_SESSION=, =#+EMAGENT_MODEL=, and
-=#+EMAGENT_PROJECT= so you can save the =.org= file and reconnect later.
-Permission fingerprints and MCP tool allowlists persist under =~/.emagent/=
-(see *Permission storage*); emagent does not write new ones into the org header.
+Long chats cost tokens twice: once in the ACP context, again when Org history is
+reloaded or compressed.  Emagent keeps the full transcript by default and offers
+ways to measure and trim cost without silent data loss.
 
-After you choose an agent, emagent checks whether that workspace is already
-trusted for Claude Code (=~/.claude.json=) or Cursor (=~/.cursor/projects/...=).
-For Claude, that means a =projects= entry with =hasTrustDialogAccepted= true
-for this directory or an ancestor; no entry, a missing flag, or JSON =false=
-counts as untrusted at that path (parents are still checked).  When trust is
-missing, emagent writes the provider marker automatically (Claude:
-=~/.claude.json=; Cursor: =~/.cursor/projects/.../.workspace-trusted=).
-Set =emagent-trust-enabled= to =nil= to skip trust setup.
+** Archive
 
-=emagent-mode= reconnects the saved ACP session only; it does *not* run the
-startup trust setup again (trust is whatever is already on disk).  Use =M-x emagent-trust-workspace= to add or refresh trust
-without starting a new session (=C-u= writes both Claude and Cursor markers).
+When a *saved* buffer exceeds =emagent-archive-threshold-bytes= (default 1MB),
+older turns can move into sibling files =NAME-archive/NNN.org=.  The hot buffer
+keeps a short =* Archive= TOC with links; chunks link back to the session file.
+Text is moved, not deleted.  =emagent-archive-auto= (default =t=) rolls after a
+turn when over threshold; unsaved buffers only get a save hint.
+=/archive= runs now; =/archive force= skips the size gate.
 
-*Claude:* updating =~/.claude.json= does *not* change an agent that is *resumed*
-via =#+EMAGENT_SESSION= (=session/load=).  Closing and reopening the org file
-only reconnects that saved session, so new trust can look ignored.  After
-=emagent-trust-workspace=, run =M-x emagent-trust-claude-reconnect= in the chat
-buffer (or =M-x emagent-chat-clear-session-id=, then turn =emagent-mode= off and
-on) so Claude runs =session/new= and re-reads trust.  For Cursor, reconnect
-the buffer after =emagent-trust-workspace= if the session was already connected.
+** Notes
 
-** Saved sessions
+- *Session notes* (=/notes=): durable facts for this chat, injected as
+  =[Session notes]= on =session/new= (not scraped from the visible buffer).
+- *Project notes*: =.emagent/notes.org= under the project root
+  (=emagent-project-notes-relative=), merged into the same prompt block so
+  =/compact= does not keep re-summarizing repo facts.
 
-Save the buffer to a =.org= file (=C-x C-s=).  Each buffer begins with
-=# -*- mode: emagent -*-=, so Emacs recognizes it as an emagent session the next
-time the file is opened.  The persisted agent, session id, model, and project
-directory are restored from =#+EMAGENT_AGENT=, =#+EMAGENT_SESSION=,
-=#+EMAGENT_MODEL=, and =#+EMAGENT_PROJECT=.  Permission allowlists reload from
-=~/.emagent/= for the matching project and session id.
+** Usage and context fill
 
-*Deferred activation:* opening a saved session — via =find-file=, desktop
-restore, or the mode cookie — does *not* immediately start =emagent-mode= or
-connect an agent.  The buffer stays in plain =org-mode= until you first switch
-to it; activation (and any agent connection) happens on first display.  This
-means restoring many saved sessions at startup spawns nothing until each one is
-actually visited.  Set =emagent-activate-on-display= to =nil= to activate
-session files eagerly on open instead.
+=/usage= shows recent samples from the local JSONL log plus a *session tax*
+line (Emacs context, notes, compressed summary, user text, images, MCP bytes,
+system).  =/usage baseline= then later =/usage= prints =since baseline:= deltas
+so you can measure a change.  Mode line can show tok/$ when samples exist
+(=emagent-usage-show-mode-line=).
 
-*Note:* the agent can only resume a session that has at least one completed
-exchange.  A buffer saved before any prompt was sent will reconnect but start a
-fresh session — the agent has nothing stored yet to resume.
+Claude reports real context fill as =ctx:N%=.  Cursor often omits usage; emagent
+estimates from MCP payload bytes + buffer size against
+=emagent-acp-ctx-proxy-size= and shows =ctx:~N%=.  When fill is high, a
+=/compact= hint may appear under Response (cooldown-gated; auto-compact is off
+by default).
 
-** Response blocks
+* Response layout
 
-Agent responses appear as Org subsections under the =* user>= heading:
+Under each =* user>= heading:
 
-- =** Thinking= — streamed reasoning text and tool-use lines (=→ tool-name: path=).
-  Only present when the model emits reasoning.  Folds automatically when the
-  response finishes.  With Cursor, file paths are read from =store.db=.  Shell
-  commands, =eval= forms, and CLI tools (=grep=, =cat=, …) render as Org src
-  blocks (=sh= / =elisp=) instead of a =→= line, with any permission decision
-  shown as a leading comment inside the block (=# (Allow: Always)=).  Edits
-  render the same unified diff a permission prompt shows — even when
-  auto-allowed — so you always see what changed.  Read and other file-path
-  tools stay as compact =→= lines.
-- =** Response= — the final assistant answer (Markdown converted to Org).
+- =** Thinking= — reasoning and tool lines (=→ tool: path=).  Folds when the
+  turn finishes.  Shell/=eval=/CLI tools render as Org src blocks with
+  permission comments; edits show the same unified diff as the permission UI;
+  simple reads stay as =→= lines.
+- =** Response= — final answer (Markdown → Org).
 
-** Side notes while the agent is thinking (/btw/)
+** Side notes (=/btw= / palette)
 
-Run btw from the =C-c ?= palette (or =M-x emagent-btw=) while the agent is
-running to send a quick side note.  A
-minibuffer opens — type your message, press Enter.  Emagent cancels the
-in-flight turn (keeping any partial response), then sends =btw, <your
-message>= as a new prompt — the same pattern Cursor and Claude use for
-mid-turn steering.
+While the agent is busy, =M-x emagent-btw= (or the palette) cancels the
+in-flight turn (keeping partial output) and sends =btw, <message>= as a new
+prompt — the usual mid-turn steer.
 
-** Self-paced agent loops (=ScheduleWakeup=)
+** Self-paced loops (=ScheduleWakeup=)
 
-Agents that run long, self-checking loops pace themselves by calling the
-=ScheduleWakeup= tool: they end a turn with a delay and a follow-up prompt,
-expecting the client to re-invoke them once the delay elapses.  Emagent honors
-this — when a turn that called =ScheduleWakeup= completes, it arms a timer and,
-on expiry, sends the wakeup prompt as a new user turn (recorded in the
-transcript like any other prompt).  Sending your own prompt in the meantime
-supersedes the pending wakeup, and a =ScheduleWakeup= =stop= call cancels it.
-The delay is clamped to 10–3600 seconds.  Set
-=emagent-acp-honor-schedule-wakeup= to =nil= to disable (the tool call still
-renders; nothing fires).
+If the agent ends a turn with =ScheduleWakeup=, emagent arms a timer (10–3600s)
+and re-prompts on expiry.  Your own prompt supersedes a pending wakeup;
+=ScheduleWakeup= =stop= cancels.  Disable with
+=emagent-acp-honor-schedule-wakeup=.
 
-** Cursor notes
+* Providers
 
-Before first use, authenticate: =cursor-agent login= in your terminal.  Without
-authentication, the session runs in a limited mode that rejects the Auto model.
-Model IDs in the mode line are shown without technical parameters
-(=claude-sonnet-4-6= not =claude-sonnet-4-6[thinking=true,...]=;
-=auto= not =default[]=).
+** Cursor
 
-Context window percentage (=ctx%=) is only available with Claude; cursor-agent
-does not expose token usage via ACP, so its mode line shows =ctx:n/a=.
+Authenticate once: =cursor-agent login=.  Without it, Auto may be rejected.
+Mode-line model IDs drop technical suffixes (=claude-sonnet-4-6=, =auto=).
+Context fill uses the =ctx:~N%= proxy when the agent omits usage (see above).
 
-** Claude (Agent SDK) notes
+** Claude (Agent SDK)
 
-The standalone =claude= CLI may ask whether to *trust* the current project
-directory the first time you work there.  That step records a trust decision
-so permissive =permissions.defaultMode= values in the repo's =.claude/settings.json=
-can take effect (the SDK applies the same trust-tier rules as the CLI).
+=claude-agent-acp= is headless — it never shows the CLI trust dialog.  Emagent
+writes =~/.claude.json= trust markers when =emagent-trust-enabled= is on (or
+use =emagent-trust-workspace=).  Resumed sessions (=session/load=) do *not*
+re-read trust; after updating trust run
+=emagent-trust-claude-reconnect= (or clear the session id and reconnect) so
+Claude does =session/new=.
 
-=claude-agent-acp= is a headless ACP bridge: emagent never shows that trust
-dialog, so a brand-new folder can behave as *untrusted* until you establish trust
-some other way — for example run =claude= once in the project root and complete
-the prompt, or put =permissions.defaultMode= (e.g. =acceptEdits= or =auto=) in
-your *user* =~/.claude/settings.json=, which does not depend on directory trust.
+* MCP tools (op-dispatchers)
 
-ACP tool permission in emagent uses =session/request_permission= from the agent.
-Emagent owns the prompt UI (inline buttons in the chat buffer by default) and
-validates each request before replying.  The agent always receives a one-shot
-allow response (=allow_once=) — never =allow_always= — so every tool call still
-passes through the emagent gate even after you choose /Allow always/.
+Emagent advertises a small set of MCP tools.  Most take an =op= argument; full
+op docs live behind =elisp= =op=guide= / =describe= when needed
+(=emagent-mcp-compact-schemas= keeps =tools/list= short).
 
-Permission choices: =y= / =RET= (once), =s= (session →
-=~/.emagent/sessions/…=), =w= (always → =~/.emagent/global.json=), =a= (allow
-all for session), =n= (deny).
+| Tool | Ops / role |
+|------+------------|
+| =fs= | =read= =write= =undo= =delete= =delete_directory= =list= =find= (writes need =expected_tick=; Lisp → =structural=) |
+| =search= | =grep= |
+| =git= | =status= =diff= =log= |
+| =shell= | =run= (shell) or =compile= (compilation-mode; prefer for builds/tests) |
+| =eval= | Evaluate a form in the live Emacs (FS/process blocked) |
+| =emacs= | =buffers= =imenu= =project_directory= =where_is= |
+| =elisp= | =check= =guide= =apropos= =apropos_doc= =describe= =find_function= |
+| =structural= | Lisp sexp edits via [[https://github.com/etyurkin/lisp-sitter][lisp-sitter]] (=tree= =get= =replace= …; mutate needs =expected_tick=) |
+| =fetch_url= | HTTP(S) fetch |
 
-** Permission storage
+Builds (=mvn=, =gradle=, =cargo=, =make=, =npm test=, …) should use
+=shell= =op=compile= for navigable errors.
 
-Permission state lives under =emagent-permissions-directory= (default
-=~/.emagent=):
+When lisp-sitter is installed, =fs= =op=write= on Lisp files is rejected — use
+=structural_*= ops.  Call =elisp= =op=check= before =eval=, and validate before
+structural writes.
+
+Repeated large tool results may age into short stubs; file reads at the same
+=emagent-tick= return =unchanged since tick N= across turns (=refresh= to force).
+
+* External MCP servers
+
+Claude-compatible agents get =mcpServers= from
+=emagent-acp-extra-mcp-config-file= (default =~/.claude.json=).  Cursor uses
+=~/.cursor/mcp.json=; emagent also writes project =mcp-approvals.json= and runs
+=mcp enable= when needed.  =/mcp= lists servers and runs the provider CLI login;
+on success emagent *reconnects the ACP session* so gateway tools load (no manual
+=emagent-mode= toggle).
+
+* Permissions
+
+Emagent owns =session/request_permission= UI (inline buttons by default) and
+re-validates at execution.  The agent always gets a one-shot allow
+(=allow_once=) — even after /Allow always/ — so every call still hits the gate.
+
+Keys: =y=/=RET= once, =s= session, =w= always (global), =a= allow-all for
+session, =n= deny.
+
+Storage under =emagent-permissions-directory= (default =~/.emagent=):
 
 | File | Contents |
 |------+----------|
-| =global.json= | Fingerprints from *Allow always* |
-| =sessions/SESSION.json= | Session fingerprints and auto-approve flag |
-| =projects/HASH.json= | Per-project MCP tool allowlist and project-scoped fingerprints |
+| =global.json= | *Allow always* fingerprints |
+| =sessions/SESSION.json= | Session fingerprints + auto-approve |
+| =projects/HASH.json= | Per-project MCP allowlist + fingerprints |
 
-=M-x emagent-reset-permissions= clears entries in these files.
+=M-x emagent-reset-permissions= clears project / session / global entries.
+=emagent-acp-auto-approve-permissions=: =nil= prompt; ='safe= auto-approve
+non-destructive; =t= auto-approve anything that passes validation.  This does
+not replace Claude Code's own trust layer inside the agent.
 
-To undo an accidentally-granted permission, use =M-x emagent-reset-permissions=
-(also in the =C-c ?= palette under Session).  A minibuffer menu offers:
-=project: all= (clears fingerprints and allowed tools for this project directory),
-=project: session= (clears fingerprints and auto-approve for the current session),
-and =global: all= (clears all globally approved fingerprints).
+** Policy engine
 
-Set =emagent-acp-auto-approve-permissions= to ='safe= to auto-approve reads,
-writes, and harmless shell commands while still prompting for destructive
-operations (=rm -rf=, =dd=, dangerous =eval=, etc.).  Set to =t= to skip
-prompts for anything that passes validation.  This does not replace Claude Code's
-own permission and trust layers inside the agent process.
+Rules live in =lisp/trust/emagent-policy*.el= (=:id=, =:severity=
+=deny=/=confirm=, =:match=).  Highest severity wins.  Extend with
+=emagent-policy-extra-*-rules=.
 
-** Permission policy
+| Case | Result |
+|------+--------|
+| =kill-emacs=, =pause-emacs= in =eval= | Hard deny |
+| Dangerous =eval= symbols / destructive shell | Confirm (again at run time) |
+| =fs= =delete= / =delete_directory= | Inline prompt; path under project root |
 
-Validation lives in =lisp/trust/emagent-policy.el= — a single engine with
-declarative rule tables:
-
-| Module | Checks |
-|--------+--------|
-| =emagent-policy-rules-shell.el= | Destructive shell (=rm -rf=, =dd=, =sudo rm=, pipe-to-shell, …) |
-| =emagent-policy-rules-elisp.el= | Blocked/dangerous symbols in =eval= |
-| =emagent-policy-rules-python.el= | Risky patterns in =python -c= and structural =.py= writes |
-
-Each rule is a plist: =:id=, =:severity= (=deny= / =confirm=), =:reason=, =:match=.
-Highest severity wins when several rules match.  Extend with
-=emagent-policy-extra-*-rules= without editing the built-in tables.
-
-Emagent applies these rules at the ACP permission gate *before* your Allow /
-Deny choice, and again when a tool actually runs (defense in depth).
-
-| What emagent sees | Result |
-|-------------------+--------|
-| =kill-emacs=, =pause-emacs= in =eval= | Hard *deny* — blocked with no Allow option |
-| =delete-file=, =shell-command=, =write-file=, … in =eval= | *Confirm* — extra prompt; re-checked at eval time |
-| Destructive shell (=rm -rf=, =dd=, …) | *Confirm* at the gate and in =run_shell_command= |
-| =delete_file= / =delete_directory= MCP tools | Inline prompt; path confined to session project root |
-
-Allow-always fingerprints do not override hard denies.  =:confirm= rules still
-require explicit approval for that operation even when =emagent-acp-auto-approve-permissions=
-is ='safe= or =t= (unless you already stored a matching fingerprint).
-
-Blocked elisp (=kill-emacs=, =pause-emacs=) and dangerous shell commands are
-denied or confirmed at the ACP gate; MCP skips a second confirm when the call
-comes from an ACP session (=emagent-tools--acp-session-p=) because the ACP gate
-already ran.
-
-Workspace trust helpers are split across =emagent-trust.el= (startup auto-trust),
-=emagent-trust-claude.el= (=~/.claude.json= / =hasTrustDialogAccepted=),
-and =emagent-trust-cursor.el= (=~/.cursor/projects/.../.workspace-trusted=).
-Toggle with =emagent-trust-enabled=.
+Allow-always fingerprints never override hard denies.  Workspace trust helpers:
+=emagent-trust.el=, =emagent-trust-claude.el=, =emagent-trust-cursor.el=
+(=emagent-trust-enabled=).
 
 * Customization
 
-| Variable                                   | Default      | Description                                                         |
-|--------------------------------------------+--------------+---------------------------------------------------------------------|
-| =emagent-trust-enabled=                      | =t=            | Prompt for workspace trust after picking an agent                   |
-| =emagent-default-provider=                   | ='cursor=      | =cursor= or =claude=                                                  |
-| =emagent-cursor-acp-command=                 | =("cursor-agent" "acp")= | Cursor spawn command                                  |
-| =emagent-claude-acp-command=                 | =("claude-agent-acp")=   | Claude spawn command                                  |
-| =emagent-acp-file-access=                    | =t=            | Route file I/O through Emacs                                        |
-| =emagent-acp-prefer-emacs=                   | =t=            | Prefer Emacs tools over agent defaults                              |
-| =emagent-acp-auto-approve-permissions=       | =nil=          | ACP gate: =nil= prompt; ='safe= auto-approve non-destructive; =t= auto-approve all |
-| =emagent-acp-confirm-fs-writes=              | =nil=          | Second in-editor diff prompt for ACP fs/write (ACP gate unchanged) |
-| =emagent-allowed-tools=                      | =nil=          | MCP tools that skip confirmation                                    |
-| =emagent-policy-extra-shell-rules=           | =nil=          | Extra declarative shell policy rules (see below)                    |
-| =emagent-policy-extra-elisp-rules=           | =nil=          | Extra declarative elisp policy rules                                |
-| =emagent-policy-extra-python-rules=          | =nil=          | Extra declarative python policy rules                               |
-| =emagent-tools-show-written-buffer=          | =nil=          | Show file after write: =nil=, =t=, or ='magit-diff=                 |
-| =emagent-tools-display-compile-buffer=       | =nil=          | Display =*emagent-compile*= when a build starts                     |
-| =emagent-shell-block-no-verify=              | =t=            | Refuse =git --no-verify=                                            |
-| =emagent-shell-guard-push=                   | =t=            | Block push when branch PR is already merged                         |
-| =emagent-shell-redirect=                     | =t=            | Auto-redirect =cat=/=grep=/=git= to emagent tools                   |
-| =emagent-shell-suggest=                      | =t=            | Suggest emagent alternative for shell commands                      |
-| =emagent-acp-extra-mcp-config-file=          | ="~/.claude.json"= | Forward MCP servers from this file to the agent                |
-| =emagent-oauth-auto-browse-url=              | =nil=          | Auto-open OAuth authorize URLs in a browser                         |
-| =emagent-acp-watchdog-timeout=               | =300=          | Seconds of silence before aborting a stalled prompt                 |
-| =emagent-acp-honor-schedule-wakeup=          | =t=            | Re-invoke the agent when it calls =ScheduleWakeup= to pace a loop     |
-| =emagent-chat-inactive-bell=                 | =t=            | Ring bell when agent finishes while Emacs is not focused            |
-| =emagent-chat-inactive-bell-cooldown=        | =1.0=          | Minimum seconds between inactive bells                              |
-| =emagent-chat-inactive-osx-notification=     | =nil=          | Send macOS notification when agent finishes inactive                |
+| Variable | Default | Meaning |
+|----------+---------+---------|
+| =emagent-default-provider= | ='cursor= | =cursor= or =claude= when both exist |
+| =emagent-trust-enabled= | =t= | Auto-write provider trust markers |
+| =emagent-acp-prefer-emacs= | =t= | Prefer Emacs MCP tools over agent builtins |
+| =emagent-acp-file-access= | =t= | Route file I/O through Emacs |
+| =emagent-acp-auto-approve-permissions= | =nil= | =nil= / ='safe= / =t= |
+| =emagent-acp-confirm-fs-writes= | =nil= | Extra in-editor diff for ACP fs writes |
+| =emagent-acp-ctx-proxy-size= | =200000= | Assumed window for Cursor =ctx:~N%= |
+| =emagent-acp-compact-hint-threshold= | =80= | % fill that suggests =/compact= |
+| =emagent-acp-auto-compact-threshold= | =nil= | Auto =/compress= (off by default) |
+| =emagent-acp-auto-explore-model= | =t= | Cheaper model on explore-shaped turns |
+| =emagent-archive-auto= | =t= | Roll archive when over threshold |
+| =emagent-archive-threshold-bytes= | =1048576= | Archive size gate (1MB) |
+| =emagent-archive-keep-turns= | =3= | Turns kept in the hot buffer |
+| =emagent-project-notes-relative= | =.emagent/notes.org= | Per-project notes file |
+| =emagent-usage-enabled= | =t= | Append samples to =emagent-usage-file= |
+| =emagent-usage-budget-context= | =1500= | Cap Emacs context chars in prompts |
+| =emagent-usage-budget-notes= | =2000= | Cap notes block chars |
+| =emagent-mcp-compact-schemas= | =t= | Short =tools/list= schemas |
+| =emagent-acp-extra-mcp-config-file= | ="~/.claude.json"= | Forward =mcpServers= (nil to disable) |
+| =emagent-acp-honor-schedule-wakeup= | =t= | Honor =ScheduleWakeup= timers |
+| =emagent-acp-watchdog-timeout= | =300= | Seconds of silence before abort |
+| =emagent-activate-on-display= | =t= | Deferred =emagent-mode= on saved files |
+| =emagent-shell-block-no-verify= | =t= | Refuse =git --no-verify= |
+| =emagent-shell-guard-push= | =t= | Block push when PR already merged |
+| =emagent-chat-inactive-bell= | =t= | Bell when agent finishes unfocused |
 
-Destructive MCP tool calls (=write_file=, =delete_file=, etc.) prompt before
-running using inline buttons in the chat buffer.  =write_file= shows a unified
-diff before asking.  Answer /Allow all/ to remember a tool for this project
-directory (=~/.emagent/projects/…=).
-
-ACP execute (shell) and eval requests go through the same permission gate
-described above.  Shell commands are also checked at execution time in
-=emagent-shell-run-command= (defense in depth for direct MCP =run_shell_command=
-calls).
-
-** Eval safety
-
-The =eval= MCP tool runs Emacs Lisp directly in the live Emacs process.
-=emagent-policy-check-elisp= scans the form for blocked symbols (=kill-emacs=,
-=pause-emacs= — permanently denied) and dangerous symbols (=delete-file=,
-=shell-command=, =write-region=, =load-file=, etc. — confirmed at the ACP gate
-and again at MCP execution unless the session is ACP-gated).  Customize
-=emagent-policy-elisp-blocked-symbols= and =emagent-policy-elisp-dangerous-symbols=
-(aliased as =emagent-tools-eval-*-symbols=).
-
-The agent is guided to call =check_elisp= before =eval= and =check_structural_file=
-before =write_file= on structural files (=.el=, =.py=, =.lisp=, =.cl=) when
-lisp-sitter is not installed.
-
-When lisp-sitter is installed, =write_file= on Lisp files (=.el=, =.lisp=,
-=.cl=, =.scm=) is rejected and all edits go through =structural_replace= /
-=structural_insert= / =structural_substitute=.  Each call validates the complete
-node text before saving; =.el= files also byte-compile and eval the new form
-after save.  Install lisp-sitter from [[https://github.com/etyurkin/lisp-sitter][etyurkin/lisp-sitter]].
-=elisp_guide= covers Elisp patterns and pitfalls.
-
-** MCP tools exposed to the agent
-
-| Tool                       | Description                                                               |
-|----------------------------+---------------------------------------------------------------------------|
-| =read_file=                  | Read through Emacs (includes unsaved buffer content)                      |
-| =write_file=                 | Write via Emacs buffer (undo-able, diff shown); blocked for Lisp when lisp-sitter is installed |
-| =undo_file=                  | Undo edits in a file's buffer and save                                    |
-| =delete_file=                | Delete a file within the session root                                     |
-| =delete_directory=           | Delete a directory within the session root                                |
-| =grep=, =find_files=, =list_files= | File search within session root                                     |
-| =git_status=, =git_diff=, =git_log= | Git info via Emacs                                                 |
-| =compile=                    | Build/test via compilation-mode (errors navigable with =M-g n=)           |
-| =run_shell_command=          | Run a shell command through Emacs (shell-command-to-string)               |
-| =fetch_url=                  | Fetch an http(s) URL and return the response body                         |
-| =project_directory=          | Return the session's project directory                                    |
-| =buffer_list=                | Open files inside the project visible to Emacs                            |
-| =imenu_index=                | Function/class outline for any file                                       |
-| =eval=                       | Execute Emacs Lisp in the live process                                    |
-| =check_elisp=                | Validate Elisp form syntax before eval (line:column errors)               |
-| =elisp_guide=                | On-demand Elisp reference (patterns, pitfalls, examples)                  |
-| =apropos=, =apropos_doc=       | Find symbols by name or docstring                                         |
-| =describe_symbol=            | Full docstring + signature                                                |
-| =find_function=              | Return the source location of an Emacs function                           |
-| =where_is=                   | Return the key bindings for an Emacs command                              |
-| =check_structural_file=      | Validate whole Lisp file via lisp-sitter (syntax/structure; no byte-compile by default — macro expansion executes content, see =emagent-elisp-byte-compile-on-check=) |
-| =check_structural_node=      | Validate one top-level node without saving                                |
-| =structural_find_errors=     | List MISSING tokens and ERROR nodes in a Lisp file                        |
-| =structural_tree=            | Shallow outline of top-level nodes in a file                              |
-| =structural_context=         | Outline, bounds, and full text of each top-level form                     |
-| =structural_bounds=          | Byte positions of a named top-level form                                  |
-| =structural_get=             | Return the full text of a named top-level form                            |
-| =structural_replace=         | Replace one top-level node with complete new text                         |
-| =structural_insert=          | Insert a top-level node after =__start__=, =__end__=, or a symbol          |
-| =structural_substitute=      | Replace a sub-expression inside a named form                              |
-| =structural_remove=          | Remove a top-level form                                                   |
-| =structural_rename=          | Rename a top-level form and its call sites                                |
-| =structural_move=            | Move a top-level form to a new position in the file                       |
-| =structural_wrap=            | Wrap the body of a named form (=progn=, =let=, =if=, …)                    |
-| =structural_extract=         | Extract a sub-expression into a new function                              |
-| =structural_callers=         | Find all callers of a symbol in a file                                    |
-| =structural_flatten=         | Inline all call sites of a function and remove its definition             |
-| =structural_splice=          | Paredit splice: dissolve a wrapper form, elevating its body               |
-| =structural_raise=           | Paredit raise: promote a sub-expression over its enclosing list           |
-| =structural_complete=        | Complete an unbalanced s-expression by appending closing parens           |
-| =structural_format=          | Re-indent a file (depth-based)                                            |
-| =structural_convert_let=     | Convert between =let= and =let*= bindings                                  |
-| =structural_instrument=      | Instrument a form with tracing                                            |
-
-Build commands (=mvn=, =gradle=, =cargo=, =make=, =npm test=, etc.) are always
-routed through =compile= for navigable error output, regardless of other settings.
-
-** External MCP servers
-
-Emagent reads the =mcpServers= block from =emagent-acp-extra-mcp-config-file=
-(default =~/.claude.json=) and forwards those servers to the ACP agent alongside
-the built-in emagent tools.  This lets Claude-compatible agents use any MCP
-servers you already have configured — no separate setup required.  Set to =nil=
-to disable forwarding.
-
-Cursor discovers servers from =~/.cursor/mcp.json= instead.  In either provider,
-type =/mcp= (TAB or =C-c C-c=) to list servers and authenticate via the matching
-CLI (=claude mcp login= or =cursor-agent mcp login=).  For Cursor, emagent also
-writes =~/.cursor/projects/<cwd-slug>/mcp-approvals.json= (and runs
-=mcp enable=) so ACP loads those servers for the session project.  After
-authenticating, reconnect the chat (=emagent-mode= off/on) so the agent
-reloads tools.  Meta-gateways (search/dispatch style tools) are covered in the
-session system prompt.
+Destructive =fs= writes still prompt (unified diff).  =/Allow all/ remembers a
+tool for the project.  Shell and =eval= also re-check at execution time.
 
 * Related projects
 
-- [[https://github.com/etyurkin/lisp-sitter][lisp-sitter]] — MCP server for structural editing of Emacs Lisp, Scheme, and
-  Common Lisp; powers the =structural_*= tools listed above.
-- [[https://github.com/etyurkin/dot-emacs][dot-emacs]] — the author's Emacs configuration, with emagent wired in.
+- [[https://github.com/etyurkin/lisp-sitter][lisp-sitter]] — structural Lisp editing behind the =structural= MCP tool
+- [[https://github.com/etyurkin/dot-emacs][dot-emacs]] — author's config with emagent wired in
 
 * Acknowledgments
 

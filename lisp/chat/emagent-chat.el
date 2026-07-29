@@ -3372,7 +3372,7 @@ relative path, size in lines, and a short content preview."
     ((name . "mcp")
      (description . "list/authenticate MCP servers (Claude or Cursor CLI)"))
     ((name . "usage")
-     (description . "show recent token usage from the local usage log"))
+     (description . "token usage + session tax; `/usage baseline'|`clear' for deltas"))
     ((name . "notes")
      (description . "show/set session notes; `/notes clear' empties them"))
     ((name . "archive")
