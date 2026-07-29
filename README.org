@@ -107,10 +107,10 @@ Sent to the agent (may compress/reset the ACP session):
 |---------+--------|
 | =/compact=, =/compress=, =/summarize= | Compress prior conversation |
 
-**/model=** inserts an Org link
-(=[[emagent://AGENT/MODEL][short]]=).  Emagent runs that turn on the chosen
-model, shows =** Thinking (model)=, then restores the buffer model.  Delete the
-link to cancel.  On failure, emagent asks whether to keep it for retry/continue.
+=/model= inserts an Org link (=[[emagent://AGENT/MODEL][short]]=).  Emagent
+runs that turn on the chosen model, shows a ~** Thinking (model)~ heading,
+then restores the buffer model.  Delete the link to cancel.  On failure,
+emagent asks whether to keep it for retry/continue.
 
 * Sessions
 
@@ -136,7 +136,7 @@ ways to measure and trim cost without silent data loss.
 
 When a *saved* buffer exceeds =emagent-archive-threshold-bytes= (default 1MB),
 older turns can move into sibling files =NAME-archive/NNN.org=.  The hot buffer
-keeps a short =* Archive= TOC with links; chunks link back to the session file.
+keeps a short ~* Archive~ TOC with links; chunks link back to the session file.
 Text is moved, not deleted.  =emagent-archive-auto= (default =t=) rolls after a
 turn when over threshold; unsaved buffers only get a save hint.
 =/archive= runs now; =/archive force= skips the size gate.
@@ -168,13 +168,13 @@ by default).
 
 * Response layout
 
-Under each =* user>= heading:
+Under each ~* user>~ heading:
 
-- =** Thinking= — reasoning and tool lines (=→ tool: path=).  Folds when the
-  turn finishes.  Shell/=eval=/CLI tools render as Org src blocks with
+- ~** Thinking~ — reasoning and tool lines (~→ tool: path~).  Folds when the
+  turn finishes.  Shell, =eval=, and CLI tools render as Org src blocks with
   permission comments; edits show the same unified diff as the permission UI;
-  simple reads stay as =→= lines.
-- =** Response= — final answer (Markdown → Org).
+  simple reads stay as ~→~ lines.
+- ~** Response~ — final answer (Markdown → Org).
 
 ** Side notes (=/btw= / palette)
 
@@ -248,7 +248,7 @@ on success emagent *reconnects the ACP session* so gateway tools load (no manual
 
 Emagent owns =session/request_permission= UI (inline buttons by default) and
 re-validates at execution.  The agent always gets a one-shot allow
-(=allow_once=) — even after /Allow always/ — so every call still hits the gate.
+(=allow_once=) — even after *Allow always* — so every call still hits the gate.
 
 Keys: =y=/=RET= once, =s= session, =w= always (global), =a= allow-all for
 session, =n= deny.
