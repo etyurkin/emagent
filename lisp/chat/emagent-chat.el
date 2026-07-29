@@ -40,6 +40,7 @@
 (require 'emagent-cursor-command)
 (require 'emagent-log)
 (require 'emagent-session)
+(require 'emagent-archive)
 (require 'emagent-tools)
 
 (defun emagent-mcp--arg (args key &optional default)
@@ -198,7 +199,8 @@ instead; emagent then writes whatever port it gets into the agent config."
           args '("read" "write" "undo" "delete" "delete_directory" "list" "find"))
     ("read" (emagent-tool-read-file (emagent-mcp--arg args "path")
                                     (emagent-mcp--arg args "line")
-                                    (emagent-mcp--arg args "limit")))
+                                    (emagent-mcp--arg args "limit")
+                                    (emagent-mcp--bool args "refresh")))
     ("write" (emagent-tool-write-file (emagent-mcp--arg args "path")
                                       (emagent-mcp--arg args "content" "")))
     ("undo" (emagent-tool-undo-file (emagent-mcp--arg args "path")
@@ -495,7 +497,7 @@ instead; emagent then writes whatever port it gets into the agent config."
   (list
    (emagent-mcp--tool
     "fs"
-    "Filesystem through Emacs. op=read|write|undo|delete|delete_directory|list|find. write needs expected_tick from op=read. Lisp write refused when lisp-sitter installed — use structural."
+    "Emacs FS. op=read|write|undo|delete|delete_directory|list|find. write needs expected_tick. Lisp→structural."
     (append
      (emagent-mcp--op-prop
       '("read" "write" "undo" "delete" "delete_directory" "list" "find")
@@ -580,7 +582,7 @@ instead; emagent then writes whatever port it gets into the agent config."
     #'emagent-mcp--elisp)
    (emagent-mcp--tool
     "structural"
-    "[lisp-sitter] Structural Lisp edits. ops: check_file, check_node, find_errors, tree/outline, bounds, get, context, replace, insert, complete, format, rename, wrap, remove, move, substitute, extract, callers, instrument, flatten, convert_let, splice, raise, edit. Mutating ops need expected_tick from op=get or fs op=read. op=edit = replace/substitute + check."
+    "[lisp-sitter] Structural Lisp sexp edits. Mutate needs expected_tick from op=get/fs read. Discover with op=tree|get; details via elisp op=guide."
     (append
      (emagent-mcp--op-prop emagent-mcp--structural-ops "Structural operation.")
      (emagent-mcp--path-prop)
@@ -638,6 +640,32 @@ instead; emagent then writes whatever port it gets into the agent config."
 Each entry: (NAME DESCRIPTION PROPERTIES REQUIRED HANDLER . PLIST).
 PLIST may have :available, a predicate returning non-nil to show the tool.")
 
+(defcustom emagent-mcp-compact-schemas t
+  "When non-nil, shorten tools/list descriptions and property docs."
+  :type 'boolean
+  :group 'emagent-mcp)
+
+(defun emagent-mcp--compact-properties (properties)
+  "Return PROPERTIES with short descriptions when compact schemas are on."
+  (if (not emagent-mcp-compact-schemas)
+      properties
+    (mapcar
+     (lambda (cell)
+       (let* ((name (car cell))
+              (spec (cdr cell))
+              (type (map-elt spec 'type))
+              (desc (or (map-elt spec 'description) ""))
+              (short (if (<= (length desc) 40)
+                         desc
+                       (concat (substring desc 0 37) "..."))))
+         (cons name
+               (append (when type `((type . ,type)))
+                       (when (and short (not (string-empty-p short)))
+                         `((description . ,short)))
+                       (let ((enum (map-elt spec 'enum)))
+                         (when enum `((enum . ,enum))))))))
+     properties)))
+
 
 
 (defun emagent-mcp--tool-available-p (entry)
@@ -674,8 +702,12 @@ Only includes tools whose :available predicate passes."
                       (lambda (entry)
                         `((name . ,(nth 0 entry))
                           (description . ,(nth 1 entry))
-                          (inputSchema . ,(emagent-mcp--tool-schema (nth 2 entry) (nth 3 entry)))))
-                      (seq-filter #'emagent-mcp--tool-available-p emagent-mcp--tools))))))
+                          (inputSchema . ,(emagent-mcp--tool-schema
+                                           (emagent-mcp--compact-properties
+                                            (nth 2 entry))
+                                           (nth 3 entry)))))
+                      (seq-filter #'emagent-mcp--tool-available-p
+                                  emagent-mcp--tools))))))
 
 (defun emagent-mcp--session-allowed-tools (buffer)
   "Return BUFFER's persisted tool allow-list, or nil."
@@ -1290,11 +1322,36 @@ CHAT-BUFFER is the emagent chat buffer (for the per-buffer token)."
              (extra (emagent-mcp-config-file-servers)))
         (vconcat (list emagent-server) extra)))))
 
+(defun emagent-mcp--external-server-names ()
+  "Return names of configured external MCP servers (excluding emagent)."
+  (let (names)
+    (dolist (spec (emagent-mcp-config-file-servers))
+      (when-let ((n (map-elt spec 'name)))
+        (push n names)))
+    (when-let* ((file (bound-and-true-p emagent-mcp-cursor-config-file))
+                ((file-readable-p file))
+                (data (ignore-errors
+                        (with-temp-buffer
+                          (insert-file-contents file)
+                          (json-parse-buffer :object-type 'alist
+                                             :array-type 'list
+                                             :null-object nil
+                                             :false-object :false))))
+                (servers (map-elt data 'mcpServers)))
+      (dolist (pair servers)
+        (let ((name (if (symbolp (car pair))
+                        (symbol-name (car pair))
+                      (format "%s" (car pair)))))
+          (unless (equal name emagent-mcp-server-name)
+            (push name names)))))
+    (delete-dups (nreverse names))))
+
 (defun emagent-mcp-gateway-system-prompt ()
-  "Return MCP guidance when external servers are configured, or nil."
-  (when (or (emagent-mcp-config-file-servers)
-            (emagent-mcp--cursor-extra-servers-p))
-    (bound-and-true-p emagent-acp-system-prompt-gateway)))
+  "Return short MCP guidance when external servers are configured, or nil."
+  (when-let ((names (emagent-mcp--external-server-names)))
+    (concat (bound-and-true-p emagent-acp-system-prompt-gateway)
+            (format "\nConfigured servers: %s."
+                    (string-join names ", ")))))
 
 (defun emagent-chat--org-verbatim-paths (text)
   "Wrap file paths in org =verbatim= to prevent /italic/ and =verbatim= glitches.
@@ -1988,6 +2045,51 @@ Distinct from `emagent-claude-acp-command' (the ACP bridge binary)."
     (when (string-prefix-p "/mcp" trimmed)
       (let ((rest (string-trim (substring trimmed (length "/mcp")))))
         (and (not (string-empty-p rest)) rest)))))
+
+(defun emagent-chat--usage-command-p (text)
+  "Return non-nil when TEXT is a bare `/usage' command."
+  (let ((trimmed (string-trim text)))
+    (when (string-prefix-p "/" trimmed)
+      (let* ((body (substring trimmed 1))
+             (space (cl-position-if (lambda (c) (memq c '(?\s ?\t))) body))
+             (cmd (if space (substring body 0 space) body)))
+        (string= cmd "usage")))))
+
+(defun emagent-chat--slash-usage-apply (&optional _text)
+  "Show the local token usage report for `/usage'."
+  (when-let ((bounds (emagent-chat--slash-token-bounds)))
+    (delete-region (car bounds) (cdr bounds)))
+  (require 'emagent-usage)
+  (emagent-usage))
+
+(defun emagent-chat--notes-command-p (text)
+  "Return non-nil when TEXT is a `/notes' client command."
+  (let ((trimmed (string-trim text)))
+    (when (string-prefix-p "/" trimmed)
+      (let* ((body (substring trimmed 1))
+             (space (cl-position-if (lambda (c) (memq c '(?\s ?\t))) body))
+             (cmd (if space (substring body 0 space) body)))
+        (string= cmd "notes")))))
+
+(defun emagent-chat--slash-notes-apply (&optional text)
+  "Handle `/notes' and `/notes clear' from TEXT without sending to the agent."
+  (when-let ((bounds (emagent-chat--slash-token-bounds)))
+    (delete-region (car bounds) (cdr bounds)))
+  (let* ((trimmed (string-trim (or text "")))
+         (rest (string-trim (substring trimmed (min (length trimmed)
+                                                   (length "/notes"))))))
+    (cond
+     ((string-match-p "\\`clear\\>" rest)
+      (emagent-session-notes-write "")
+      (message "emagent: session notes cleared"))
+     ((not (string-empty-p rest))
+      (emagent-session-notes-write rest)
+      (message "emagent: session notes updated"))
+     (t
+      (let ((notes (emagent-session-notes-read)))
+        (if (string-empty-p notes)
+            (message "emagent: no session notes")
+          (message "%s" notes)))))))
 
 (defun emagent-chat--mcp-parse-list-line (line)
   "Parse one `mcp list' LINE into \(NAME . STATUS\) or nil.
@@ -2699,6 +2801,8 @@ the mode line pulling session state back out of the ACP layer."
                               (not (member mode-id '("agent" "default"))))
                      (propertize mode-id 'face 'shadow)))
          (context (emagent-chat--mode-line-context-usage))
+         (tokens (emagent-chat--mode-line-token-usage))
+         (mcp-bytes (emagent-chat--mode-line-mcp-bytes))
          (rss-str (when rss
                     (propertize (format "agent:%dMB" rss)
                                 'face (cond ((>= rss 1000) 'error)
@@ -2713,14 +2817,60 @@ the mode line pulling session state back out of the ACP layer."
          (tail (concat (when model-str (concat sep model-str))
                        (when mode-str  (concat sep mode-str))
                        (when context   (concat sep (string-trim-left context)))
+                       (when tokens    (concat sep (string-trim-left tokens)))
+                       (when mcp-bytes (concat sep (string-trim-left mcp-bytes)))
                        (when rss-str   (concat sep rss-str))
                        (when emacs-rss-str (concat sep emacs-rss-str)))))
     (cons head tail)))
 
+(defun emagent-chat--mode-line-mcp-bytes ()
+  "Return a propertized MCP payload-bytes fragment, or nil."
+  (when-let* (((fboundp 'emagent-tools-age-bytes))
+              (n (emagent-tools-age-bytes))
+              ((and (numberp n) (> n 0))))
+    (let* ((threshold (and (boundp 'emagent-tools-age-bytes-threshold)
+                           emagent-tools-age-bytes-threshold))
+           (str (cond
+                 ((>= n 1000000) (format " mcp:%.1fM" (/ n 1000000.0)))
+                 ((>= n 1000) (format " mcp:%.0fk" (/ n 1000.0)))
+                 (t (format " mcp:%d" n)))))
+      (propertize str
+                  'face (cond
+                         ((and (integerp threshold)
+                               (> threshold 0)
+                               (>= n threshold))
+                          'error)
+                         ((and (integerp threshold)
+                               (> threshold 0)
+                               (>= n (/ threshold 2)))
+                          'warning)
+                         (t 'shadow))))))
+
+(defun emagent-chat--mode-line-token-usage ()
+  "Return a propertized token/cost fragment, or nil."
+  (when (bound-and-true-p emagent-usage-show-mode-line)
+    (let* ((tok (emagent-chat--stat :total-tokens))
+           (cost (emagent-chat--stat :cost-usd))
+           (tok-str
+            (when (and (numberp tok) (> tok 0))
+              (cond
+               ((>= tok 1000000) (format "tok:%.1fM" (/ tok 1000000.0)))
+               ((>= tok 1000) (format "tok:%.1fk" (/ tok 1000.0)))
+               (t (format "tok:%d" tok)))))
+           (cost-str
+            (when (and (numberp cost) (> cost 0))
+              (format "$%.2f" cost))))
+      (when (or tok-str cost-str)
+        (propertize (concat " "
+                            (or tok-str "")
+                            (when (and tok-str cost-str) " ")
+                            (or cost-str ""))
+                    'face 'shadow)))))
+
 (defun emagent-chat--mode-line-context-usage ()
   "Return a propertized context fill string, or nil.
-Shows a percentage when the provider reports context usage, `ctx:n/a' when a
-connected provider (cursor) cannot report it, and nil otherwise."
+Shows a percentage when known, `ctx:~N%' for Cursor proxy estimates,
+`ctx:n/a' when connected but unestimable, and nil otherwise."
   (if-let* ((pair (emagent-chat--stat :ctx-usage))
             (used (car pair))
             (size (cdr pair))
@@ -2731,8 +2881,15 @@ connected provider (cursor) cannot report it, and nil otherwise."
                            ((>= pct 80) 'error)
                            ((>= pct 50) 'warning)
                            (t           'success))))
-    (when (emagent-chat--stat :ctx-unavailable)
-      (propertize " ctx:n/a" 'face 'shadow))))
+    (if-let ((pct (and (fboundp 'emagent-chat--context-fill-percent)
+                       (emagent-chat--context-fill-percent))))
+        (propertize (format " ctx:~%.0f%%" pct)
+                    'face (cond
+                           ((>= pct 80) 'error)
+                           ((>= pct 50) 'warning)
+                           (t           'shadow)))
+      (when (emagent-chat--stat :ctx-unavailable)
+        (propertize " ctx:n/a" 'face 'shadow)))))
 
 (defun emagent-mode-line ()
   "Return cached emagent status text for the mode line."
@@ -2884,10 +3041,31 @@ Summarizes the prior conversation and forwards the summary to
 `emagent-acp-send' with the compress flag, so ACP resets the session with
 it once the turn finishes (see `emagent-acp-send-prompt').  With no prior
 conversation, fails the just-opened response instead of dispatching."
+  (when (fboundp 'emagent-chat--reset-compact-hint-cooldown)
+    (emagent-chat--reset-compact-hint-cooldown))
   (let ((history (emagent-chat--conversation-history-text)))
     (if (string-empty-p history)
         (emagent-chat-fail-assistant "No conversation to compress")
       (emagent-chat--acp-send (emagent-chat--compress-prompt-text history) t))))
+
+(defvar-local emagent-chat--last-auto-compact nil
+  "Time of the last automatic /compress in this buffer, or nil.")
+
+(defun emagent-chat--run-auto-compress ()
+  "Insert an auto-/compress turn and dispatch compression.
+
+Caller must ensure the session is idle and history is non-empty."
+  (emagent-log "auto-compact: starting /compress")
+  (setq emagent-chat--last-auto-compact (current-time))
+  (let ((response-pos
+         (emagent-chat--insert-user-heading-with-text "/compress (auto)")))
+    (emagent-chat--send-pending-begin)
+    (emagent-chat--begin-response response-pos)
+    (let ((inhibit-read-only t))
+      (emagent-chat--writable)
+      (emagent-chat--insert-preparing-scaffold))
+    (emagent-chat--ensure-follow-window)
+    (emagent-chat--dispatch-compress)))
 
 (defun emagent-chat-send ()
   "Send the `* user>' prompt at point to the agent (C-c C-c).
@@ -2911,9 +3089,18 @@ Sending a previous prompt replaces its old response."
            (override (emagent-chat--region-turn-model (car bounds) (cdr bounds))))
       (when (string-empty-p input)
         (user-error "Prompt is empty"))
-      ;; Client `/mcp' never goes to the agent (Claude or Cursor).
-      (if (emagent-chat--mcp-command-p input)
-          (emagent-chat--slash-mcp-apply input)
+      ;; Client slash commands never go to the agent.
+      (cond
+       ((emagent-chat--mcp-command-p input)
+        (emagent-chat--slash-mcp-apply input))
+       ((emagent-chat--usage-command-p input)
+        (emagent-chat--slash-usage-apply input))
+       ((emagent-chat--notes-command-p input)
+        (emagent-chat--slash-notes-apply input))
+       ((and (fboundp 'emagent-archive-command-p)
+             (emagent-archive-command-p input))
+        (emagent-archive-apply input))
+       (t
         (when override
           (setq emagent-chat--turn-model override))
         (let ((response-pos
@@ -2940,7 +3127,7 @@ Sending a previous prompt replaces its old response."
           (if (and (emagent-chat--bare-slash-command-p input)
                    (emagent-chat--compress-command-p input))
               (emagent-chat--dispatch-compress)
-            (emagent-chat--acp-send input)))))))
+            (emagent-chat--acp-send input))))))))
 
 (defun emagent-chat-interrupt ()
   "Stop any in-flight emagent work (ESC ESC).
@@ -3171,7 +3358,13 @@ relative path, size in lines, and a short content preview."
   '(((name . "model")
      (description . "switch model for this turn (marker stripped before send)"))
     ((name . "mcp")
-     (description . "list/authenticate MCP servers (Claude or Cursor CLI)")))
+     (description . "list/authenticate MCP servers (Claude or Cursor CLI)"))
+    ((name . "usage")
+     (description . "show recent token usage from the local usage log"))
+    ((name . "notes")
+     (description . "show/set session notes; `/notes clear' empties them"))
+    ((name . "archive")
+     (description . "move older turns into NAME-archive/NNN.org; `/archive force'")))
   "Slash commands emagent handles itself; never sent to the agent.")
 
 (defun emagent-chat--client-slash-command (name)
@@ -3226,7 +3419,10 @@ stripped from the text sent to the agent."
   "Run the client slash command NAME (dispatch after completion)."
   (pcase name
     ("model" (emagent-chat--slash-model-apply))
-    ("mcp" (emagent-chat--slash-mcp-apply))))
+    ("mcp" (emagent-chat--slash-mcp-apply))
+    ("usage" (emagent-chat--slash-usage-apply))
+    ("notes" (emagent-chat--slash-notes-apply))
+    ("archive" (emagent-archive-apply))))
 
 (defvar emagent-chat-provider)
 

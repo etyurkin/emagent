@@ -99,6 +99,10 @@ target BUFFER (hence the two-argument signature)."
 (require 'emagent-tools)
 (require 'emagent-chat)
 (require 'emagent-session)
+(require 'emagent-tools-compact)
+(require 'emagent-tools-age)
+(require 'emagent-usage)
+(require 'emagent-archive)
 (require 'emagent-acp)
 (require 'emagent-cursor)
 (require 'emagent-claude)
@@ -467,6 +471,7 @@ leaves the session files in the old location and causes session/load to fail."
 (dolist (sym '(emagent-trust-workspace
                emagent-trust-claude-reconnect
                emagent-connect
+               emagent-usage
                emagent-set-project-directory
                emagent-chat-send
                emagent-chat-send-or-babel

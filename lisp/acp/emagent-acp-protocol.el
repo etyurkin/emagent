@@ -42,6 +42,9 @@
     (puthash :context-used nil u)
     (puthash :context-size nil u)
     (puthash :total-tokens 0 u)
+    (puthash :input-tokens nil u)
+    (puthash :output-tokens nil u)
+    (puthash :cost-usd nil u)
     u))
 
 ;; Defined before any code that reads or `setf's its slots: the accessors' gv
@@ -459,6 +462,8 @@ layer (see `emagent-chat-set-status')."
           :ctx-usage (when-let ((used (and usage (map-elt usage :context-used)))
                                 (size (map-elt usage :context-size)))
                        (cons used size))
+          :total-tokens (and usage (map-elt usage :total-tokens))
+          :cost-usd (and usage (map-elt usage :cost-usd))
           :ctx-unavailable (and (or (emagent-acp-state-busy state)
                                     (emagent-acp-state-ready state))
                                 (emagent-acp--provider-context-usage-unavailable-p
@@ -524,6 +529,9 @@ Arguments: STATE."
         (puthash :context-used nil usage)
         (puthash :context-size nil usage)
         (puthash :total-tokens 0 usage)
+        (puthash :input-tokens nil usage)
+        (puthash :output-tokens nil usage)
+        (puthash :cost-usd nil usage)
         (setf (emagent-acp-state-usage state) usage)
         usage)))
 
@@ -550,11 +558,21 @@ Arguments: EMAGENT-ACP-USAGE."
   (let ((usage (emagent-acp--usage-state state)))
     (when-let ((total (map-elt emagent-acp-usage 'totalTokens)))
       (map-put! usage :total-tokens total))
+    (when-let ((input (or (map-elt emagent-acp-usage 'inputTokens)
+                          (map-elt emagent-acp-usage 'promptTokens))))
+      (map-put! usage :input-tokens input))
+    (when-let ((output (or (map-elt emagent-acp-usage 'outputTokens)
+                           (map-elt emagent-acp-usage 'completionTokens))))
+      (map-put! usage :output-tokens output))
+    (when-let ((cost (or (map-elt emagent-acp-usage 'costUSD)
+                         (map-elt emagent-acp-usage 'costUsd))))
+      (map-put! usage :cost-usd cost))
     (when-let ((used (emagent-acp--usage-context-used emagent-acp-usage)))
       (map-put! usage :context-used used))
     (when-let ((size (emagent-acp--usage-context-size emagent-acp-usage)))
       (map-put! usage :context-size size))
     (setf (emagent-acp-state-usage state) usage)
+    (emagent-acp--usage-persist state emagent-acp-usage)
     (emagent-acp--refresh-mode-line state)))
 
 (defun emagent-acp--update-usage-from-notification (state emagent-acp-update)
@@ -566,8 +584,34 @@ Arguments: EMAGENT-ACP-UPDATE."
       (map-put! usage :context-used used))
     (when-let ((size (emagent-acp--usage-context-size emagent-acp-update)))
       (map-put! usage :context-size size))
+    (when-let ((total (map-elt emagent-acp-update 'totalTokens)))
+      (map-put! usage :total-tokens total))
+    (when-let ((input (or (map-elt emagent-acp-update 'inputTokens)
+                          (map-elt emagent-acp-update 'promptTokens))))
+      (map-put! usage :input-tokens input))
+    (when-let ((output (or (map-elt emagent-acp-update 'outputTokens)
+                           (map-elt emagent-acp-update 'completionTokens))))
+      (map-put! usage :output-tokens output))
+    (when-let ((cost (or (map-elt emagent-acp-update 'costUSD)
+                         (map-elt emagent-acp-update 'costUsd))))
+      (map-put! usage :cost-usd cost))
     (setf (emagent-acp-state-usage state) usage)
+    (emagent-acp--usage-persist state emagent-acp-update)
     (emagent-acp--refresh-mode-line state)))
+
+(defun emagent-acp--usage-persist (state raw)
+  "Persist RAW usage from STATE via `emagent-usage' when available."
+  (ignore-errors
+    (require 'emagent-usage nil t)
+    (when (fboundp 'emagent-usage-record-usage)
+      (let ((meta
+             (append
+              (when-let ((p (emagent-acp-state-provider state)))
+                `((provider . ,(format "%s" p))))
+              (when-let ((m (emagent-acp--current-model-id state nil)))
+                `((model . ,m))))))
+        (emagent-usage-record-usage (or raw (emagent-acp-state-usage state))
+                                    meta)))))
 
 (defun emagent-acp--notify-user (_state message)
   "Append MESSAGE to `emagent-log-buffer-name'."
@@ -970,6 +1014,69 @@ commands, and forwarded MCP gateways when Emacs cannot do the job.  File search
 uses pure Emacs grep rather than ripgrep.  Keep `emagent-acp-file-access'
 enabled so ACP file read/write route through Emacs buffers."
   :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-ctx-proxy-size 200000
+  "Assumed context window size for Cursor-style providers without usage.
+
+Used to estimate fill percent from MCP bytes + recent prompt size when
+the provider reports no context used/size.  Nil or 0 disables the proxy."
+  :type '(choice (const :tag "Off" nil)
+                 (integer :tag "Tokens"))
+  :group 'emagent)
+
+(defcustom emagent-acp-compact-hint-threshold 80
+  "Context fill percent that appends a /compact hint under Response.
+
+Nil or 0 disables.  Uses provider-reported context when available;
+otherwise an estimate from `emagent-acp-ctx-proxy-size'.  The hint is
+inserted when the agent finishes a turn; it does not compress
+automatically."
+  :type '(choice (const :tag "Off" nil)
+                 (integer :tag "Percent"))
+  :group 'emagent)
+
+(defcustom emagent-acp-compact-hint-cooldown 600
+  "Minimum seconds between /compact hints in one chat buffer.
+
+Prevents repeating the hint on every response while the user ignores it.
+Reset when the user runs /compact, /compress, or /summarize."
+  :type 'integer
+  :group 'emagent)
+
+(defcustom emagent-acp-auto-compact-threshold nil
+  "Context fill percent that triggers automatic /compress after a turn.
+
+Nil or 0 disables (default).  Requires the provider to report context
+used/size (Claude ACP today; Cursor does not).  See also
+`emagent-acp-auto-compact-cooldown' and
+`emagent-acp-compact-hint-threshold'."
+  :type '(choice (const :tag "Off" nil)
+                 (integer :tag "Percent"))
+  :group 'emagent)
+
+(defcustom emagent-acp-auto-compact-cooldown 300
+  "Minimum seconds between automatic compressions in one chat buffer."
+  :type 'integer
+  :group 'emagent)
+
+(defcustom emagent-acp-auto-explore-model t
+  "When non-nil, use a cheaper model for explore-shaped prompts.
+
+Never overrides an explicit `/model' link.  See
+`emagent-acp-explore-model' and `emagent-acp-explore-model-regexp'."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-acp-explore-model nil
+  "Explicit model id for explore turns, or nil to auto-pick via regexp."
+  :type '(choice (const :tag "Auto" nil) (string :tag "Model id"))
+  :group 'emagent)
+
+(defcustom emagent-acp-explore-model-regexp
+  "\\(haiku\\|composer-2\\|fast\\|mini\\|flash\\)"
+  "Regexp matched against available model ids for explore routing."
+  :type 'regexp
   :group 'emagent)
 
 (defcustom emagent-acp-file-access t

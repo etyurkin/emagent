@@ -93,11 +93,11 @@ Describe what you found before suggesting changes. Ask for confirmation before m
 
 ## Tool preference
 
-Prefer emagent tools and the live Emacs for every task. The order of preference:
-1. emagent MCP dispatcher (fs/search/git/shell/eval/emacs/elisp/structural/...)
-2. Emacs Lisp via eval
-3. shell op=run (for commands with no Emacs equivalent)
-4. Claude Code built-in tools or plugin slash commands (only when nothing else works)
+Prefer emagent MCP tools and the live Emacs for every task. Order:
+1. emagent MCP (fs/search/git/shell/eval/emacs/elisp/structural/...)
+2. Emacs Lisp via eval for in-editor automation
+3. shell op=run when there is no Emacs equivalent
+4. Agent built-ins / plugin slash commands only as last resort
 
 Substitution guide:
 
@@ -108,66 +108,41 @@ Substitution guide:
 | find -name GLOB         | fs op=find                                |
 | ls / tree               | fs op=list                                |
 | git status/diff/log     | git op=status|diff|log                    |
-| mvn, gradle, make, cargo, npm test | shell op=compile (M-g n navigable) |
-| jq, Python data ops     | eval with json-parse-string, seq-*, etc.  |
-| Python scripts          | eval with Emacs Lisp (see Elisp guide)    |
+| mvn, gradle, make, cargo, npm, pytest, go test | shell op=compile |
+| jq / data transforms    | eval (or the project's own tools)         |
+| Count/filter without dump | eval (return numbers/paths only)        |
 %s
 | open URL                | eval with (browse-url URL)                |
-| live HTTP / web API     | fetch_url (or eval with url-retrieve-synchronously) |
+| live HTTP / web API     | fetch_url                                 |
 | what's open in editor   | emacs op=buffers                          |
-| code outline            | emacs op=imenu                            |
+| code outline (any lang) | emacs op=imenu                            |
 
 shell op=run auto-redirects cat/grep/git/find and routes
-mvn/gradle/make/cargo/go/npm/yarn/pytest through compilation-mode (op=compile).
-It blocks --no-verify and push to merged-PR branches.
+mvn/gradle/make/cargo/go/npm/yarn/pytest through compilation-mode
+(op=compile). It blocks --no-verify and push to merged-PR branches.
 
-## Emacs Lisp for scripting and automation
+## Context discipline
 
-For ANY scripting or automation task — data processing, text transformation,
-file manipulation, computation, JSON parsing, HTTP requests — use Emacs Lisp
-via the eval tool. Do NOT reach for Python, Ruby, Node, awk, sed, or shell
-pipelines. The eval tool runs directly in the live Emacs process with access
-to all loaded packages and open buffers.
-
-Common Elisp patterns (use these, not shell equivalents):
-
-| Task                      | Elisp                                              |
-|---------------------------+----------------------------------------------------|
-| String split/join         | (split-string s SEP) / (string-join list SEP)      |
-| Map over list             | (mapcar FN list) / (seq-map FN seq)                |
-| Filter list               | (seq-filter PRED seq)                              |
-| Read JSON string          | (json-parse-string s :object-type 'alist)          |
-| Write JSON                | (json-serialize object)                            |
-| Read file to string       | (with-temp-buffer (insert-file-contents PATH) ...) |
-| HTTP GET (sync)           | fetch_url URL (preferred) or eval with url-retrieve-synchronously |
-| Work with open buffer     | (with-current-buffer (get-buffer NAME) ...)        |
-| Find buffer by file       | (find-buffer-visiting PATH)                        |
-| All open project buffers  | emacs op=buffers                                   |
-| Code outline              | emacs op=imenu                                     |
-%s
-| Build / test              | shell op=compile (not shell op=run)                |
-
-%s
+1. Outline before large reads: emacs op=imenu (Java, Python, TS, Go, …).
+   For Lisp + lisp-sitter, prefer structural op=tree then op=get.
+2. Prefer fs/search with line/limit; do not dump whole files into chat.
+3. Builds/tests use shell op=compile (mvn, gradle, pytest, npm, cargo, …).
+4. Analyze with eval when useful; return answers, not raw tool dumps.
+5. When context is high, the client may suggest /compact — run it.
 
 ## Emacs tool rules
 
 - Omit a path to use the session project directory; relative paths resolve against it.
 - File tools are confined to the session root.
 - To revert an fs op=write mistake, call fs op=undo — never rewrite from memory.
-- Concurrent MCP edits: always pass expected_tick from the latest fs op=read
+- Concurrent MCP edits: pass expected_tick from the latest fs op=read
   (or structural op=get) emagent-tick; stale_revision means re-read and retry.
 - delete-file, write-file, shell-command, call-process are blocked inside eval;
   use fs/shell/structural (writes use Emacs unless you enable
   `emagent-acp-confirm-fs-writes').
 - Do not read iCloud paths or other apps' container directories.
-- Before writing non-trivial Elisp, call elisp op=guide for ready-to-use
-  patterns covering strings, lists, buffers, files, JSON, org-mode, and pitfalls.
-- Discover Emacs APIs before guessing:
-  1. elisp op=apropos — find symbols by name fragment
-  2. elisp op=apropos_doc — find symbols by docstring meaning
-  3. elisp op=describe — full docstring, signature, type
-  4. elisp op=find_function — jump to source
-  5. eval \"(small-test)\" — verify behavior on a real value
+- Before writing non-trivial Elisp, call elisp op=guide.
+- Discover Emacs APIs: elisp op=apropos → apropos_doc → describe → find_function.
 
 ## Full emagent tool list
 
@@ -258,8 +233,6 @@ elisp (check/guide/apropos/apropos_doc/describe/find_function), fetch_url.
   "Return the prefer-Emacs system prompt section for ACP sessions."
   (format emagent-acp-system-prompt-prefer-emacs-base
           (emagent-prompts--prefer-emacs-substitution-rows)
-          (emagent-prompts--prefer-emacs-elisp-pattern-rows)
-          (emagent-prompts--prefer-emacs-paren-discipline)
           (emagent-prompts--prefer-emacs-tool-list)))
 
 (defconst emagent-acp-elisp-guide
@@ -282,6 +255,8 @@ functions most useful in emagent sessions.
 6. **Return a useful string** from eval — the result is your tool output.
 7. **Prefer emagent tools** over raw Elisp for file I/O (boundary checks, undo).
 8. **Discover before guessing** — `elisp op=apropos` → `apropos_doc` → `describe`.
+9. **Think in code** — analyze with eval and return only the answer; do not
+   dump file bodies or huge tool output into the chat.
 
 ---
 
@@ -616,46 +591,32 @@ structural op=insert path: foo.el
   "structural (ops: tree, get, replace, insert, edit, check_file, ...)")
 
 (defun emagent-prompts--structural-policy ()
-  "Return structural editing rules for the system prompt."
+  "Return a short Lisp-only structural addon for the system prompt."
   (if (emagent-struct-available-p)
       (format "
 
-## Structural editing (lisp-sitter active)
+## Lisp editing (lisp-sitter)
 
-lisp-sitter is installed. For .el, .lisp, .cl, .scm files:
-
-- fs op=write is refused — use structural only.
-- Prefer Emacs Lisp (eval) over Python, shell, or other languages for automation.
-- Workflow: structural op=tree → structural op=bounds → structural op=replace / structural op=insert / structural op=edit.
-  Anchors: __start__ (new/empty file), __end__ (append). One complete top-level form per edit.
-- structural op=find_errors locates missing parens; structural op=complete fixes drafts before check_node.
-- Finish with structural op=check_file.
-
-Available lisp-sitter tools: %s."
+When editing .el/.lisp/.cl/.scm: use structural op=tree → op=get/replace/insert
+(fs op=write refused). One complete top-level form per edit; finish with
+op=check_file. Tools: %s."
               (emagent-prompts--structural-tool-list))
     "
 
-## Structural editing (lisp-sitter not installed)
+## Lisp editing
 
-Install lisp-sitter (see README) for structural Lisp editing.
-Without it, use fs op=write + elisp op=check for basic .el editing."))
+For .el without lisp-sitter: fs op=write + elisp op=check. Install lisp-sitter
+for structural sexp edits."))
 
 (defconst emagent-acp-system-prompt-gateway
   "
 
 ## External MCP servers
 
-Configured MCP servers beyond emagent are available in this session.  Prefer
-them for their domain over reinventing the same calls with shell/curl.
-
-Some servers are meta-proxies: they expose search/list/describe/dispatch tools
-rather than domain tools directly.  When those discovery tools are present,
-use them first to find the right backend tool and its schema, then invoke it
-— do not ask the user how the proxy works.
-
-If OAuth authentication is requested, show the authorize URL as a clickable
-org link — the agent or `/mcp' login handles the browser/callback.  Do not
-ask the user to paste a callback URL."
+External MCP servers are configured. Prefer their domain tools over shell/curl.
+If a server is a meta-proxy (search/list/describe/dispatch), discover the
+backend tool and schema first, then call it. For OAuth, show the authorize
+URL as an org link; use `/mcp' login — do not ask for callback paste."
   "Appended when Claude or Cursor has external MCP servers configured.")
 
 (defgroup emagent-struct nil
@@ -1489,20 +1450,94 @@ Arguments: LINE, LIMIT."
       (emagent-tools--read-file-content path)
     (file-missing "")))
 
-(defun emagent-tool-read-file (path &optional line limit)
+(defun emagent-tools--file-line-count (path)
+  "Return the number of lines in PATH (visiting buffer or file)."
+  (let* ((resolved (emagent-tools--root-directory path))
+         (buffer (find-buffer-visiting resolved)))
+    (if buffer
+        (with-current-buffer buffer
+          (count-lines (point-min) (point-max)))
+      (with-temp-buffer
+        (insert-file-contents resolved)
+        (count-lines (point-min) (point-max))))))
+
+(defun emagent-tools--outline-for-path (path)
+  "Return an outline for PATH (imenu, or structural tree for Lisp)."
+  (require 'emagent-tools-age)
+  (let ((resolved (emagent-tools--root-directory path)))
+    (emagent-tools-age-mark-outlined resolved)
+    (cond
+     ((and (emagent-struct-available-p)
+           (emagent-struct--lisp-file-p resolved))
+      (concat "[outline: structural tree]\n"
+              (emagent-tool-structural-tree resolved)
+              "\n\n[Use structural op=get or fs read with line=/limit= for body.]"))
+     (t
+      (concat "[outline: imenu]\n"
+              (emagent-tool-imenu-index resolved)
+              "\n\n[Use fs read with line=/limit= or search op=grep for body.]")))))
+
+(defun emagent-tool-read-file (path &optional line limit refresh)
   "Return contents of PATH as a string.
 
 When `emagent-tools--acp-session-p' is set, prefix the text with an
 emagent-tick header for optimistic concurrency on later writes.
 
-Arguments: LINE, LIMIT."
+Large unbounded reads return an outline first (imenu, or structural
+tree for Lisp).  Files larger than
+`emagent-tools-compact-read-hard-max-lines' require line+limit.
+Identical large repeats may be aged (see `emagent-tools-age').
+Same-tick re-reads across turns return an unchanged stub.
+
+Arguments: LINE, LIMIT, REFRESH."
+  (require 'emagent-tools-age)
   (when (emagent-tools--protected-fs-path-p path)
     (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
                 (emagent-tools--root-directory path)))
-  (let ((text (emagent-tools--read-file-content path line limit)))
-    (if emagent-tools--acp-session-p
-        (emagent-tools--format-with-file-tick path text)
-      text)))
+  (let* ((resolved (emagent-tools--root-directory path))
+         (limit-provided (and limit t))
+         (line-n (cond
+                  ((null line) nil)
+                  ((numberp line) line)
+                  ((stringp line) (string-to-number line))
+                  (t nil)))
+         (limit-n (cond
+                   ((null limit) nil)
+                   ((numberp limit) limit)
+                   ((stringp limit) (string-to-number limit))
+                   (t nil)))
+         (lines (and (not limit-provided) (not line-n)
+                     (emagent-tools--file-line-count path)))
+         (args (format "line=%s limit=%s" line-n limit-n))
+         (text
+          (cond
+           ((and (not limit-provided)
+                 (not line-n)
+                 lines
+                 (> lines emagent-tools-compact-read-hard-max-lines))
+            (format
+             "Refusing unbounded read of %s (%d lines). Pass line= and limit= (max %d without bounds)."
+             resolved lines emagent-tools-compact-read-hard-max-lines))
+           ((and (not limit-provided)
+                 (not line-n)
+                 lines
+                 (> lines emagent-tools-compact-read-max-lines)
+                 (not (emagent-tools-age-outlined-p resolved)))
+            (emagent-tools--outline-for-path path))
+           (t
+            (emagent-tools-compact-read
+             (emagent-tools--read-file-content path line-n limit-n)
+             limit-provided))))
+         (tick (and emagent-tools--acp-session-p
+                    (emagent-tools--file-tick path)))
+         (text (if tick
+                   (emagent-tools-age-tick-note resolved args tick text refresh)
+                 text))
+         (text (emagent-tools-age-note "fs-read" resolved args text refresh))
+         (text (if emagent-tools--acp-session-p
+                   (emagent-tools--format-with-file-tick path text tick)
+                 text)))
+    text))
 
 (defun emagent-tools--read-structural-file-content (path)
   "Like `emagent-tools--read-file-content' but return \"\" when PATH is missing."
@@ -1559,10 +1594,12 @@ Otherwise a nil EXPECTED-TICK skips the check (non-MCP callers)."
                  "re-read (fs op=read) and retry")
          resolved expected current)))))
 
-(defun emagent-tools--format-with-file-tick (path text)
-  "Return TEXT prefixed with PATH's emagent-tick header for MCP clients."
+(defun emagent-tools--format-with-file-tick (path text &optional tick)
+  "Return TEXT prefixed with PATH's emagent-tick header for MCP clients.
+
+TICK, when non-nil, is used instead of recomputing the revision."
   (format "emagent-tick: %s\n---\n%s"
-          (emagent-tools--file-tick path)
+          (or tick (emagent-tools--file-tick path))
           (or text "")))
 
 (defun emagent-tools--append-file-tick (path text)
@@ -1755,8 +1792,13 @@ Skips tick CAS: a no-op sync must not require expected_tick."
   "Return a structural outline of FILE using lisp-sitter.
 
 Arguments: DEPTH."
+  (require 'emagent-tools-age)
   (if (emagent-struct-available-p)
-      (emagent-struct-tree (emagent-tools--read-structural-file-content file) file depth)
+      (progn
+        (emagent-tools-age-mark-outlined
+         (emagent-tools--root-directory file))
+        (emagent-struct-tree
+         (emagent-tools--read-structural-file-content file) file depth))
     (let ((err (emagent-tools--read-structural-file-content file)))
       (if (string-empty-p err)
           ""

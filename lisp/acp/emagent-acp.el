@@ -1100,7 +1100,7 @@ Arguments: STATE."
            (defer (emagent-acp--provider-defer-tool-call-p state merged))
            (show (and label (not (string-empty-p label)) (not defer)
                         (emagent-acp--tool-call-displayable-p state merged))))
-      (emagent-acp--capture-schedule-wakeup state merged)
+      (emagent-acp--capture-schedule-wakeup state merged) (emagent-acp--explore-note-tool-kind (or kind (map-elt merged 'kind)))
       (when defer
         (puthash id merged pending-table)
         (emagent-acp--provider-enqueue-tool-resolve state id))
@@ -2306,17 +2306,30 @@ Arguments: EMAGENT-ACP-REQUEST."
     ("webp" "image/webp")
     (_      nil)))
 
+(defcustom emagent-acp-attach-max-images 4
+  "Maximum image attachments extracted from one prompt."
+  :type 'integer
+  :group 'emagent)
+
+(defcustom emagent-acp-attach-max-bytes 2097152
+  "Maximum bytes per attached image (pre-base64)."
+  :type 'integer
+  :group 'emagent)
+
 (defun emagent-acp--extract-image-links (text)
   "Extract [[file:...]] image links from TEXT.
 
 Scans for org file links whose paths end in PNG/JPEG/GIF/WebP, reads and
 base64-encodes each file, and removes the link from the text.  Non-image
-links and unreadable paths are left in place.
+links and unreadable paths are left in place.  At most
+`emagent-acp-attach-max-images' images are attached; files larger than
+`emagent-acp-attach-max-bytes' stay as text links.
 
 Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
  ((media-type . TYPE) (data . BASE64)) plists."
-  (let ((link-re "\\[\\[file:\\([^]\n]+\\)\\]\\(?:\\[[^]]*\\]\\)?\\]")
-        images parts (pos 0))
+  (let ((link-re "\\[\\[file:\\([^]
+]+\\)\\]\\(?:\\[[^]]*\\]\\)?\\]")
+        images parts (pos 0) skipped)
     (while (string-match link-re text pos)
       (let* ((link-beg (match-beginning 0))
              (link-end (match-end 0))
@@ -2325,18 +2338,39 @@ Returns (CLEANED-TEXT . IMAGES) where IMAGES is a list of
              (media-type (emagent-acp--image-media-type
                           (file-name-extension expanded))))
         (push (substring text pos link-beg) parts)
-        (if (and media-type (file-readable-p expanded))
-            (let ((data (with-temp-buffer
-                          (set-buffer-multibyte nil)
-                          (insert-file-contents-literally expanded)
-                          (base64-encode-region (point-min) (point-max) t)
-                          (buffer-string))))
-              (push `((media-type . ,media-type) (data . ,data)) images))
+        (cond
+         ((not (and media-type (file-readable-p expanded)))
           (push (substring text link-beg link-end) parts))
+         ((>= (length images) emagent-acp-attach-max-images)
+          (setq skipped (1+ (or skipped 0)))
+          (push (substring text link-beg link-end) parts))
+         (t
+          (let ((nbytes (file-attribute-size (file-attributes expanded))))
+            (if (and (integerp nbytes)
+                     (> nbytes emagent-acp-attach-max-bytes))
+                (progn
+                  (setq skipped (1+ (or skipped 0)))
+                  (push (substring text link-beg link-end) parts))
+              (let ((data (with-temp-buffer
+                            (set-buffer-multibyte nil)
+                            (insert-file-contents-literally expanded)
+                            (base64-encode-region (point-min) (point-max) t)
+                            (buffer-string))))
+                (push `((media-type . ,media-type) (data . ,data)) images)
+                (when (fboundp 'emagent-usage-tax-add)
+                  (emagent-usage-tax-add 'images 1)))))))
         (setq pos link-end)))
     (push (substring text pos) parts)
+    (when (and skipped (> skipped 0))
+      (push (format
+             "\n[emagent: skipped %d image attachment(s); max %d files / %d bytes each]"
+             skipped
+             emagent-acp-attach-max-images
+             emagent-acp-attach-max-bytes)
+            parts))
     (cons (string-trim (apply #'concat (nreverse parts)))
           (nreverse images))))
+
 
 (defconst emagent-acp--materialize-prompt-text
   (concat "Acknowledge that this compacted session is ready. "
@@ -2808,9 +2842,15 @@ the final text is stable."
         (emagent-acp--progress state "connected")
         (emagent-acp--refresh-mode-line state))
        ((emagent-acp-state-compress-pending state)
-        (let ((summary (string-trim (or (emagent-acp-state-assistant-text state) ""))))
+        (let* ((raw (string-trim (or (emagent-acp-state-assistant-text state) "")))
+               (summary (if (fboundp 'emagent-session-notes-strip-facts)
+                            (emagent-session-notes-strip-facts raw)
+                          raw))
+               (display (if (string-empty-p summary)
+                            "(Facts saved to session notes.)"
+                          summary)))
           (setf (emagent-acp-state-compress-pending state) nil)
-          (if (string-empty-p summary)
+          (if (string-empty-p raw)
               (progn
                 (emagent-log "compression aborted: empty summary")
                 (with-current-buffer buffer
@@ -2820,8 +2860,13 @@ the final text is stable."
               (when-let ((cb (emagent-acp-state-cb-finish state)))
                 (funcall cb
                          (format "*Context compacted.* Agent session reset; the summary below is its only memory of the prior conversation.\n\n%s"
-                                 summary))))
+                                 display))))
             (emagent-log "compressed session (%d chars)" (length summary))
+            (with-current-buffer buffer
+              (when (fboundp 'emagent-session-notes-merge-from-summary)
+                (emagent-session-notes-merge-from-summary raw))
+              (when (fboundp 'emagent-chat--reset-compact-hint-cooldown)
+                (emagent-chat--reset-compact-hint-cooldown)))
             (unless (fboundp 'emagent-acp--new-session)
               (require 'emagent-acp))
             (emagent-acp--new-session
@@ -2870,7 +2915,8 @@ the final text is stable."
             (emagent-acp--cancel-prompt-render state)
             (with-current-buffer buffer
               (emagent-chat--close-finished-response))
-            (emagent-acp--refresh-mode-line state))
+            (emagent-acp--refresh-mode-line state)
+            (emagent-acp--schedule-auto-compact state))
            ((and (emagent-acp-state-prompt-finishing state)
                  (eq (emagent-acp-state-finish-token state) token))
             ;; Text changed during finish but no newer timer was scheduled.
@@ -2913,6 +2959,104 @@ Arguments: STATE."
     (emagent-acp--schedule-prompt-render state)
     (emagent-acp--arm-wakeup state)
     (emagent-acp--arm-plan-build state))))
+
+(defun emagent-acp--context-fill-percent (state)
+  "Return context window fill percent for STATE, or nil when unknown."
+  (when-let* ((usage (emagent-acp-state-usage state))
+              (used (map-elt usage :context-used))
+              (size (map-elt usage :context-size))
+              ((and (numberp used) (numberp size) (> size 0))))
+    (* 100.0 (/ (float used) size))))
+
+(defvar-local emagent-chat--explore-sticky nil
+  "Non-nil while explore-model routing should stick across turns.")
+
+(defun emagent-acp--explore-prompt-p (text)
+  "Return non-nil when TEXT resembles an explore-only turn."
+  (let ((lower (downcase (string-trim (or text "")))))
+    (and (not (string-empty-p lower))
+         (not (string-match-p
+               (concat "\\b\\(edit\\|fix\\|implement\\|refactor\\|commit\\|"
+                       "push\\|write\\|create\\|delete\\|rename\\|patch\\|"
+                       "apply\\|migrate\\)\\b")
+               lower))
+         (or (bound-and-true-p emagent-chat--explore-sticky)
+             (string-match-p
+              (concat "\\b\\(what\\|where\\|which\\|list\\|find\\|show\\|"
+                      "explain\\|search\\|outline\\|status\\|grep\\|"
+                      "read\\|inspect\\|locate\\|summarize\\|check\\|scan\\)\\b")
+              lower)))))
+
+(defun emagent-acp--explore-clear-sticky ()
+  "Stop sticky explore-model routing after a write/execute turn."
+  (setq emagent-chat--explore-sticky nil))
+
+(defun emagent-acp--explore-note-tool-kind (kind)
+  "Clear explore sticky when KIND is a mutating tool kind."
+  (when (and (stringp kind)
+             (member kind '("write" "execute" "edit" "delete")))
+    (emagent-acp--explore-clear-sticky)))
+
+(defun emagent-acp--resolve-explore-model (state)
+  "Return an explore model id for STATE, or nil."
+  (when (and emagent-acp-auto-explore-model state)
+    (or emagent-acp-explore-model
+        (cl-loop for entry across
+                 (vconcat (emagent-acp--get-available-models state nil))
+                 for id = (or (map-elt entry 'modelId)
+                              (map-elt entry 'id)
+                              (and (stringp entry) entry))
+                 when (and (stringp id)
+                           (string-match-p emagent-acp-explore-model-regexp id))
+                 return id))))
+
+(defun emagent-acp--auto-compact-ready-p (state)
+  "Return non-nil when STATE should start an automatic /compress.
+
+Skips when a post-create_plan Build turn is pending (Build wins).  A
+pending ScheduleWakeup is cancelled by `emagent-acp--maybe-auto-compact'."
+  (when-let* ((threshold emagent-acp-auto-compact-threshold)
+              ((and (integerp threshold) (> threshold 0)))
+              ((emagent-acp-state-ready state))
+              ((not (emagent-acp-state-busy state)))
+              ((not (emagent-acp-state-prompt-finishing state)))
+              ((not (emagent-acp-state-compress-pending state)))
+              ((not (emagent-acp-state-quiet-prompt state)))
+              ((not (emagent-acp--permission-pending-p state)))
+              ((null (emagent-acp-state-plan-build-timer state)))
+              ((null (emagent-acp-state-plan-build-prompt state)))
+              (pct (emagent-acp--context-fill-percent state))
+              ((>= pct threshold)))
+    (let ((last (and (boundp 'emagent-chat--last-auto-compact)
+                     emagent-chat--last-auto-compact))
+          (cooldown (or emagent-acp-auto-compact-cooldown 0)))
+      (or (null last)
+          (<= cooldown 0)
+          (>= (float-time (time-subtract (current-time) last))
+              cooldown)))))
+
+(defun emagent-acp--schedule-auto-compact (state)
+  "Arm a short timer to maybe auto-/compress STATE after a settled turn."
+  (when (and (integerp emagent-acp-auto-compact-threshold)
+             (> emagent-acp-auto-compact-threshold 0)
+             (not (emagent-acp-state-compress-pending state))
+             (not (emagent-acp-state-quiet-prompt state)))
+    (run-with-timer 0.5 nil #'emagent-acp--maybe-auto-compact state)))
+
+(defun emagent-acp--maybe-auto-compact (state)
+  "Run automatic /compress for STATE when still idle and over threshold."
+  (when-let ((buffer (emagent-acp--chat-buffer state)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when (and (eq emagent-acp--session state)
+                   (emagent-acp--auto-compact-ready-p state)
+                   (fboundp 'emagent-chat--conversation-history-text)
+                   (fboundp 'emagent-chat--run-auto-compress)
+                   (not (string-empty-p
+                         (emagent-chat--conversation-history-text))))
+          (emagent-acp--cancel-wakeup state)
+          (emagent-acp--cancel-plan-build state)
+          (emagent-chat--run-auto-compress))))))
 
 (defun emagent-acp--arm-wakeup (state)
   "Start the ScheduleWakeup timer for STATE after this turn completes.
@@ -3211,10 +3355,26 @@ was still working."
 
 (defun emagent-acp--session-system-prompt (&optional compressed-context)
   "Return the system prompt for session/new, optionally with COMPRESSED-CONTEXT."
-  (let ((summary (string-trim (or compressed-context ""))))
+  (require 'emagent-usage nil t)
+  (let* ((summary (string-trim (or compressed-context "")))
+         (budget (and (boundp 'emagent-usage-budget-compressed)
+                      emagent-usage-budget-compressed))
+         (summary (if (and (fboundp 'emagent-usage--cap-string)
+                           (not (string-empty-p summary)))
+                      (emagent-usage--cap-string summary budget 'compressed)
+                    summary))
+         (notes
+          (when-let ((buf (and emagent-acp--session
+                               (emagent-acp--chat-buffer emagent-acp--session))))
+            (with-current-buffer buf
+              (when (fboundp 'emagent-session-notes-prompt-block)
+                (emagent-session-notes-prompt-block)))))
+         (base (concat (emagent-acp--system-prompt) (or notes ""))))
+    (when (fboundp 'emagent-usage-tax-add)
+      (emagent-usage-tax-add 'system (length base)))
     (if (string-empty-p summary)
-        (emagent-acp--system-prompt)
-      (concat (emagent-acp--system-prompt)
+        base
+      (concat base
               (format "\n\n[Compressed prior conversation context]\n%s"
                       summary)))))
 
@@ -3439,6 +3599,11 @@ Arguments: STATE, ON-READY."
 (cl-defun emagent-acp--new-session (&key state on-ready compressed-context)
   
   "Internal helper for STATE and ON-READY and COMPRESSED-CONTEXT."
+  (when (fboundp 'emagent-tools-age-reset)
+    (emagent-tools-age-reset))
+  (when (fboundp 'emagent-usage-tax-reset)
+    (emagent-usage-tax-reset))
+  (setq emagent-chat--explore-sticky nil)
   (emagent-acp--progress state "creating session…")
   (emagent-acp--send-request
    :state state
@@ -3638,13 +3803,20 @@ summary prompt rather than ordinary chat input."
          (when (emagent-chat--send-active-p token)
            (let* ((state emagent-acp--session)
                   (current (and state (emagent-acp-current-model-id)))
+                  (explore
+                   (and (not turn-model)
+                        (not compress)
+                        state
+                        (emagent-acp--explore-prompt-p user-text)
+                        (emagent-acp--resolve-explore-model state)))
+                  (turn-model (or turn-model explore))
                   (target (and turn-model state
-                                (emagent-acp--match-model-id turn-model state nil))))
+                               (emagent-acp--match-model-id turn-model state nil))))
+             (when (and explore target)
+               (setq emagent-chat--turn-model target
+                     emagent-chat--explore-sticky t))
              (if (and target current (not (string= target current)))
                  (progn
-                   ;; Remember the real session model to restore to (only the
-                   ;; first time, so a sticky post-failure override still points
-                   ;; back at the original global model).
                    (unless emagent-chat--turn-model-base
                      (setq emagent-chat--turn-model-base current))
                    (when (fboundp 'emagent-acp--progress)
