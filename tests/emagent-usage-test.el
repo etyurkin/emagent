@@ -37,6 +37,27 @@
           (should-not (file-exists-p emagent-usage-file)))
       (ignore-errors (delete-directory dir t)))))
 
+(ert-deftest emagent-usage-test-baseline-delta ()
+  (emagent-usage-tax-reset)
+  (should-not (emagent-usage-baseline-alist))
+  (should-not (emagent-usage-tax-delta-string))
+  (emagent-usage-tax-add 'context 100)
+  (emagent-usage-tax-add 'mcp-bytes 500)
+  (emagent-usage-baseline-set)
+  (should (emagent-usage-baseline-alist))
+  (should (string-match-p "since baseline:" (emagent-usage-tax-delta-string)))
+  (should (= 0 (emagent-usage--tax-delta 'context)))
+  (emagent-usage-tax-add 'context 40)
+  (emagent-usage-tax-add 'mcp-bytes 100)
+  (should (= 40 (emagent-usage--tax-delta 'context)))
+  (should (= 100 (emagent-usage--tax-delta 'mcp-bytes)))
+  (should (string-match-p "since baseline:" (emagent-usage-report-string 7)))
+  (emagent-usage-baseline-clear)
+  (should-not (emagent-usage-tax-delta-string))
+  (emagent-usage-baseline-set)
+  (emagent-usage-tax-reset)
+  (should-not (emagent-usage-baseline-alist)))
+
 (provide 'emagent-usage-test)
 
 ;;; emagent-usage-test.el ends here
