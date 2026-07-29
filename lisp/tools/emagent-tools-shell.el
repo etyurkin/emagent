@@ -1645,29 +1645,6 @@ The buffer fills in the background; set
 Arguments: DIRECTORY."
   (emagent-tools--run-async-sync #'emagent-tool-compile-async command directory))
 
-(defun emagent-tool-buffer-list ()
-  "Return paths of open Emacs buffers inside the session project, one per line.
-Modified buffers are marked with (modified).  Only files within the session
-root (`emagent-tools--project-directory') are included."
-  (let ((root (and emagent-tools--project-directory
-          (file-name-as-directory
-            (expand-file-name emagent-tools--project-directory)))))
-    (string-join
-      (delq nil
-        (mapcar (lambda (buf)
-            (when-let ((file (buffer-file-name buf)))
-              (let ((expanded (expand-file-name file)))
-                (when (or (null root)
-                    (string-prefix-p root expanded))
-                  (format "%s%s"
-                    (if root
-                      (file-relative-name expanded root)
-                      (abbreviate-file-name expanded))
-                    (if (buffer-modified-p buf)
-                      " (modified)"
-                      ""))))))
-          (buffer-list)))
-      "\n")))
 
 (defun emagent-tools--imenu-subalist-p (item)
   "Return non-nil when ITEM is an imenu nested alist entry."

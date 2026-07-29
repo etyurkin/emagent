@@ -37,6 +37,7 @@
 (require 'emagent-chat-ui)
 (require 'emagent-log)
 (require 'emagent-tools-shell)
+(require 'emagent-tools-buffers)
 
 (defconst emagent-acp-system-prompt
   "You are emagent, an Emacs assistant focused on Emacs internals, elisp, and org-mode operations.
@@ -114,7 +115,7 @@ Substitution guide:
 %s
 | open URL                | eval with (browse-url URL)                |
 | live HTTP / web API     | fetch_url                                 |
-| what's open in editor   | emacs op=buffers                          |
+| what's open in editor   | list_buffers / buffer_info                 |
 | code outline (any lang) | emacs op=imenu                            |
 
 shell op=run auto-redirects cat/grep/git/find and routes
@@ -221,11 +222,13 @@ Follow these rules to avoid them:
   "Return the full emagent tool list paragraph for the system prompt."
   (if (emagent-struct-available-p)
       "fs (read/write/undo/delete/list/find), search (grep), git (status/diff/log),
-shell (run/compile), eval, emacs (buffers/imenu/project_directory/where_is),
+shell (run/compile), eval, list_buffers, buffer_info,
+emacs (imenu/project_directory/where_is),
 elisp (check/guide/apropos/apropos_doc/describe/find_function),
 structural (lisp-sitter: tree/get/replace/insert/edit/...), fetch_url."
     "fs (read/write/undo/delete/list/find), search (grep), git (status/diff/log),
-shell (run/compile), eval, emacs (buffers/imenu/project_directory/where_is),
+shell (run/compile), eval, list_buffers, buffer_info,
+emacs (imenu/project_directory/where_is),
 elisp (check/guide/apropos/apropos_doc/describe/find_function), fetch_url.
 (structural appears after installing lisp-sitter.)"))
 
@@ -1405,6 +1408,7 @@ Arguments: DIRECTORY."
 (defvar auto-insert)
 
 (defvar emagent-tools-show-written-buffer)
+
 
 (defun emagent-tools--protected-fs-path-p (path)
   "Return non-nil when PATH must not be accessed via Emacs on macOS."

@@ -180,11 +180,74 @@ instead; emagent then writes whatever port it gets into the agent config."
                   (description . "Optional seconds to wait before the subprocess is killed. Defaults to emagent-tools-subprocess-timeout; on timeout, retry with a larger value."))))
   "Shared JSON-schema property for a per-call subprocess timeout.")
 
+(defun emagent-mcp--alist-p (value)
+  "Return non-nil when VALUE looks like a string-key alist for JSON objects."
+  (and (listp value)
+       (not (null value))
+       (seq-every-p (lambda (cell)
+                      (and (consp cell) (stringp (car cell))))
+                    value)))
+
+(defun emagent-mcp--structured-p (value)
+  "Return non-nil when VALUE should be JSON-encoded for MCP text content."
+  (or (hash-table-p value)
+      (vectorp value)
+      (emagent-mcp--alist-p value)
+      (and (listp value)
+           (not (null value))
+           (seq-every-p (lambda (elt)
+                          (or (emagent-mcp--alist-p elt)
+                              (hash-table-p elt)
+                              (vectorp elt)
+                              (listp elt)
+                              (stringp elt)
+                              (numberp elt)
+                              (eq elt t)
+                              (eq elt :false)
+                              (null elt)))
+                        value))))
+
+(defun emagent-mcp--jsonable (value)
+  "Convert VALUE into a `json-serialize'-friendly object.
+
+Inside structured data, Lisp nil becomes JSON null (`:null').  Boolean
+fields should already use t/:false at the producer."
+  (cond
+   ((eq value :false) :false)
+   ((eq value t) t)
+   ((null value) :null)
+   ((stringp value) value)
+   ((numberp value) value)
+   ((symbolp value) (symbol-name value))
+   ((hash-table-p value)
+    (let ((out (make-hash-table :test 'equal)))
+      (maphash (lambda (k v)
+                 (puthash (if (stringp k) k (format "%s" k))
+                          (emagent-mcp--jsonable v)
+                          out))
+               value)
+      out))
+   ((vectorp value)
+    (apply #'vector (mapcar #'emagent-mcp--jsonable value)))
+   ((emagent-mcp--alist-p value)
+    (let ((out (make-hash-table :test 'equal)))
+      (dolist (cell value out)
+        (puthash (car cell) (emagent-mcp--jsonable (cdr cell)) out))))
+   ((listp value)
+    (apply #'vector (mapcar #'emagent-mcp--jsonable value)))
+   (t (format "%s" value))))
+
 (defun emagent-mcp--string-result (value)
-  "Coerce a tool VALUE into a string for MCP text content."
+  "Coerce a tool VALUE into a string for MCP text content.
+
+Strings and top-level nil keep the historical conventions (identity and
+\"\").  Structured Lisp values (string-key alists, lists/vectors,
+hash-tables) are JSON-encoded.  Other scalars use `format'."
   (cond
    ((stringp value) value)
    ((null value) "")
+   ((emagent-mcp--structured-p value)
+    (emagent-mcp--json-encode (emagent-mcp--jsonable value)))
    (t (format "%s" value))))
 
 (defun emagent-mcp--call-sync-as-async (handler args callback)
@@ -277,8 +340,7 @@ instead; emagent then writes whatever port it gets into the agent config."
 (defun emagent-mcp--emacs (args)
   "Dispatch Emacs session/context tool ARGS."
   (pcase (emagent-mcp--require-op
-          args '("buffers" "imenu" "project_directory" "where_is"))
-    ("buffers" (emagent-tool-buffer-list))
+          args '("imenu" "project_directory" "where_is"))
     ("imenu" (emagent-tool-imenu-index (emagent-mcp--arg args "file")))
     ("project_directory" (emagent-tool-project-directory))
     ("where_is" (emagent-tool-where-is (emagent-mcp--arg args "command")))))
@@ -493,7 +555,7 @@ instead; emagent then writes whatever port it gets into the agent config."
       (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "pattern")))
     (_ (emagent-mcp--call-sync-as-async #'emagent-mcp--structural args callback))))
 
-(defconst emagent-mcp--tools
+(defvar emagent-mcp--tools
   (list
    (emagent-mcp--tool
     "fs"
@@ -557,10 +619,10 @@ instead; emagent then writes whatever port it gets into the agent config."
       (emagent-tool-eval (emagent-mcp--arg args "form"))))
    (emagent-mcp--tool
     "emacs"
-    "Emacs session context. op=buffers|imenu|project_directory|where_is."
+    "Emacs session context. op=imenu|project_directory|where_is."
     (append
      (emagent-mcp--op-prop
-      '("buffers" "imenu" "project_directory" "where_is")
+      '("imenu" "project_directory" "where_is")
       "Emacs context operation.")
      '(("file" . ((type . "string")
                   (description . "File for imenu; omit for current buffer.")))
@@ -639,6 +701,156 @@ instead; emagent then writes whatever port it gets into the agent config."
   "Registry of emagent MCP tools.
 Each entry: (NAME DESCRIPTION PROPERTIES REQUIRED HANDLER . PLIST).
 PLIST may have :available, a predicate returning non-nil to show the tool.")
+
+(defun emagent-mcp--register-tool (name description properties required handler &rest plist)
+  "Register MCP tool NAME, replacing any prior entry with the same name.
+
+Builds the same entry shape as `emagent-mcp--tool'.  NAME matching is
+case-insensitive.  Returns the new entry."
+  (let ((entry (apply #'emagent-mcp--tool name description properties
+                      required handler plist))
+        (existing (assoc-string name emagent-mcp--tools t)))
+    (if existing
+        (setcdr existing (cdr entry))
+      (setq emagent-mcp--tools (append emagent-mcp--tools (list entry))))
+    entry))
+
+(defun emagent-mcp--deftool-split (body)
+  "Split DEFTOOL BODY into (PLIST DOCSTRING ARGLIST FORMS).
+
+BODY is keyword options, then a docstring, then a one-parameter arglist
+and the handler forms."
+  (let ((plist nil))
+    (while (and body (keywordp (car body)))
+      (unless (cdr body)
+        (error "emagent-mcp-deftool: keyword %s needs a value" (car body)))
+      (setq plist (plist-put plist (car body) (cadr body)))
+      (setq body (cddr body)))
+    (unless (and body (stringp (car body)))
+      (error "emagent-mcp-deftool: missing docstring"))
+    (let ((docstring (car body))
+          (rest (cdr body)))
+      (unless (and rest (listp (car rest)))
+        (error "emagent-mcp-deftool: missing handler arglist"))
+      (list plist docstring (car rest) (cdr rest)))))
+
+(defmacro emagent-mcp-deftool (name &rest body)
+  "Define and register MCP tool NAME with schema next to its handler.
+
+NAME is the wire-facing tool string.  BODY is keyword options, a
+docstring (also the MCP description), a one-arg lambda list (usually
+(args)), then handler forms.
+
+Keywords:
+  :properties ALIST  -- JSON-schema properties (required)
+  :required LIST     -- required property names (default nil)
+  :available PRED    -- optional list-time visibility predicate
+  :async FN          -- optional async handler of args and callback"
+  (declare (indent 1) (debug (&define string body)))
+  (let* ((split (emagent-mcp--deftool-split body))
+         (opts (nth 0 split))
+         (docstring (nth 1 split))
+         (arglist (nth 2 split))
+         (forms (nth 3 split))
+         (properties (plist-get opts :properties))
+         (required (or (plist-get opts :required) '()))
+         (available (plist-get opts :available))
+         (async (plist-get opts :async))
+         (handler (gensym "emagent-mcp-tool-")))
+    (unless properties
+      (error "emagent-mcp-deftool: :properties is required"))
+    `(progn
+       (defun ,handler ,arglist
+         ,docstring
+         ,@forms)
+       (emagent-mcp--register-tool
+        ,name
+        ,docstring
+        ,properties
+        ,required
+        #',handler
+        ,@(when available `(:available ,available))
+        ,@(when async `(:async ,async))))))
+
+(emagent-mcp-deftool "list_buffers"
+  :properties
+  '(("type_filter"
+     . ((type . "string")
+        (description . "Keep file, non-file, or internal buffers only.")))
+    ("window_filter"
+     . ((type . "string")
+        (description . "Keep visible or hidden buffers only.")))
+    ("frame_filter_regex"
+     . ((type . "string")
+        (description . "Regexp matched against frame name.")))
+    ("name_filter_regex"
+     . ((type . "string")
+        (description . "Regexp matched against buffer-name.")))
+    ("path_filter_glob"
+     . ((type . "string")
+        (description . "Glob matched against buffer-file-name.")))
+    ("mode_filter_regex"
+     . ((type . "string")
+        (description . "Regexp matched against major-mode name.")))
+    ("sort_by"
+     . ((type . "string")
+        (description . "Sort key: mru, name, mode, or file_mtime.")))
+    ("sort_descending"
+     . ((type . "boolean")
+        (description . "Reverse sort_by (ignored for mru).")))
+    ("limit"
+     . ((type . "integer")
+        (description . "Max rows after filter/sort."))))
+  :required '()
+  "List Emacs buffers as wide JSON records (filters AND-ed; sort; limit).
+
+Each element is an object with name, mru_index, selected, current, other,
+path, file_mtime, char_count, line_count, mode, read_only, modified,
+modified_tick, chars_modified_tick, visible, frame_names, and type."
+  (args)
+  (apply #'vector
+         (emagent-tool-list-buffers
+          (emagent-mcp--arg args "type_filter")
+          (emagent-mcp--arg args "window_filter")
+          (emagent-mcp--arg args "frame_filter_regex")
+          (emagent-mcp--arg args "name_filter_regex")
+          (emagent-mcp--arg args "path_filter_glob")
+          (emagent-mcp--arg args "mode_filter_regex")
+          (emagent-mcp--arg args "sort_by")
+          (emagent-mcp--bool args "sort_descending")
+          (emagent-mcp--arg args "limit"))))
+
+(emagent-mcp-deftool "buffer_info"
+  :properties
+  '(("name"
+     . ((type . "string")
+        (description . "Buffer name (mutually exclusive selector).")))
+    ("mru"
+     . ((type . "integer")
+        (description . "0-based buffer-list index selector.")))
+    ("selected"
+     . ((type . "boolean")
+        (description . "Describe the selected-window buffer.")))
+    ("other"
+     . ((type . "boolean")
+        (description . "Describe other-buffer of selected.")))
+    ("current"
+     . ((type . "boolean")
+        (description . "Describe current-buffer; prefer selected."))))
+  :required '()
+  "Describe one Emacs buffer: list_buffers row plus point/region/view.
+
+Use exactly one of name, mru, selected, other, or current.  With no
+selector, defaults to selected.  Multiple selectors or a missing match
+is an error.  Adds point/mark/region/narrow/directory/coding/window
+fields; does not return region text."
+  (args)
+  (emagent-tool-buffer-info
+   (emagent-mcp--arg args "name")
+   (emagent-mcp--arg args "mru")
+   (emagent-mcp--arg args "selected")
+   (emagent-mcp--arg args "other")
+   (emagent-mcp--arg args "current")))
 
 (defcustom emagent-mcp-compact-schemas t
   "When non-nil, shorten tools/list descriptions and property docs."
