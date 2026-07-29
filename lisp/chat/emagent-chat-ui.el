@@ -1570,11 +1570,12 @@ the render loop closes the response only after assistant text is stable.")
 (defun emagent-chat--context-fill-percent ()
   "Return current session context fill percent, or nil when unknown.
 
-When the provider does not report context usage (Cursor ACP today), estimate
-from MCP payload bytes plus a *capped* Org transcript contribution against
-`emagent-acp-ctx-proxy-size'.  Cursor often uses its own tools, so MCP bytes
-alone stay 0; the transcript gives a weak baseline without letting a large
-buffer report >100%."
+When the provider does not report context usage (Cursor ACP today),
+estimate from MCP payload bytes plus Org transcript size against
+`emagent-acp-ctx-proxy-size'.  Transcript chars are scaled by
+`emagent-acp-ctx-proxy-buffer-divisor', then mapped with
+`1 - exp(-raw/size)' so the percentage grows with the session without
+a hard low cap (which looked static) or uncapped blow-ups."
   (or
    (when-let* ((pair (and (fboundp 'emagent-acp-context-usage)
                           (emagent-acp-context-usage)))
@@ -1589,15 +1590,17 @@ buffer report >100%."
                         (or (emagent-tools-age-bytes) 0)
                       0))
                (mcp-tok (/ (max 0 mcp) 4))
-               (cap (if (boundp 'emagent-acp-ctx-proxy-buffer-cap)
-                        emagent-acp-ctx-proxy-buffer-cap
-                      0.05))
-               (buf-cap (if (and (numberp cap) (> cap 0))
-                            (max 1 (floor (* size cap)))
+               (div (if (boundp 'emagent-acp-ctx-proxy-buffer-divisor)
+                        emagent-acp-ctx-proxy-buffer-divisor
+                      40))
+               (buf-tok (if (and (integerp div) (> div 0))
+                            (/ (buffer-size) div)
                           0))
-               (buf-tok (min (/ (buffer-size) 8) buf-cap))
-               (est (+ mcp-tok buf-tok))
-               ((> est 0)))
+               (raw (+ mcp-tok buf-tok))
+               ((> raw 0))
+               ;; Soft saturation: raw≈size → ~63%, grows toward 100%.
+               (est (floor (* (float size)
+                             (- 1.0 (exp (/ (- (float raw)) (float size))))))))
      (min 100.0 (* 100.0 (/ (float est) size))))))
 
 (defvar-local emagent-chat--last-compact-hint nil

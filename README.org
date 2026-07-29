@@ -161,9 +161,10 @@ so you can measure a change.  Mode line can show tok/$ when samples exist
 Claude reports real context fill as =ctx:N%=.  Cursor ACP does *not* provide
 usage statistics
 ([[https://forum.cursor.com/t/cli-emit-acp-usage-update-so-clients-like-zed-can-show-a-context-window-indicator/165358][upstream request]]);
-emagent estimates fill from MCP payload bytes plus a capped Org transcript
-term (=emagent-acp-ctx-proxy-buffer-cap=, default 5% of the proxy window)
-against =emagent-acp-ctx-proxy-size=, and shows =ctx:~N%=.  When fill is high, a
+emagent estimates fill from MCP payload bytes plus the Org transcript
+(=emagent-acp-ctx-proxy-buffer-divisor= chars/token), mapped with a soft
+curve so =ctx:~N%= grows over a session without jumping past 100%.  When
+fill is high, a
 =/compact= hint may appear under Response (cooldown-gated; auto-compact is off
 by default).
 
@@ -295,7 +296,7 @@ Allow-always fingerprints never override hard denies.  Workspace trust helpers:
 | =emagent-acp-auto-approve-permissions= | =nil= | =nil= / ='safe= / =t= |
 | =emagent-acp-confirm-fs-writes= | =nil= | Extra in-editor diff for ACP fs writes |
 | =emagent-acp-ctx-proxy-size= | =200000= | Assumed window for Cursor =ctx:~N%= |
-| =emagent-acp-ctx-proxy-buffer-cap= | =0.05= | Max transcript share of that window |
+| =emagent-acp-ctx-proxy-buffer-divisor= | =40= | Transcript chars per estimated token |
 | =emagent-acp-compact-hint-threshold= | =80= | % fill that suggests =/compact= |
 | =emagent-acp-auto-compact-threshold= | =nil= | Auto =/compress= (off by default) |
 | =emagent-acp-auto-explore-model= | =t= | Cheaper model on explore-shaped turns |
