@@ -161,7 +161,7 @@ so you can measure a change.  Mode line can show tok/$ when samples exist
 Claude reports real context fill as =ctx:N%=.  Cursor ACP does *not* provide
 usage statistics
 ([[https://forum.cursor.com/t/cli-emit-acp-usage-update-so-clients-like-zed-can-show-a-context-window-indicator/165358][upstream request]]);
-emagent estimates fill from MCP payload bytes + buffer size against
+emagent estimates fill from MCP payload bytes against
 =emagent-acp-ctx-proxy-size= and shows =ctx:~N%=.  When fill is high, a
 =/compact= hint may appear under Response (cooldown-gated; auto-compact is off
 by default).

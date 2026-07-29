@@ -80,14 +80,35 @@
       (setq emagent-tools-age--bytes 80000)
       (with-temp-buffer
         (delay-mode-hooks (emagent-mode))
-        (insert (make-string 2000 ?x))
+        ;; Large transcript must not inflate the proxy (not model context).
+        (insert (make-string 500000 ?x))
         (setq emagent-chat--status nil)
         (let ((pct (emagent-chat--context-fill-percent))
               (ml (emagent-chat--mode-line-context-usage)))
           (should (numberp pct))
-          (should (> pct 0))
+          ;; 80000 MCP bytes / 4 / 200000 ≈ 10%
+          (should (< pct 15.0))
+          (should (> pct 5.0))
           (should (stringp ml))
-          (should (string-match-p "ctx:~[0-9]+%" ml)))))))
+          ;; Mode-line needs %% so format-mode-line shows a single %.
+          ;; Doubled %% so mode-line-format keeps one face on the "%".
+          (should (string-match-p "ctx:~10%%\\'" ml))
+          (should (eq 'shadow (get-text-property 0 'face ml)))
+          (should (eq 'shadow
+                      (get-text-property (1- (length ml)) 'face ml))))))))
+
+(ert-deftest emagent-token-compact-smoke-ctx-proxy-no-mcp ()
+  (emagent-tools-age-reset)
+  (emagent-test--with-mocks
+      (((symbol-function 'emagent-acp-context-usage) (lambda () nil)))
+    (let ((emagent-acp-ctx-proxy-size 200000))
+      (with-temp-buffer
+        (delay-mode-hooks (emagent-mode))
+        (insert (make-string 500000 ?x))
+        (setq emagent-chat--status '(:ctx-unavailable t))
+        (should-not (emagent-chat--context-fill-percent))
+        (should (string-match-p "ctx:n/a"
+                                (emagent-chat--mode-line-context-usage)))))))
 
 (provide 'emagent-token-compact-smoke-test)
 

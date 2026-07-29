@@ -1022,7 +1022,7 @@ enabled so ACP file read/write route through Emacs buffers."
   "Assumed context window size when the provider has no ACP usage feed.
 
 Used for Cursor ACP, which does not provide context used/size today.
-Emagent estimates fill from MCP bytes + buffer size.  Nil or 0 disables
+Emagent estimates fill from MCP payload bytes only.  Nil or 0 disables
 the proxy."
   :type '(choice (const :tag "Off" nil)
                  (integer :tag "Tokens"))

@@ -2882,20 +2882,23 @@ the mode line pulling session state back out of the ACP layer."
 (defun emagent-chat--mode-line-context-usage ()
   "Return a propertized context fill string, or nil.
 Shows a percentage when known, `ctx:~N%' for Cursor proxy estimates,
-`ctx:n/a' when connected but unestimable, and nil otherwise."
+`ctx:n/a' when connected but unestimable, and nil otherwise.
+
+Percent signs are doubled (`%%') so `mode-line-format' displays a literal
+`%' without dropping the face."
   (if-let* ((pair (emagent-chat--stat :ctx-usage))
             (used (car pair))
             (size (cdr pair))
             ((and (numberp used) (numberp size) (> size 0))))
-      (let ((pct (* 100.0 (/ (float used) size))))
-        (propertize (format " ctx:%.0f%%" pct)
+      (let ((pct (min 100.0 (* 100.0 (/ (float used) size)))))
+        (propertize (format " ctx:%.0f%%%%" pct)
                     'face (cond
                            ((>= pct 80) 'error)
                            ((>= pct 50) 'warning)
                            (t           'success))))
     (if-let ((pct (and (fboundp 'emagent-chat--context-fill-percent)
                        (emagent-chat--context-fill-percent))))
-        (propertize (format " ctx:~%.0f%%" pct)
+        (propertize (format " ctx:~%.0f%%%%" pct)
                     'face (cond
                            ((>= pct 80) 'error)
                            ((>= pct 50) 'warning)
