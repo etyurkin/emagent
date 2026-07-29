@@ -319,6 +319,70 @@ an error (not null)."
   (emagent-tools--buffer-info-record
    (emagent-tools--resolve-buffer name mru selected other current)))
 
+(defun emagent-tools--window-record (window selected-window)
+  "Return a wide alist describing WINDOW for MCP/JSON consumers.
+
+SELECTED-WINDOW is `(selected-window)' at call time so every row shares
+one snapshot.  Boolean fields use t/:false."
+  (let* ((buffer (window-buffer window))
+         (frame (window-frame window))
+         (edges (window-edges window))
+         (dedicated (window-dedicated-p window)))
+    (with-current-buffer buffer
+      `(("buffer_name" . ,(buffer-name))
+        ("buffer_path" . ,buffer-file-name)
+        ("frame_name" . ,(or (frame-parameter frame 'name)
+                             (prin1-to-string frame)))
+        ("selected" . ,(if (eq window selected-window) t :false))
+        ("dedicated" . ,(if dedicated t :false))
+        ("width" . ,(window-width window))
+        ("height" . ,(window-height window))
+        ("left" . ,(nth 0 edges))
+        ("top" . ,(nth 1 edges))
+        ("point" . ,(window-point window))
+        ("window_start" . ,(window-start window))
+        ("window_end" . ,(window-end window t))))))
+
+(defun emagent-tools--list-windows-match-p (window buffer-name-regex
+                                                   frame-filter-regex
+                                                   selected-only
+                                                   selected-window)
+  "Return non-nil if WINDOW matches BUFFER-NAME-REGEX and other filters.
+
+FRAME-FILTER-REGEX, SELECTED-ONLY, and SELECTED-WINDOW further constrain
+the match for list_windows."
+  (let* ((buffer (window-buffer window))
+         (name (buffer-name buffer))
+         (frame (window-frame window))
+         (fname (frame-parameter frame 'name)))
+    (and (or (null buffer-name-regex)
+             (string-match-p buffer-name-regex name))
+         (or (null frame-filter-regex)
+             (and fname (string-match-p frame-filter-regex fname)))
+         (or (not selected-only)
+             (eq window selected-window)))))
+
+(defun emagent-tool-list-windows (&optional buffer-name-regex
+                                            frame-filter-regex
+                                            selected limit)
+  "List live windows as wide alist records.
+
+BUFFER-NAME-REGEX and FRAME-FILTER-REGEX are optional filters.  When
+SELECTED is t, keep only `(selected-window)'.  Matching rows are truncated
+to LIMIT when set."
+  (let* ((selected-window (selected-window))
+         (selected-only (eq selected t))
+         (rows nil))
+    (dolist (window (window-list-1 nil nil t))
+      (when (emagent-tools--list-windows-match-p
+             window buffer-name-regex frame-filter-regex
+             selected-only selected-window)
+        (push (emagent-tools--window-record window selected-window) rows)))
+    (setq rows (nreverse rows))
+    (if limit
+        (seq-take rows limit)
+      rows)))
+
 (provide 'emagent-tools-buffers)
 
 ;;; emagent-tools-buffers.el ends here

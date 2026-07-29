@@ -62,11 +62,13 @@
          (tools (alist-get 'tools payload))
          (names (mapcar (lambda (tool) (alist-get 'name tool))
                         (append tools nil))))
-    (should (<= (length tools) 11))
+    (should (<= (length tools) 13))
     (should (member "fs" names))
     (should (member "search" names))
     (should (member "list_buffers" names))
     (should (member "buffer_info" names))
+    (should (member "list_windows" names))
+    (should (member "imenu_index" names))
     (should (string= "fs" (alist-get 'name (aref tools 0))))))
 
 ;;;; Tool execution

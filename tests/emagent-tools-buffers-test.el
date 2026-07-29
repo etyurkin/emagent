@@ -66,11 +66,17 @@
 (ert-deftest emagent-mcp-test-list-buffers-tool-registered ()
   (should (emagent-mcp--tool-entry "list_buffers"))
   (should (emagent-mcp--tool-entry "buffer_info"))
+  (should (emagent-mcp--tool-entry "list_windows"))
+  (should (emagent-mcp--tool-entry "imenu_index"))
+  (should (eq (nth 4 (emagent-mcp--tool-entry "fs"))
+              'emagent-mcp-tool-fs))
   (let* ((payload (emagent-mcp--tools-list-payload))
          (tools (mapcar (lambda (tool) (alist-get 'name tool))
                         (append (alist-get 'tools payload) nil))))
     (should (member "list_buffers" tools))
-    (should (member "buffer_info" tools))))
+    (should (member "buffer_info" tools))
+    (should (member "list_windows" tools))
+    (should (member "imenu_index" tools))))
 
 (ert-deftest emagent-mcp-test-list-buffers-run-tool-json ()
   (let* ((buf (get-buffer-create "*emagent-mcp-list*"))
@@ -85,6 +91,41 @@
                                             :array-type 'list)))
             (should (listp parsed))
             (should (seq-every-p #'listp parsed))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
+(ert-deftest emagent-mcp-test-cont-sync-and-async ()
+  (should (emagent-mcp-cont-p
+           (emagent-mcp-cont (reply) (funcall reply "x"))))
+  (let ((got nil))
+    (funcall (emagent-mcp-cont-function
+              (emagent-mcp-cont (reply) (funcall reply "done")))
+             (lambda (result &optional is-error)
+               (setq got (list result is-error))))
+    (should (equal got '("done" nil))))
+  (let* ((session (list :root "/tmp" :buffer (current-buffer)))
+         (args (make-hash-table :test 'equal))
+         (got nil))
+    (puthash "form" "42" args)
+    (emagent-mcp--run-tool-async
+     "eval" args session
+     (lambda (result is-error) (setq got (list result is-error))))
+    (should (equal got '("42" nil)))))
+
+(ert-deftest emagent-tools-buffers-test-list-windows-selected ()
+  (let ((rows (emagent-tool-list-windows nil nil t 5)))
+    (should (= 1 (length rows)))
+    (should (eq t (alist-get "selected" (car rows) nil nil #'equal)))))
+
+(ert-deftest emagent-tools-buffers-test-imenu-records ()
+  (let ((buf (generate-new-buffer "emagent-imenu.el")))
+    (unwind-protect
+        (with-current-buffer buf
+          (emacs-lisp-mode)
+          (insert "(defun emagent-imenu-demo ()\n  1)\n")
+          (setq imenu-create-index-function #'imenu-default-create-index-function)
+          (let ((rows (emagent-tool-imenu-records)))
+            (should (consp rows))
+            (should (alist-get "name" (car rows) nil nil #'equal))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (provide 'emagent-tools-buffers-test)

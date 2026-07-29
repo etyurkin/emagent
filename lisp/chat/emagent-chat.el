@@ -180,6 +180,33 @@ instead; emagent then writes whatever port it gets into the agent config."
                   (description . "Optional seconds to wait before the subprocess is killed. Defaults to emagent-tools-subprocess-timeout; on timeout, retry with a larger value."))))
   "Shared JSON-schema property for a per-call subprocess timeout.")
 
+(defun emagent-mcp--make-cont (fn)
+  "Wrap FN as an emagent MCP continuation object.
+
+FN is a function of one argument, the reply callback.  The object is the
+list \(emagent-mcp-cont FN\)—a deliberate tag, not a closure alone, so
+`emagent-mcp-cont-p' can recognize it."
+  (list 'emagent-mcp-cont fn))
+
+(defun emagent-mcp-cont-p (obj)
+  "Return non-nil if OBJ is an emagent MCP continuation."
+  (and (eq (car-safe obj) 'emagent-mcp-cont) (functionp (nth 1 obj))))
+
+(defun emagent-mcp-cont-function (obj)
+  "Return the reply-wrapping function stored in continuation OBJ."
+  (nth 1 obj))
+
+(defmacro emagent-mcp-cont (args &rest body)
+  "Build a continuation whose body receives the MCP reply callback.
+
+ARGS must be a one-element list naming the reply parameter (conventionally
+`reply').  BODY should eventually call
+\(funcall REPLY RESULT &optional IS-ERROR\) to finish the request."
+  (declare (indent 1) (debug (sexp body)))
+  (unless (and (listp args) (= (length args) 1) (symbolp (car args)))
+    (error "Emagent-mcp-cont: expected exactly one reply parameter"))
+  `(emagent-mcp--make-cont (lambda ,args ,@body)))
+
 (defun emagent-mcp--alist-p (value)
   "Return non-nil when VALUE is a string-key alist for JSON objects."
   (and (listp value)
@@ -250,22 +277,25 @@ hash-tables) are JSON-encoded.  Other scalars use `format'."
     (emagent-mcp--json-encode (emagent-mcp--jsonable value)))
    (t (format "%s" value))))
 
-(defun emagent-mcp--call-sync-as-async (handler args callback)
-  "Run sync HANDLER on ARGS and deliver to CALLBACK as (result is-error)."
-  (condition-case err
-      (funcall callback (emagent-mcp--string-result (funcall handler args)) nil)
-    (error (funcall callback (error-message-string err) t))))
+(defun emagent-mcp--reply-wrap (reply)
+  "Return a callback that stringifies RESULT before calling REPLY."
+  (lambda (result is-error)
+    (funcall reply (emagent-mcp--string-result result) is-error)))
 
 (defun emagent-mcp--fs (args)
-  "Dispatch fs tool ARGS."
+  "Dispatch fs tool ARGS; return a value or continuation."
   (pcase (emagent-mcp--require-op
           args '("read" "write" "undo" "delete" "delete_directory" "list" "find"))
+    ("write"
+     (emagent-mcp-cont (reply)
+       (emagent-tool-write-file-async
+        (emagent-mcp--reply-wrap reply)
+        (emagent-mcp--arg args "path")
+        (emagent-mcp--arg args "content" ""))))
     ("read" (emagent-tool-read-file (emagent-mcp--arg args "path")
                                     (emagent-mcp--arg args "line")
                                     (emagent-mcp--arg args "limit")
                                     (emagent-mcp--bool args "refresh")))
-    ("write" (emagent-tool-write-file (emagent-mcp--arg args "path")
-                                      (emagent-mcp--arg args "content" "")))
     ("undo" (emagent-tool-undo-file (emagent-mcp--arg args "path")
                                     (emagent-mcp--arg args "steps")))
     ("delete" (emagent-tool-delete-file (emagent-mcp--arg args "path")))
@@ -276,72 +306,45 @@ hash-tables) are JSON-encoded.  Other scalars use `format'."
     ("find" (emagent-tool-find-files (emagent-mcp--arg args "glob")
                                      (emagent-mcp--arg args "path")))))
 
-(defun emagent-mcp--fs-async (args callback)
-  "Async dispatch for fs tool ARGS via CALLBACK."
-  (pcase (emagent-mcp--arg args "op")
-    ("write"
-     (emagent-tool-write-file-async
-      callback
-      (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "content" "")))
-    (_ (emagent-mcp--call-sync-as-async #'emagent-mcp--fs args callback))))
-
 (defun emagent-mcp--search (args)
-  "Dispatch search tool ARGS."
+  "Dispatch search tool ARGS as a continuation."
   (emagent-mcp--require-op args '("grep"))
-  (emagent-tool-grep (emagent-mcp--arg args "pattern")
-                     (emagent-mcp--arg args "path")))
-
-(defun emagent-mcp--search-async (args callback)
-  "Async dispatch for search tool ARGS via CALLBACK."
-  (emagent-mcp--require-op args '("grep"))
-  (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
-    (emagent-tool-grep-async
-     callback
-     (emagent-mcp--arg args "pattern")
-     (emagent-mcp--arg args "path"))))
+  (emagent-mcp-cont (reply)
+    (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
+      (emagent-tool-grep-async
+       (emagent-mcp--reply-wrap reply)
+       (emagent-mcp--arg args "pattern")
+       (emagent-mcp--arg args "path")))))
 
 (defun emagent-mcp--git (args)
-  "Dispatch git tool ARGS."
-  (pcase (emagent-mcp--require-op args '("status" "diff" "log"))
-    ("status" (emagent-tool-git-status))
-    ("diff" (emagent-tool-git-diff (emagent-mcp--arg args "args")))
-    ("log" (emagent-tool-git-log (emagent-mcp--arg args "args")))))
-
-(defun emagent-mcp--git-async (args callback)
-  "Async dispatch for git tool ARGS via CALLBACK."
-  (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
-    (pcase (emagent-mcp--require-op args '("status" "diff" "log"))
-      ("status" (emagent-tool-git-status-async callback))
-      ("diff" (emagent-tool-git-diff-async callback (emagent-mcp--arg args "args")))
-      ("log" (emagent-tool-git-log-async callback (emagent-mcp--arg args "args"))))))
+  "Dispatch git tool ARGS as a continuation."
+  (emagent-mcp-cont (reply)
+    (let ((emagent-tools--timeout-override (emagent-mcp--timeout args))
+          (cb (emagent-mcp--reply-wrap reply)))
+      (pcase (emagent-mcp--require-op args '("status" "diff" "log"))
+        ("status" (emagent-tool-git-status-async cb))
+        ("diff" (emagent-tool-git-diff-async cb (emagent-mcp--arg args "args")))
+        ("log" (emagent-tool-git-log-async cb (emagent-mcp--arg args "args")))))))
 
 (defun emagent-mcp--shell (args)
-  "Dispatch shell tool ARGS."
-  (pcase (emagent-mcp--require-op args '("run" "compile"))
-    ("run" (emagent-tool-run-shell-command (emagent-mcp--arg args "command")
-                                           (emagent-mcp--arg args "directory")))
-    ("compile" (emagent-tool-compile (emagent-mcp--arg args "command")
-                                     (emagent-mcp--arg args "directory")))))
-
-(defun emagent-mcp--shell-async (args callback)
-  "Async dispatch for shell tool ARGS via CALLBACK."
-  (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
-    (pcase (emagent-mcp--require-op args '("run" "compile"))
-      ("run" (emagent-tool-run-shell-command-async
-              (emagent-mcp--arg args "command")
-              (emagent-mcp--arg args "directory")
-              callback))
-      ("compile" (emagent-tool-compile-async
-                  callback
-                  (emagent-mcp--arg args "command")
-                  (emagent-mcp--arg args "directory"))))))
+  "Dispatch shell tool ARGS as a continuation."
+  (emagent-mcp-cont (reply)
+    (let ((emagent-tools--timeout-override (emagent-mcp--timeout args))
+          (cb (emagent-mcp--reply-wrap reply)))
+      (pcase (emagent-mcp--require-op args '("run" "compile"))
+        ("run" (emagent-tool-run-shell-command-async
+                (emagent-mcp--arg args "command")
+                (emagent-mcp--arg args "directory")
+                cb))
+        ("compile" (emagent-tool-compile-async
+                    cb
+                    (emagent-mcp--arg args "command")
+                    (emagent-mcp--arg args "directory")))))))
 
 (defun emagent-mcp--emacs (args)
   "Dispatch Emacs session/context tool ARGS."
   (pcase (emagent-mcp--require-op
-          args '("imenu" "project_directory" "where_is"))
-    ("imenu" (emagent-tool-imenu-index (emagent-mcp--arg args "file")))
+          args '("project_directory" "where_is"))
     ("project_directory" (emagent-tool-project-directory))
     ("where_is" (emagent-tool-where-is (emagent-mcp--arg args "command")))))
 
@@ -376,337 +379,113 @@ hash-tables) are JSON-encoded.  Other scalars use `format'."
      path (format "%s\ncheck: %s" wrote check))))
 
 (defun emagent-mcp--structural (args)
-  "Dispatch structural (lisp-sitter) tool ARGS."
-  (pcase (emagent-mcp--require-op args emagent-mcp--structural-ops)
-    ("check_file" (emagent-tool-check-structural-file
-                   (emagent-mcp--arg args "path")))
-    ("check_node" (emagent-tool-check-structural-node
-                   (emagent-mcp--arg args "path")
-                   (emagent-mcp--arg args "node")))
-    ("find_errors" (emagent-tool-structural-find-errors
-                    (emagent-mcp--arg args "path")))
-    ((or "tree" "outline")
-     (emagent-tool-structural-tree (emagent-mcp--arg args "path")
-                                   (emagent-mcp--arg args "depth")))
-    ("bounds" (emagent-tool-structural-bounds (emagent-mcp--arg args "path")
-                                              (emagent-mcp--arg args "symbol")))
-    ("get" (emagent-tool-structural-get (emagent-mcp--arg args "path")
-                                        (emagent-mcp--arg args "symbol")))
-    ("context" (emagent-tool-structural-context (emagent-mcp--arg args "path")))
-    ("replace" (emagent-tool-structural-replace
-                (emagent-mcp--arg args "path")
-                (emagent-mcp--arg args "symbol")
-                (emagent-mcp--arg args "new_body")))
-    ("insert" (emagent-tool-structural-insert
-               (emagent-mcp--arg args "path")
-               (emagent-mcp--arg args "after_symbol")
-               (emagent-mcp--arg args "node")))
-    ("complete" (emagent-tool-structural-complete
-                 (emagent-mcp--arg args "lang")
-                 (emagent-mcp--arg args "body")))
-    ("format" (emagent-tool-structural-format
-               (emagent-mcp--arg args "path")
-               (emagent-mcp--bool args "write")))
-    ("rename" (emagent-tool-structural-rename
-               (emagent-mcp--arg args "path")
-               (emagent-mcp--arg args "old")
-               (emagent-mcp--arg args "new")
-               (emagent-mcp--bool args "refs")
-               (emagent-mcp--bool args "no_refs")))
-    ("wrap" (emagent-tool-structural-wrap
-             (emagent-mcp--arg args "path")
-             (emagent-mcp--arg args "symbol")
-             (emagent-mcp--arg args "in")
-             (emagent-mcp--arg args "bindings")
-             (emagent-mcp--arg args "condition")))
-    ("remove" (emagent-tool-structural-remove
-               (emagent-mcp--arg args "path")
-               (emagent-mcp--arg args "symbol")
-               (emagent-mcp--bool args "keep_calls")))
-    ("move" (emagent-tool-structural-move
-             (emagent-mcp--arg args "path")
-             (emagent-mcp--arg args "symbol")
-             (emagent-mcp--arg args "after")))
-    ("substitute" (emagent-tool-structural-substitute
-                   (emagent-mcp--arg args "path")
-                   (emagent-mcp--arg args "symbol")
-                   (emagent-mcp--arg args "pattern")
-                   (emagent-mcp--arg args "replacement")))
-    ("extract" (emagent-tool-structural-extract
-                (emagent-mcp--arg args "path")
-                (emagent-mcp--arg args "symbol")
-                (emagent-mcp--arg args "pattern")
-                (emagent-mcp--arg args "name")
-                (emagent-mcp--arg args "params")))
-    ("callers" (emagent-tool-structural-callers
-                (emagent-mcp--arg args "path")
-                (emagent-mcp--arg args "symbol")))
-    ("instrument" (emagent-tool-structural-instrument
-                   (emagent-mcp--arg args "path")
-                   (emagent-mcp--arg args "symbol")
-                   (emagent-mcp--arg args "with")
-                   (emagent-mcp--arg args "at")
-                   (emagent-mcp--arg args "wrap")))
-    ("flatten" (emagent-tool-structural-flatten
-                (emagent-mcp--arg args "path")
-                (emagent-mcp--arg args "symbol")))
-    ("convert_let" (emagent-tool-structural-convert-let
-                    (emagent-mcp--arg args "path")
-                    (emagent-mcp--arg args "symbol")
-                    (emagent-mcp--arg args "to")))
-    ("splice" (emagent-tool-structural-splice
-               (emagent-mcp--arg args "path")
-               (emagent-mcp--arg args "symbol")
-               (emagent-mcp--arg args "pattern")))
-    ("raise" (emagent-tool-structural-raise
-              (emagent-mcp--arg args "path")
-              (emagent-mcp--arg args "symbol")
-              (emagent-mcp--arg args "pattern")))
-    ("edit" (emagent-mcp--structural-edit args))))
+  "Dispatch structural tool ARGS as a continuation."
+  (emagent-mcp-cont (reply)
+    (let ((cb (emagent-mcp--reply-wrap reply)))
+      (pcase (emagent-mcp--require-op args emagent-mcp--structural-ops)
+        ("check_file"
+         (emagent-tool-check-structural-file-async
+          cb (emagent-mcp--arg args "path")))
+        ("check_node"
+         (emagent-tool-check-structural-node-async
+          cb (emagent-mcp--arg args "path") (emagent-mcp--arg args "node")))
+        ("find_errors"
+         (emagent-tool-structural-find-errors-async
+          cb (emagent-mcp--arg args "path")))
+        ((or "tree" "outline")
+         (emagent-tool-structural-tree-async
+          cb (emagent-mcp--arg args "path") (emagent-mcp--arg args "depth")))
+        ("bounds"
+         (emagent-tool-structural-bounds-async
+          cb (emagent-mcp--arg args "path") (emagent-mcp--arg args "symbol")))
+        ("get"
+         (emagent-tool-structural-get-async
+          cb (emagent-mcp--arg args "path") (emagent-mcp--arg args "symbol")))
+        ("context"
+         (emagent-tool-structural-context-async
+          cb (emagent-mcp--arg args "path")))
+        ("replace"
+         (emagent-tool-structural-replace-async
+          cb (emagent-mcp--arg args "path")
+          (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "new_body")))
+        ("insert"
+         (emagent-tool-structural-insert-async
+          cb (emagent-mcp--arg args "path")
+          (emagent-mcp--arg args "after_symbol") (emagent-mcp--arg args "node")))
+        ("complete"
+         (emagent-tool-structural-complete-async
+          cb (emagent-mcp--arg args "lang") (emagent-mcp--arg args "body")))
+        ("format"
+         (emagent-tool-structural-format-async
+          cb (emagent-mcp--arg args "path") (emagent-mcp--bool args "write")))
+        ("rename"
+         (emagent-tool-structural-rename-async
+          cb (emagent-mcp--arg args "path")
+          (emagent-mcp--arg args "old") (emagent-mcp--arg args "new")
+          (emagent-mcp--bool args "refs") (emagent-mcp--bool args "no_refs")))
+        ("wrap"
+         (emagent-tool-structural-wrap-async
+          cb (emagent-mcp--arg args "path")
+          (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "in")
+          (emagent-mcp--arg args "bindings") (emagent-mcp--arg args "condition")))
+        ("remove"
+         (emagent-tool-structural-remove-async
+          cb (emagent-mcp--arg args "path")
+          (emagent-mcp--arg args "symbol") (emagent-mcp--bool args "keep_calls")))
+        ("move"
+         (emagent-tool-structural-move-async
+          cb (emagent-mcp--arg args "path")
+          (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "after")))
+        ("substitute"
+         (emagent-tool-structural-substitute-async
+          cb (emagent-mcp--arg args "path")
+          (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "pattern")
+          (emagent-mcp--arg args "replacement")))
+        ("extract"
+         (emagent-tool-structural-extract-async
+          cb (emagent-mcp--arg args "path")
+          (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "pattern")
+          (emagent-mcp--arg args "name") (emagent-mcp--arg args "params")))
+        ("callers"
+         (emagent-tool-structural-callers-async
+          cb (emagent-mcp--arg args "path") (emagent-mcp--arg args "symbol")))
+        ("instrument"
+         (emagent-tool-structural-instrument-async
+          cb (emagent-mcp--arg args "path")
+          (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "with")
+          (emagent-mcp--arg args "at") (emagent-mcp--arg args "wrap")))
+        ("flatten"
+         (emagent-tool-structural-flatten-async
+          cb (emagent-mcp--arg args "path") (emagent-mcp--arg args "symbol")))
+        ("convert_let"
+         (emagent-tool-structural-convert-let-async
+          cb (emagent-mcp--arg args "path")
+          (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "to")))
+        ("splice"
+         (emagent-tool-structural-splice-async
+          cb (emagent-mcp--arg args "path")
+          (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "pattern")))
+        ("raise"
+         (emagent-tool-structural-raise-async
+          cb (emagent-mcp--arg args "path")
+          (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "pattern")))
+        ("edit"
+         (condition-case err
+             (funcall reply (emagent-mcp--structural-edit args) nil)
+           (error (funcall reply (error-message-string err) t))))))))
 
-(defun emagent-mcp--structural-async (args callback)
-  "Async dispatch for structural tool ARGS via CALLBACK."
-  (pcase (emagent-mcp--arg args "op")
-    ("check_file"
-     (emagent-tool-check-structural-file-async
-      callback (emagent-mcp--arg args "path")))
-    ("check_node"
-     (emagent-tool-check-structural-node-async
-      callback (emagent-mcp--arg args "path") (emagent-mcp--arg args "node")))
-    ("find_errors"
-     (emagent-tool-structural-find-errors-async
-      callback (emagent-mcp--arg args "path")))
-    ((or "tree" "outline")
-     (emagent-tool-structural-tree-async
-      callback (emagent-mcp--arg args "path") (emagent-mcp--arg args "depth")))
-    ("bounds"
-     (emagent-tool-structural-bounds-async
-      callback (emagent-mcp--arg args "path") (emagent-mcp--arg args "symbol")))
-    ("get"
-     (emagent-tool-structural-get-async
-      callback (emagent-mcp--arg args "path") (emagent-mcp--arg args "symbol")))
-    ("context"
-     (emagent-tool-structural-context-async
-      callback (emagent-mcp--arg args "path")))
-    ("replace"
-     (emagent-tool-structural-replace-async
-      callback (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "new_body")))
-    ("insert"
-     (emagent-tool-structural-insert-async
-      callback (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "after_symbol") (emagent-mcp--arg args "node")))
-    ("complete"
-     (emagent-tool-structural-complete-async
-      callback (emagent-mcp--arg args "lang") (emagent-mcp--arg args "body")))
-    ("format"
-     (emagent-tool-structural-format-async
-      callback (emagent-mcp--arg args "path") (emagent-mcp--bool args "write")))
-    ("rename"
-     (emagent-tool-structural-rename-async
-      callback (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "old") (emagent-mcp--arg args "new")
-      (emagent-mcp--bool args "refs") (emagent-mcp--bool args "no_refs")))
-    ("wrap"
-     (emagent-tool-structural-wrap-async
-      callback (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "in")
-      (emagent-mcp--arg args "bindings") (emagent-mcp--arg args "condition")))
-    ("remove"
-     (emagent-tool-structural-remove-async
-      callback (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "symbol") (emagent-mcp--bool args "keep_calls")))
-    ("move"
-     (emagent-tool-structural-move-async
-      callback (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "after")))
-    ("substitute"
-     (emagent-tool-structural-substitute-async
-      callback (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "pattern")
-      (emagent-mcp--arg args "replacement")))
-    ("extract"
-     (emagent-tool-structural-extract-async
-      callback (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "pattern")
-      (emagent-mcp--arg args "name") (emagent-mcp--arg args "params")))
-    ("callers"
-     (emagent-tool-structural-callers-async
-      callback (emagent-mcp--arg args "path") (emagent-mcp--arg args "symbol")))
-    ("instrument"
-     (emagent-tool-structural-instrument-async
-      callback (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "with")
-      (emagent-mcp--arg args "at") (emagent-mcp--arg args "wrap")))
-    ("flatten"
-     (emagent-tool-structural-flatten-async
-      callback (emagent-mcp--arg args "path") (emagent-mcp--arg args "symbol")))
-    ("convert_let"
-     (emagent-tool-structural-convert-let-async
-      callback (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "to")))
-    ("splice"
-     (emagent-tool-structural-splice-async
-      callback (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "pattern")))
-    ("raise"
-     (emagent-tool-structural-raise-async
-      callback (emagent-mcp--arg args "path")
-      (emagent-mcp--arg args "symbol") (emagent-mcp--arg args "pattern")))
-    (_ (emagent-mcp--call-sync-as-async #'emagent-mcp--structural args callback))))
-
-(defvar emagent-mcp--tools
-  (list
-   (emagent-mcp--tool
-    "fs"
-    "Emacs FS. op=read|write|undo|delete|delete_directory|list|find. write needs expected_tick. Lisp→structural."
-    (append
-     (emagent-mcp--op-prop
-      '("read" "write" "undo" "delete" "delete_directory" "list" "find")
-      "Filesystem operation.")
-     (emagent-mcp--path-prop)
-     '(("content" . ((type . "string") (description . "Full file contents (write).")))
-       ("line" . ((type . "integer") (description . "1-based start line (read).")))
-       ("limit" . ((type . "integer") (description . "Max lines (read).")))
-       ("steps" . ((type . "integer") (description . "Undo steps (default 1).")))
-       ("recursive" . ((type . "boolean") (description . "Recursive delete_directory.")))
-       ("glob" . ((type . "string") (description . "Filename glob (find)."))))
-     (emagent-mcp--expected-tick-prop))
-    '("op")
-    #'emagent-mcp--fs
-    :async #'emagent-mcp--fs-async)
-   (emagent-mcp--tool
-    "search"
-    "Search the session tree. op=grep."
-    (append
-     (emagent-mcp--op-prop '("grep") "Search operation.")
-     '(("pattern" . ((type . "string") (description . "Regexp to search for."))))
-     (emagent-mcp--path-prop)
-     emagent-mcp--timeout-prop)
-    '("op" "pattern")
-    #'emagent-mcp--search
-    :async #'emagent-mcp--search-async)
-   (emagent-mcp--tool
-    "git"
-    "Git for the session project. op=status|diff|log."
-    (append
-     (emagent-mcp--op-prop '("status" "diff" "log") "Git operation.")
-     '(("args" . ((type . "string")
-                  (description . "Optional extra git diff/log arguments."))))
-     emagent-mcp--timeout-prop)
-    '("op")
-    #'emagent-mcp--git
-    :async #'emagent-mcp--git-async)
-   (emagent-mcp--tool
-    "shell"
-    "Run a command through Emacs. op=run (shell) or op=compile (compilation-mode, navigable errors). Prefer compile for builds/tests."
-    (append
-     (emagent-mcp--op-prop '("run" "compile") "Shell operation.")
-     '(("command" . ((type . "string") (description . "Shell command line.")))
-       ("directory" . ((type . "string")
-                       (description . "Working directory; defaults to session root."))))
-     emagent-mcp--timeout-prop)
-    '("op" "command")
-    #'emagent-mcp--shell
-    :async #'emagent-mcp--shell-async)
-   (emagent-mcp--tool
-    "eval"
-    "Evaluate an Emacs Lisp form in the live Emacs. Filesystem and process ops are blocked; use fs/shell/structural instead."
-    '(("form" . ((type . "string")
-                 (description . "An Emacs Lisp form as a string."))))
-    '("form")
-    (lambda (args)
-      (emagent-tool-eval (emagent-mcp--arg args "form"))))
-   (emagent-mcp--tool
-    "emacs"
-    "Emacs session context. op=imenu|project_directory|where_is."
-    (append
-     (emagent-mcp--op-prop
-      '("imenu" "project_directory" "where_is")
-      "Emacs context operation.")
-     '(("file" . ((type . "string")
-                  (description . "File for imenu; omit for current buffer.")))
-       ("command" . ((type . "string")
-                     (description . "Command name for where_is.")))))
-    '("op")
-    #'emagent-mcp--emacs)
-   (emagent-mcp--tool
-    "elisp"
-    "Elisp discovery and validation. op=check|guide|apropos|apropos_doc|describe|find_function."
-    (append
-     (emagent-mcp--op-prop
-      '("check" "guide" "apropos" "apropos_doc" "describe" "find_function")
-      "Elisp operation.")
-     '(("form" . ((type . "string") (description . "Form to check (check).")))
-       ("pattern" . ((type . "string") (description . "Regexp (apropos*).")))
-       ("symbol" . ((type . "string") (description . "Symbol (describe/find_function).")))))
-    '("op")
-    #'emagent-mcp--elisp)
-   (emagent-mcp--tool
-    "structural"
-    "[lisp-sitter] Structural Lisp sexp edits. Mutate needs expected_tick from op=get/fs read. Discover with op=tree|get; details via elisp op=guide."
-    (append
-     (emagent-mcp--op-prop emagent-mcp--structural-ops "Structural operation.")
-     (emagent-mcp--path-prop)
-     '(("symbol" . ((type . "string") (description . "Top-level form name.")))
-       ("node" . ((type . "string") (description . "Complete node text.")))
-       ("new_body" . ((type . "string") (description . "Replacement form (replace/edit).")))
-       ("after_symbol" . ((type . "string")
-                          (description . "__start__, __end__, or symbol (insert).")))
-       ("after" . ((type . "string") (description . "Anchor for move.")))
-       ("depth" . ((type . "integer") (description . "Outline depth (tree).")))
-       ("lang" . ((type . "string") (description . "elisp/commonlisp/scheme (complete).")))
-       ("body" . ((type . "string") (description . "Incomplete form (complete).")))
-       ("write" . ((type . "boolean") (description . "Save formatted file (format).")))
-       ("old" . ((type . "string") (description . "Rename from.")))
-       ("new" . ((type . "string") (description . "Rename to.")))
-       ("refs" . ((type . "boolean") (description . "Rename quoted refs.")))
-       ("no_refs" . ((type . "boolean") (description . "Definition only.")))
-       ("in" . ((type . "string") (description . "Wrapper construct (wrap).")))
-       ("bindings" . ((type . "string") (description . "let bindings (wrap).")))
-       ("condition" . ((type . "string") (description . "if/when condition (wrap).")))
-       ("keep_calls" . ((type . "boolean") (description . "Keep call sites (remove).")))
-       ("pattern" . ((type . "string") (description . "Sub-expression pattern.")))
-       ("replacement" . ((type . "string") (description . "Replacement sexp.")))
-       ("name" . ((type . "string") (description . "New function name (extract).")))
-       ("params" . ((type . "string") (description . "Extract params.")))
-       ("with" . ((type . "string") (description . "Instrument with.")))
-       ("at" . ((type . "string") (description . "Instrument at.")))
-       ("wrap" . ((type . "string") (description . "Instrument wrap.")))
-       ("to" . ((type . "string") (description . "let or let* (convert_let)."))))
-     (emagent-mcp--expected-tick-prop))
-    '("op")
-    #'emagent-mcp--structural
-    :available #'emagent-struct-available-p
-    :async #'emagent-mcp--structural-async)
-   (emagent-mcp--tool
-    "fetch_url"
-    "Fetch an http(s) URL and return the response body."
-    (append
-     '(("url" . ((type . "string") (description . "http:// or https:// URL.")))
-       ("max_bytes" . ((type . "integer")
-                       (description . "Optional max response size in bytes."))))
-     emagent-mcp--timeout-prop)
-    '("url")
-    (lambda (args)
-      (emagent-tool-fetch-url (emagent-mcp--arg args "url")
-                              (emagent-mcp--arg args "max_bytes")))
-    :async
-    (lambda (args cb)
-      (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
-        (emagent-tool-fetch-url-async
-         cb
-         (emagent-mcp--arg args "url")
-         (emagent-mcp--arg args "max_bytes"))))))
+(defvar emagent-mcp--tools nil
   "Registry of emagent MCP tools.
+
 Each entry: (NAME DESCRIPTION PROPERTIES REQUIRED HANDLER . PLIST).
-PLIST may have :available, a predicate returning non-nil to show the tool.")
+PLIST may have :available, a predicate returning non-nil to show the tool.
+Filled only by `emagent-mcp-deftool' / `emagent-mcp--register-tool'.")
 
 (defun emagent-mcp--register-tool (name description properties required handler &rest plist)
   "Register MCP tool NAME with DESCRIPTION, PROPERTIES, REQUIRED, HANDLER.
 
-PLIST may include `:available' and `:async'.  Replaces any prior entry with
-the same NAME (case-insensitive).  Returns the new entry."
+PLIST may include `:available'.  Replaces any prior entry with the same
+NAME (case-insensitive).  Returns the new entry."
   (let ((entry (apply #'emagent-mcp--tool name description properties
                       required handler plist))
         (existing (assoc-string name emagent-mcp--tools t)))
@@ -734,18 +513,23 @@ and the handler forms."
         (error "Emagent-mcp-deftool: missing handler arglist"))
       (list plist docstring (car rest) (cdr rest)))))
 
+(defun emagent-mcp--deftool-handler-symbol (name)
+  "Return the Elisp handler symbol for wire tool NAME."
+  (intern (concat "emagent-mcp-tool-"
+                  (replace-regexp-in-string "_" "-" name))))
+
 (defmacro emagent-mcp-deftool (name &rest body)
   "Define and register MCP tool NAME with schema next to its handler.
 
 NAME is the wire-facing tool string.  BODY is keyword options, a
 docstring (also the MCP description), a one-arg lambda list (usually
-\=(args)), then handler forms.
+\\=(args)), then handler forms.  Handlers may return a value or an
+`emagent-mcp-cont' continuation.
 
 Keywords:
   :properties ALIST  -- JSON-schema properties (required)
   :required LIST     -- required property names (default nil)
-  :available PRED    -- optional list-time visibility predicate
-  :async FN          -- optional async handler of args and callback"
+  :available PRED    -- optional list-time visibility predicate"
   (declare (indent 1) (debug (&define string body)))
   (let* ((split (emagent-mcp--deftool-split body))
          (opts (nth 0 split))
@@ -755,8 +539,7 @@ Keywords:
          (properties (plist-get opts :properties))
          (required (or (plist-get opts :required) '()))
          (available (plist-get opts :available))
-         (async (plist-get opts :async))
-         (handler (gensym "emagent-mcp-tool-")))
+         (handler (emagent-mcp--deftool-handler-symbol name)))
     (unless properties
       (error "Emagent-mcp-deftool: :properties is required"))
     `(progn
@@ -769,8 +552,164 @@ Keywords:
         ,properties
         ,required
         #',handler
-        ,@(when available `(:available ,available))
-        ,@(when async `(:async ,async))))))
+        ,@(when available `(:available ,available))))))
+
+(emagent-mcp-deftool "fs"
+  :properties
+  (append
+   (emagent-mcp--op-prop
+    '("read" "write" "undo" "delete" "delete_directory" "list" "find")
+    "Filesystem operation.")
+   (emagent-mcp--path-prop)
+   '(("content" . ((type . "string") (description . "Full file contents (write).")))
+     ("line" . ((type . "integer") (description . "1-based start line (read).")))
+     ("limit" . ((type . "integer") (description . "Max lines (read).")))
+     ("steps" . ((type . "integer") (description . "Undo steps (default 1).")))
+     ("recursive" . ((type . "boolean") (description . "Recursive delete_directory.")))
+     ("glob" . ((type . "string") (description . "Filename glob (find)."))))
+   (emagent-mcp--expected-tick-prop))
+  :required '("op")
+  "Emacs FS. op=read|write|undo|delete|delete_directory|list|find.
+
+Write needs expected_tick. Lisp files use structural."
+  (args)
+  (emagent-mcp--fs args))
+
+(emagent-mcp-deftool "search"
+  :properties
+  (append
+   (emagent-mcp--op-prop '("grep") "Search operation.")
+   '(("pattern" . ((type . "string") (description . "Regexp to search for."))))
+   (emagent-mcp--path-prop)
+   emagent-mcp--timeout-prop)
+  :required '("op" "pattern")
+  "Search the session tree. op=grep."
+  (args)
+  (emagent-mcp--search args))
+
+(emagent-mcp-deftool "git"
+  :properties
+  (append
+   (emagent-mcp--op-prop '("status" "diff" "log") "Git operation.")
+   '(("args" . ((type . "string")
+                (description . "Optional extra git diff/log arguments."))))
+   emagent-mcp--timeout-prop)
+  :required '("op")
+  "Git for the session project. op=status|diff|log."
+  (args)
+  (emagent-mcp--git args))
+
+(emagent-mcp-deftool "shell"
+  :properties
+  (append
+   (emagent-mcp--op-prop '("run" "compile") "Shell operation.")
+   '(("command" . ((type . "string") (description . "Shell command line.")))
+     ("directory" . ((type . "string")
+                     (description . "Working directory; defaults to session root."))))
+   emagent-mcp--timeout-prop)
+  :required '("op" "command")
+  "Run a command through Emacs.
+
+op=run (shell) or op=compile (compilation-mode). Prefer compile for builds."
+  (args)
+  (emagent-mcp--shell args))
+
+(emagent-mcp-deftool "eval"
+  :properties
+  '(("form" . ((type . "string")
+               (description . "An Emacs Lisp form as a string."))))
+  :required '("form")
+  "Evaluate an Emacs Lisp form in the live Emacs.
+
+Filesystem and process ops are blocked; use fs/shell/structural."
+  (args)
+  (emagent-tool-eval (emagent-mcp--arg args "form")))
+
+(emagent-mcp-deftool "emacs"
+  :properties
+  (append
+   (emagent-mcp--op-prop
+    '("project_directory" "where_is")
+    "Emacs context operation.")
+   '(("command" . ((type . "string")
+                   (description . "Command name for where_is.")))))
+  :required '("op")
+  "Emacs session context. op=project_directory|where_is."
+  (args)
+  (emagent-mcp--emacs args))
+
+(emagent-mcp-deftool "elisp"
+  :properties
+  (append
+   (emagent-mcp--op-prop
+    '("check" "guide" "apropos" "apropos_doc" "describe" "find_function")
+    "Elisp operation.")
+   '(("form" . ((type . "string") (description . "Form to check (check).")))
+     ("pattern" . ((type . "string") (description . "Regexp (apropos*).")))
+     ("symbol" . ((type . "string") (description . "Symbol (describe/find_function).")))))
+  :required '("op")
+  "Elisp discovery and validation.
+
+op=check|guide|apropos|apropos_doc|describe|find_function."
+  (args)
+  (emagent-mcp--elisp args))
+
+(emagent-mcp-deftool "structural"
+  :properties
+  (append
+   (emagent-mcp--op-prop emagent-mcp--structural-ops "Structural operation.")
+   (emagent-mcp--path-prop)
+   '(("symbol" . ((type . "string") (description . "Top-level form name.")))
+     ("node" . ((type . "string") (description . "Complete node text.")))
+     ("new_body" . ((type . "string") (description . "Replacement form (replace/edit).")))
+     ("after_symbol" . ((type . "string")
+                        (description . "__start__, __end__, or symbol (insert).")))
+     ("after" . ((type . "string") (description . "Anchor for move.")))
+     ("depth" . ((type . "integer") (description . "Outline depth (tree).")))
+     ("lang" . ((type . "string") (description . "elisp/commonlisp/scheme (complete).")))
+     ("body" . ((type . "string") (description . "Incomplete form (complete).")))
+     ("write" . ((type . "boolean") (description . "Save formatted file (format).")))
+     ("old" . ((type . "string") (description . "Rename from.")))
+     ("new" . ((type . "string") (description . "Rename to.")))
+     ("refs" . ((type . "boolean") (description . "Rename quoted refs.")))
+     ("no_refs" . ((type . "boolean") (description . "Definition only.")))
+     ("in" . ((type . "string") (description . "Wrapper construct (wrap).")))
+     ("bindings" . ((type . "string") (description . "let bindings (wrap).")))
+     ("condition" . ((type . "string") (description . "if/when condition (wrap).")))
+     ("keep_calls" . ((type . "boolean") (description . "Keep call sites (remove).")))
+     ("pattern" . ((type . "string") (description . "Sub-expression pattern.")))
+     ("replacement" . ((type . "string") (description . "Replacement sexp.")))
+     ("name" . ((type . "string") (description . "New function name (extract).")))
+     ("params" . ((type . "string") (description . "Extract params.")))
+     ("with" . ((type . "string") (description . "Instrument with.")))
+     ("at" . ((type . "string") (description . "Instrument at.")))
+     ("wrap" . ((type . "string") (description . "Instrument wrap.")))
+     ("to" . ((type . "string") (description . "let or let* (convert_let)."))))
+   (emagent-mcp--expected-tick-prop))
+  :required '("op")
+  :available #'emagent-struct-available-p
+  "[lisp-sitter] Structural Lisp sexp edits.
+
+Mutate needs expected_tick from op=get/fs read. Discover with tree|get."
+  (args)
+  (emagent-mcp--structural args))
+
+(emagent-mcp-deftool "fetch_url"
+  :properties
+  (append
+   '(("url" . ((type . "string") (description . "http:// or https:// URL.")))
+     ("max_bytes" . ((type . "integer")
+                     (description . "Optional max response size in bytes."))))
+   emagent-mcp--timeout-prop)
+  :required '("url")
+  "Fetch an http(s) URL and return the response body."
+  (args)
+  (emagent-mcp-cont (reply)
+    (let ((emagent-tools--timeout-override (emagent-mcp--timeout args)))
+      (emagent-tool-fetch-url-async
+       (emagent-mcp--reply-wrap reply)
+       (emagent-mcp--arg args "url")
+       (emagent-mcp--arg args "max_bytes")))))
 
 (emagent-mcp-deftool "list_buffers"
   :properties
@@ -851,6 +790,46 @@ fields; does not return region text."
    (emagent-mcp--arg args "selected")
    (emagent-mcp--arg args "other")
    (emagent-mcp--arg args "current")))
+
+(emagent-mcp-deftool "list_windows"
+  :properties
+  '(("buffer_name_regex"
+     . ((type . "string")
+        (description . "Regexp matched against window buffer-name.")))
+    ("frame_filter_regex"
+     . ((type . "string")
+        (description . "Regexp matched against frame name.")))
+    ("selected"
+     . ((type . "boolean")
+        (description . "When true, keep only the selected window.")))
+    ("limit"
+     . ((type . "integer")
+        (description . "Max rows after filters."))))
+  :required '()
+  "List live Emacs windows as wide JSON records.
+
+Each element has buffer_name, buffer_path, frame_name, selected, dedicated,
+width, height, left, top, point, window_start, and window_end."
+  (args)
+  (apply #'vector
+         (emagent-tool-list-windows
+          (emagent-mcp--arg args "buffer_name_regex")
+          (emagent-mcp--arg args "frame_filter_regex")
+          (emagent-mcp--arg args "selected")
+          (emagent-mcp--arg args "limit"))))
+
+(emagent-mcp-deftool "imenu_index"
+  :properties
+  '(("file"
+     . ((type . "string")
+        (description . "File for imenu; omit for current buffer."))))
+  :required '()
+  "Return imenu outline as wide JSON records (name, path, line, position).
+
+Prefer this over dumping whole files when orienting in a buffer."
+  (args)
+  (apply #'vector
+         (emagent-tool-imenu-records (emagent-mcp--arg args "file"))))
 
 (defcustom emagent-mcp-compact-schemas t
   "When non-nil, shorten tools/list descriptions and property docs."
@@ -936,48 +915,44 @@ Only includes tools whose :available predicate passes."
           (emagent-session-add-allowed-tool tool))))))
 
 (defun emagent-mcp--run-tool (name args session)
-  "Run tool NAME with ARGS in SESSION's context; return a result string."
-  (let ((entry (emagent-mcp--tool-entry name)))
-    (unless entry
-      (error "Unknown tool: %s" name))
-    (unless (emagent-mcp--tool-available-p entry)
-      (error "Tool %s is not available (install lisp-sitter)" name))
-    (let* ((root (plist-get session :root))
-           (buffer (plist-get session :buffer))
-           (handler (nth 4 entry))
-           (emagent-tools--project-directory (or root emagent-tools--project-directory))
-           (emagent-tools--root-boundary root)
-           (emagent-tools--session-allowed-tools
-            (emagent-mcp--session-allowed-tools buffer))
-           (emagent-tools-allow-all-function
-            (emagent-mcp--make-allow-all-fn buffer))
-           (emagent-tools--chat-buffer buffer)
-           (emagent-tools--acp-session-p t)
-           (emagent-tools--expected-file-tick
-            (emagent-mcp--arg args "expected_tick"))
-           (emagent-acp-prefer-emacs (if session
-                                         (plist-get session :prefer-emacs)
-                                       (and (boundp 'emagent-acp-prefer-emacs)
-                                            emagent-acp-prefer-emacs))))
-      (emagent-mcp--maybe-guard-file-tick name args)
-      (emagent-mcp--string-result (funcall handler args)))))
+  "Run tool NAME with ARGS in SESSION's context; return a result string.
+
+If the handler returns a continuation, it must complete synchronously
+\(call REPLY before returning\); otherwise signal an error."
+  (let ((out nil)
+        (err nil)
+        (done nil))
+    (emagent-mcp--run-tool-async
+     name args session
+     (lambda (result is-error)
+       (setq out result
+             err is-error
+             done t)))
+    (unless done
+      (error "Tool %s did not complete synchronously" name))
+    (if err
+        (error "%s" out)
+      out)))
 
 (defun emagent-mcp--run-tool-async (name args session callback)
   "Run tool NAME with ARGS in SESSION and deliver the result to CALLBACK.
-CALLBACK is called as (CALLBACK RESULT IS-ERROR).  Tools with an :async
-handler in the registry are non-blocking — CALLBACK is called from a
-process sentinel.  All other tools are synchronous and CALLBACK is called
-immediately before this function returns."
+
+CALLBACK is called as (CALLBACK RESULT IS-ERROR).  Handlers return a
+normal value or an `emagent-mcp-cont' continuation; when a continuation
+is returned, CALLBACK is invoked later via its reply function."
   (let ((entry (emagent-mcp--tool-entry name)))
     (cond
      ((null entry)
       (funcall callback (format "Unknown tool: %s" name) t))
      ((not (emagent-mcp--tool-available-p entry))
-      (funcall callback (format "Tool %s is not available (install lisp-sitter)" name) t))
+      (funcall callback
+               (format "Tool %s is not available (install lisp-sitter)" name)
+               t))
      (t
       (let* ((root (plist-get session :root))
              (buffer (plist-get session :buffer))
-             (emagent-tools--project-directory (or root emagent-tools--project-directory))
+             (emagent-tools--project-directory
+              (or root emagent-tools--project-directory))
              (emagent-tools--root-boundary root)
              (emagent-tools--session-allowed-tools
               (emagent-mcp--session-allowed-tools buffer))
@@ -987,23 +962,24 @@ immediately before this function returns."
              (emagent-tools--acp-session-p t)
              (emagent-tools--expected-file-tick
               (emagent-mcp--arg args "expected_tick"))
-             (emagent-acp-prefer-emacs (if session
-                                           (plist-get session :prefer-emacs)
-                                         (and (boundp 'emagent-acp-prefer-emacs)
-                                              emagent-acp-prefer-emacs)))
-             (async-fn (plist-get (nthcdr 5 entry) :async)))
+             (emagent-acp-prefer-emacs
+              (if session
+                  (plist-get session :prefer-emacs)
+                (and (boundp 'emagent-acp-prefer-emacs)
+                     emagent-acp-prefer-emacs)))
+             (handler (nth 4 entry))
+             (reply
+              (lambda (result &optional is-error)
+                (funcall callback
+                         (emagent-mcp--string-result result)
+                         is-error))))
         (emagent-mcp--maybe-guard-file-tick name args)
-        (if async-fn
-            (condition-case err
-                (funcall async-fn args
-                         (lambda (result is-error)
-                           (funcall callback (emagent-mcp--string-result result) is-error)))
-              (error (funcall callback (error-message-string err) t)))
-          (condition-case err
-              (funcall callback
-                       (emagent-mcp--string-result (funcall (nth 4 entry) args))
-                       nil)
-            (error (funcall callback (error-message-string err) t)))))))))
+        (condition-case err
+            (let ((result (funcall handler args)))
+              (if (emagent-mcp-cont-p result)
+                  (funcall (emagent-mcp-cont-function result) reply)
+                (funcall reply result nil)))
+          (error (funcall callback (error-message-string err) t))))))))
 
 (defun emagent-mcp--json-encode (object)
   "Serialize OBJECT to a JSON string."

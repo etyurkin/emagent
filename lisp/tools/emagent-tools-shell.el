@@ -1652,33 +1652,67 @@ Arguments: DIRECTORY."
     (listp (cadr item))
     (not (numberp (cadr item)))))
 
-(defun emagent-tool-imenu-index (&optional file)
-  "Return a structural outline (functions, classes, sections) for FILE.
-When FILE is omitted, uses the current buffer.  Works for any language
-that has imenu support configured (Java, Python, Elisp, JS, org, etc.)."
+(defun emagent-tool-imenu-records (&optional file)
+  "Return imenu outline for FILE as a list of wide alist records.
+
+When FILE is omitted, uses the current buffer.  Each record has name,
+path (nested prefix), line, and position when available."
   (require 'imenu)
   (let* ((resolved (when file (emagent-tools--root-directory file)))
-      (buf (if resolved
-          (or (find-buffer-visiting resolved)
-            (find-file-noselect resolved))
-          (current-buffer))))
+         (buf (if resolved
+                  (or (find-buffer-visiting resolved)
+                      (find-file-noselect resolved))
+                (current-buffer))))
     (with-current-buffer buf
       (let* ((index (condition-case nil
-              (when (functionp imenu-create-index-function)
-                (save-excursion
-                  (funcall imenu-create-index-function)))
-              (error nil)))
-          (lines nil))
-        (cl-labels ((flatten (alist prefix)
-              (dolist (entry alist)
-                (if (emagent-tools--imenu-subalist-p entry)
-                  (flatten (cdr entry)
-                    (concat prefix (car entry) "/"))
-                  (push (concat prefix (car entry)) lines)))))
+                        (when (functionp imenu-create-index-function)
+                          (save-excursion
+                            (funcall imenu-create-index-function)))
+                      (error nil)))
+             (rows nil))
+        (cl-labels
+            ((flatten (alist prefix)
+               (dolist (entry alist)
+                 (if (emagent-tools--imenu-subalist-p entry)
+                     (flatten (cdr entry)
+                              (concat prefix (car entry) "/"))
+                   (let* ((name (car entry))
+                          (pos (cdr entry))
+                          (marker (cond
+                                   ((markerp pos) pos)
+                                   ((numberp pos) pos)
+                                   ((and (overlayp pos) (overlay-start pos)))
+                                   (t nil)))
+                          (line (and marker
+                                     (line-number-at-pos
+                                      (if (markerp marker)
+                                          marker
+                                        marker)
+                                      t))))
+                     (push `(("name" . ,name)
+                             ("path" . ,(concat prefix name))
+                             ("line" . ,line)
+                             ("position" . ,(and marker
+                                                 (if (markerp marker)
+                                                     (marker-position marker)
+                                                   marker))))
+                           rows))))))
           (when index (flatten index "")))
-        (if lines
-          (string-join (nreverse lines) "\n")
-          "No imenu index available for this buffer")))))
+        (nreverse rows)))))
+
+(defun emagent-tool-imenu-index (&optional file)
+  "Return a structural outline (functions, classes, sections) for FILE.
+
+When FILE is omitted, uses the current buffer.  Prefer
+`emagent-tool-imenu-records' for machine-readable results."
+  (let ((rows (emagent-tool-imenu-records file)))
+    (if rows
+        (string-join
+         (mapcar (lambda (row)
+                   (alist-get "path" row nil nil #'equal))
+                 rows)
+         "\n")
+      "No imenu index available for this buffer")))
 
 (provide 'emagent-tools-shell)
 ;;; emagent-tools-shell.el ends here

@@ -115,8 +115,8 @@ Substitution guide:
 %s
 | open URL                | eval with (browse-url URL)                |
 | live HTTP / web API     | fetch_url                                 |
-| what's open in editor   | list_buffers / buffer_info                 |
-| code outline (any lang) | emacs op=imenu                            |
+| what's open in editor   | list_buffers / buffer_info / list_windows  |
+| code outline (any lang) | imenu_index                               |
 
 shell op=run auto-redirects cat/grep/git/find and routes
 mvn/gradle/make/cargo/go/npm/yarn/pytest through compilation-mode
@@ -124,7 +124,7 @@ mvn/gradle/make/cargo/go/npm/yarn/pytest through compilation-mode
 
 ## Context discipline
 
-1. Outline before large reads: emacs op=imenu (Java, Python, TS, Go, …).
+1. Outline before large reads: imenu_index (Java, Python, TS, Go, …).
    For Lisp + lisp-sitter, prefer structural op=tree then op=get.
 2. Prefer fs/search with line/limit; do not dump whole files into chat.
 3. Builds/tests use shell op=compile (mvn, gradle, pytest, npm, cargo, …).
@@ -222,13 +222,13 @@ Follow these rules to avoid them:
   "Return the full emagent tool list paragraph for the system prompt."
   (if (emagent-struct-available-p)
       "fs (read/write/undo/delete/list/find), search (grep), git (status/diff/log),
-shell (run/compile), eval, list_buffers, buffer_info,
-emacs (imenu/project_directory/where_is),
+shell (run/compile), eval, list_buffers, buffer_info, list_windows, imenu_index,
+emacs (project_directory/where_is),
 elisp (check/guide/apropos/apropos_doc/describe/find_function),
 structural (lisp-sitter: tree/get/replace/insert/edit/...), fetch_url."
     "fs (read/write/undo/delete/list/find), search (grep), git (status/diff/log),
-shell (run/compile), eval, list_buffers, buffer_info,
-emacs (imenu/project_directory/where_is),
+shell (run/compile), eval, list_buffers, buffer_info, list_windows, imenu_index,
+emacs (project_directory/where_is),
 elisp (check/guide/apropos/apropos_doc/describe/find_function), fetch_url.
 (structural appears after installing lisp-sitter.)"))
 

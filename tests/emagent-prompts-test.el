@@ -17,7 +17,7 @@
   (let ((prompt (emagent-prompts--prefer-emacs-prompt)))
     (should (string-match-p "Tool preference" prompt))
     (should (string-match-p "Context discipline" prompt))
-    (should (string-match-p "emacs op=imenu" prompt))
+    (should (string-match-p "imenu_index" prompt))
     (should (string-match-p "shell op=compile" prompt))
     (should (string-match-p "mvn" prompt))
     (should (string-match-p "/compact" prompt))
