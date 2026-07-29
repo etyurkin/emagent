@@ -185,8 +185,8 @@ instead; emagent then writes whatever port it gets into the agent config."
 
 FN is a function of one argument, the reply callback.  The object is
 \(emagent-mcp-cont FN . PLIST\)—a deliberate tag so
-`emagent-mcp-cont-p' can recognize it.  PLIST may hold `:id' and
-`:cancelled'."
+`emagent-mcp-cont-p' can recognize it.  PLIST may hold `:id',
+`:cancelled', `:cancel-functions', and `:cancel-notify'."
   (cons 'emagent-mcp-cont (cons fn plist)))
 
 (defun emagent-mcp-cont-p (obj)
@@ -201,16 +201,38 @@ FN is a function of one argument, the reply callback.  The object is
   "Return the property list stored on continuation OBJ."
   (nthcdr 2 obj))
 
+(defun emagent-mcp-cont-put (obj key value)
+  "Set KEY to VALUE on continuation OBJ's plist.  Return VALUE."
+  (setcdr (cdr obj)
+          (plist-put (copy-sequence (emagent-mcp-cont-plist obj)) key value))
+  value)
+
 (defun emagent-mcp-cont-cancelled-p (obj)
   "Return non-nil when continuation OBJ has been cancelled."
   (plist-get (emagent-mcp-cont-plist obj) :cancelled))
 
-(defun emagent-mcp-cont-cancel (obj)
-  "Mark continuation OBJ cancelled so later replies are ignored.
+(defun emagent-mcp-cont-add-cancel-function (obj fn)
+  "Append cancel function FN to continuation OBJ.  Return OBJ."
+  (let ((fns (plist-get (emagent-mcp-cont-plist obj) :cancel-functions)))
+    (emagent-mcp-cont-put obj :cancel-functions (append fns (list fn))))
+  obj)
 
-Returns OBJ.  Does not stop an in-flight subprocess."
-  (let ((plist (emagent-mcp-cont-plist obj)))
-    (setcdr (cdr obj) (plist-put (copy-sequence plist) :cancelled t)))
+(defun emagent-mcp-cont-cancel (obj)
+  "Cancel continuation OBJ: kill attached work and ignore later replies.
+
+Idempotent.  Runs `:cancel-functions', then a one-shot `:cancel-notify'
+when present.  Returns OBJ."
+  (unless (emagent-mcp-cont-cancelled-p obj)
+    (let* ((plist (copy-sequence (emagent-mcp-cont-plist obj)))
+           (fns (plist-get plist :cancel-functions))
+           (notify (plist-get plist :cancel-notify)))
+      (setq plist (plist-put plist :cancelled t))
+      (setq plist (plist-put plist :cancel-notify nil))
+      (setcdr (cdr obj) plist)
+      (dolist (fn fns)
+        (ignore-errors (funcall fn)))
+      (when notify
+        (ignore-errors (funcall notify)))))
   obj)
 
 (defvar emagent-mcp-cont-reply-functions nil
@@ -218,6 +240,61 @@ Returns OBJ.  Does not stop an in-flight subprocess."
 
 Each function is called as \(FN CONT RESULT IS-ERROR\) before the
 agent-facing callback runs.  Ignored when the continuation is cancelled.")
+
+(defvar emagent-mcp--current-cont nil
+  "Continuation currently starting async work, or nil.")
+
+(defvar emagent-mcp--current-client-proc nil
+  "MCP HTTP client process for the in-flight tools/call, or nil.")
+
+(defvar emagent-mcp--current-session-token nil
+  "MCP session token for the in-flight tools/call, or nil.")
+
+(defvar emagent-mcp--session-inflight (make-hash-table :test 'equal)
+  "Map session token to a list of live MCP continuations.")
+
+(defun emagent-mcp-cont-register-cancel (fn)
+  "Register FN on `emagent-mcp--current-cont' when one is active."
+  (when emagent-mcp--current-cont
+    (emagent-mcp-cont-add-cancel-function emagent-mcp--current-cont fn)))
+
+(defun emagent-mcp--track-inflight-cont (cont)
+  "Record CONT on the current MCP client proc and session token."
+  (when-let ((proc emagent-mcp--current-client-proc))
+    (process-put proc 'emagent-mcp-inflight-conts
+                 (cons cont (process-get proc 'emagent-mcp-inflight-conts)))
+    (emagent-mcp-cont-add-cancel-function
+     cont
+     (lambda ()
+       (when (processp proc)
+         (process-put
+          proc 'emagent-mcp-inflight-conts
+          (delq cont (process-get proc 'emagent-mcp-inflight-conts)))))))
+  (when-let ((token emagent-mcp--current-session-token))
+    (puthash token
+             (cons cont (gethash token emagent-mcp--session-inflight))
+             emagent-mcp--session-inflight)
+    (emagent-mcp-cont-add-cancel-function
+     cont
+     (lambda ()
+       (let ((list (delq cont (gethash token emagent-mcp--session-inflight))))
+         (if list
+             (puthash token list emagent-mcp--session-inflight)
+           (remhash token emagent-mcp--session-inflight)))))))
+
+(defun emagent-mcp-cancel-session-tools (token)
+  "Cancel every in-flight MCP continuation for session TOKEN."
+  (when token
+    (dolist (cont (copy-sequence
+                   (gethash token emagent-mcp--session-inflight)))
+      (emagent-mcp-cont-cancel cont))
+    (remhash token emagent-mcp--session-inflight)))
+
+(defun emagent-mcp--cancel-client-conts (proc)
+  "Cancel every in-flight MCP continuation attached to client PROC."
+  (dolist (cont (copy-sequence
+                 (process-get proc 'emagent-mcp-inflight-conts)))
+    (emagent-mcp-cont-cancel cont)))
 
 (defmacro emagent-mcp-cont (args &rest body)
   "Build a continuation whose body receives the MCP reply callback.
@@ -1100,7 +1177,12 @@ is returned, CALLBACK is invoked later via its reply function."
               (if (emagent-mcp-cont-p result)
                   (progn
                     (setq cont-cell result)
-                    (funcall (emagent-mcp-cont-function result) reply))
+                    (emagent-mcp-cont-put
+                     result :cancel-notify
+                     (lambda () (funcall callback "Cancelled" t)))
+                    (emagent-mcp--track-inflight-cont result)
+                    (let ((emagent-mcp--current-cont result))
+                      (funcall (emagent-mcp-cont-function result) reply)))
                 (funcall reply result nil)))
           (error (funcall callback (error-message-string err) t))))))))
 
@@ -1209,7 +1291,9 @@ Arguments: ID, PARAMS, TOKEN."
         ((null session)
          (funcall respond "Unknown or expired emagent session" t))
         (t
-         (emagent-mcp--run-tool-async name args session respond)))))))
+         (let ((emagent-mcp--current-client-proc proc)
+               (emagent-mcp--current-session-token token))
+           (emagent-mcp--run-tool-async name args session respond))))))))
 
 (defun emagent-mcp--dispatch (proc token message)
   "Dispatch a parsed JSON-RPC MESSAGE (hash-table) from PROC with TOKEN."
@@ -1348,8 +1432,10 @@ the filter itself never blocks on JSON-RPC handling."
 (defun emagent-mcp--sentinel (proc _event)
   "Clean up PROC connection state when it closes."
   (unless (process-live-p proc)
+    (emagent-mcp--cancel-client-conts proc)
     (emagent-mcp--cancel-drain proc)
-    (process-put proc 'emagent-mcp-data nil)))
+    (process-put proc 'emagent-mcp-data nil)
+    (process-put proc 'emagent-mcp-inflight-conts nil)))
 
 (defun emagent-mcp-ensure-server ()
   "Start the MCP server if needed and return its port."
@@ -1403,6 +1489,7 @@ Arguments: PREFER-EMACS."
 (defun emagent-mcp-deregister-session (token)
   "Deregister session TOKEN and stop the server if it was the last one."
   (when token
+    (emagent-mcp-cancel-session-tools token)
     (remhash token emagent-mcp--sessions))
   (emagent-mcp-maybe-shutdown))
 

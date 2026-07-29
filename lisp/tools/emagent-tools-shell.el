@@ -1055,6 +1055,13 @@ For tests and internal callers only — MCP agent tools use the async path."
         (error "%s" result)
       result)))
 
+(defun emagent-tools--cont-register-cancel (fn)
+  "Register FN on the active MCP continuation when one is starting work."
+  (when (and (boundp 'emagent-mcp--current-cont)
+             emagent-mcp--current-cont
+             (fboundp 'emagent-mcp-cont-add-cancel-function))
+    (emagent-mcp-cont-add-cancel-function emagent-mcp--current-cont fn)))
+
 (defun emagent-tools--run-process-async (callback program &rest args)
   "Run PROGRAM with ARGS; call CALLBACK with (output is-error) from a sentinel."
   (let* ((buf (generate-new-buffer " *emagent-proc*"))
@@ -1075,6 +1082,14 @@ For tests and internal callers only — MCP agent tools use the async path."
     (condition-case start-err
         (progn
           (setq proc (apply #'start-process "emagent-proc" buf program args))
+          (emagent-tools--cont-register-cancel
+           (lambda ()
+             (setq done t)
+             (when timer (cancel-timer timer) (setq timer nil))
+             (when (and proc (process-live-p proc))
+               (delete-process proc))
+             (when (buffer-live-p buf)
+               (kill-buffer buf))))
           (setq timer
                 (run-with-timer
                  timeout-secs nil
@@ -1136,6 +1151,14 @@ For tests and internal callers only — MCP agent tools use the async path."
                                      (funcall finish output is-error)))))))
           (process-send-string proc input)
           (process-send-eof proc)
+          (emagent-tools--cont-register-cancel
+           (lambda ()
+             (setq done t)
+             (when timer (cancel-timer timer) (setq timer nil))
+             (when (and proc (process-live-p proc))
+               (delete-process proc))
+             (when (buffer-live-p buf)
+               (kill-buffer buf))))
           (setq timer
                 (run-with-timer
                  timeout-secs nil
@@ -1169,6 +1192,14 @@ For tests and internal callers only — MCP agent tools use the async path."
     (condition-case start-err
         (progn
           (setq proc (start-process-shell-command "emagent-shell" buf command))
+          (emagent-tools--cont-register-cancel
+           (lambda ()
+             (setq done t)
+             (when timer (cancel-timer timer) (setq timer nil))
+             (when (and proc (process-live-p proc))
+               (delete-process proc))
+             (when (buffer-live-p buf)
+               (kill-buffer buf))))
           (setq timer
                 (run-with-timer
                  timeout-secs nil
@@ -1497,13 +1528,15 @@ Arguments: MAX-BYTES."
             emagent-tools--fetch-url-timeout))
         (done nil)
         (timer nil)
+        (retrieve-buf nil)
         (finish
           (lambda (body is-error)
             (unless done
               (setq done t)
-              (when timer (cancel-timer timer))
+              (when timer (cancel-timer timer) (setq timer nil))
               (funcall callback body is-error)))))
-      (url-retrieve
+      (setq retrieve-buf
+            (url-retrieve
         url
         (lambda (_status)
           (let ((buf (current-buffer)))
@@ -1523,7 +1556,16 @@ Arguments: MAX-BYTES."
                 (error (funcall finish (error-message-string err) t)))
               (when (buffer-live-p buf)
                 (kill-buffer buf)))))
-        nil t)
+        nil t))
+      (emagent-tools--cont-register-cancel
+       (lambda ()
+         (setq done t)
+         (when timer (cancel-timer timer) (setq timer nil))
+         (when (buffer-live-p retrieve-buf)
+           (when-let ((proc (get-buffer-process retrieve-buf)))
+             (when (process-live-p proc)
+               (delete-process proc)))
+           (kill-buffer retrieve-buf))))
       (setq timer
         (run-with-timer
           timeout-secs nil
@@ -1598,6 +1640,12 @@ Arguments: DIRECTORY."
                       (compilation-start command 'compilation-mode
                                          (lambda (_) "*emagent-compile*"))))
           (setq proc (get-buffer-process buf))
+          (emagent-tools--cont-register-cancel
+           (lambda ()
+             (setq done t)
+             (when timer (cancel-timer timer) (setq timer nil))
+             (when (and proc (process-live-p proc))
+               (delete-process proc))))
           (with-current-buffer buf
             (add-hook 'compilation-filter-hook
                       #'ansi-color-compilation-filter nil t))

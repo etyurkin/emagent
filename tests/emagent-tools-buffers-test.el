@@ -4,6 +4,7 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'seq)
 (require 'json)
 (require 'emagent-test-utils)
 (require 'emagent-chat)
@@ -144,7 +145,7 @@
       (emagent-mcp--run-tool-async
        "eval" args session
        (lambda (result is-error) (setq got (list result is-error))))
-      (should (eq got 'unset)))))
+      (should (equal got '("Cancelled" t))))))
 
 (ert-deftest emagent-mcp-test-cont-reply-hook ()
   (let* ((session (list :root "/tmp" :buffer (current-buffer)))
@@ -225,6 +226,141 @@
       (should (equal "string" (alist-get "type" (car rows) nil nil #'equal))))
     (let ((rows (emagent-tool-list-registers nil 1)))
       (should (= 1 (length rows))))))
+
+
+(ert-deftest emagent-mcp-test-cont-cancel-kills-process ()
+  (let* ((session (list :root "/tmp" :buffer (current-buffer)))
+         (args (make-hash-table :test 'equal))
+         (got 'unset)
+         (live-proc nil)
+         (cont nil)
+         (entry (emagent-mcp--tool-entry "eval")))
+    (cl-letf (((symbol-function (nth 4 entry))
+               (lambda (_args)
+                 (setq cont
+                       (emagent-mcp-cont (reply)
+                         (emagent-tools--run-process-async
+                          (lambda (output is-error)
+                            (funcall reply output is-error))
+                          "sleep" "30")))
+                 cont)))
+      (let ((emagent-mcp--current-session-token "tok-cancel-proc"))
+        (emagent-mcp--run-tool-async
+         "eval" args session
+         (lambda (result is-error) (setq got (list result is-error)))))
+      (setq live-proc
+            (car (seq-filter
+                  (lambda (p)
+                    (and (process-live-p p)
+                         (string-prefix-p "emagent-proc" (process-name p))))
+                  (process-list))))
+      (should (process-live-p live-proc))
+      (should (emagent-mcp-cont-p cont))
+      (emagent-mcp-cont-cancel cont)
+      (should (equal got '("Cancelled" t)))
+      (should-not (process-live-p live-proc)))))
+
+(ert-deftest emagent-mcp-test-cont-cancel-fetch-url-buffer ()
+  (let* ((session (list :root "/tmp" :buffer (current-buffer)))
+         (args (make-hash-table :test 'equal))
+         (got 'unset)
+         (retrieve-buf (generate-new-buffer " *emagent-url-test*"))
+         (entry (emagent-mcp--tool-entry "fetch_url")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'url-retrieve)
+                   (lambda (&rest _)
+                     retrieve-buf)))
+          (puthash "url" "https://example.com/" args)
+          (let ((emagent-mcp--current-session-token "tok-cancel-fetch"))
+            (emagent-mcp--run-tool-async
+             "fetch_url" args session
+             (lambda (result is-error) (setq got (list result is-error)))))
+          (let ((conts (gethash "tok-cancel-fetch" emagent-mcp--session-inflight)))
+            (should conts)
+            (emagent-mcp-cont-cancel (car conts)))
+          (should (equal got '("Cancelled" t)))
+          (should (null (buffer-name retrieve-buf))))
+      (when (buffer-name retrieve-buf)
+        (kill-buffer retrieve-buf)))))
+
+(ert-deftest emagent-mcp-test-cancel-session-tools ()
+  (let* ((token "tok-session-cancel")
+         (got nil)
+         (cont (emagent-mcp-cont (reply) (ignore reply))))
+    (emagent-mcp-cont-put
+     cont :cancel-notify
+     (lambda () (setq got 'notified)))
+    (puthash token (list cont) emagent-mcp--session-inflight)
+    (emagent-mcp-cancel-session-tools token)
+    (should (eq got 'notified))
+    (should (emagent-mcp-cont-cancelled-p cont))
+    (should-not (gethash token emagent-mcp--session-inflight))))
+
+(ert-deftest emagent-mcp-test-sentinel-cancels-inflight-conts ()
+  (let* ((proc (generate-new-buffer " *fake-mcp-client*"))
+         (store (make-hash-table :test 'eq))
+         (got nil)
+         (cont (emagent-mcp-cont (reply) (ignore reply))))
+    (unwind-protect
+        (progn
+          (emagent-mcp-cont-put
+           cont :cancel-notify
+           (lambda () (setq got 'cancelled)))
+          (puthash 'emagent-mcp-inflight-conts (list cont) store)
+          (emagent-test--with-mocks
+              (((symbol-function 'process-get)
+                (lambda (p prop) (and (eq p proc) (gethash prop store))))
+               ((symbol-function 'process-put)
+                (lambda (p prop val)
+                  (when (eq p proc) (puthash prop val store))
+                  val))
+               ((symbol-function 'process-live-p) (lambda (_p) nil)))
+            (emagent-mcp--sentinel proc "deleted"))
+          (should (eq got 'cancelled))
+          (should (emagent-mcp-cont-cancelled-p cont)))
+      (when (buffer-live-p proc)
+        (kill-buffer proc)))))
+
+(ert-deftest emagent-mcp-test-finalize-cancels-session-tools ()
+  (require 'emagent-acp)
+  (let* ((token "tok-finalize-cancel")
+         (got nil)
+         (cont (emagent-mcp-cont (reply) (ignore reply)))
+         (chat (generate-new-buffer " *emagent-finalize-cancel*"))
+         (state (emagent-acp--make-state :chat-buffer chat :client nil))
+         (emagent-acp--session nil))
+    (unwind-protect
+        (progn
+          (emagent-mcp-cont-put
+           cont :cancel-notify
+           (lambda () (setq got 'from-finalize)))
+          (puthash token (list cont) emagent-mcp--session-inflight)
+          (with-current-buffer chat
+            (setq-local emagent-mcp--token token))
+          (setf (emagent-acp-state-busy state) t)
+          (setf (emagent-acp-state-session-id state) "s1")
+          (setq emagent-acp--session state)
+          (emagent-test--with-mocks
+              (((symbol-function 'emagent-acp--clear-prompt-watchdog)
+                (lambda (&rest _) nil))
+               ((symbol-function 'emagent-acp--cancel-prompt-render)
+                (lambda (&rest _) nil))
+               ((symbol-function 'emagent-acp--flush-thought-buffer)
+                (lambda (&rest _) nil))
+               ((symbol-function 'emagent-acp--reset-permission-gate)
+                (lambda (&rest _) nil))
+               ((symbol-function 'emagent-acp--render-prompt-response)
+                (lambda (&rest _) nil))
+               ((symbol-function 'emagent-acp--refresh-mode-line)
+                (lambda (&rest _) nil)))
+            (let ((emagent-mcp--token token))
+              (should (emagent-acp--finalize-in-flight-prompt "stopped"))))
+          (should (eq got 'from-finalize))
+          (should (emagent-mcp-cont-cancelled-p cont)))
+      (remhash token emagent-mcp--session-inflight)
+      (setq emagent-acp--session nil)
+      (when (buffer-live-p chat)
+        (kill-buffer chat)))))
 
 
 (provide 'emagent-tools-buffers-test)
