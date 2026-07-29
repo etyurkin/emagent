@@ -832,6 +832,215 @@ over legacy `models'."
               (cons (emagent-model-choice-label-display id name) id)))
           (emagent-acp--get-available-models state models)))
 
+(defconst emagent-acp--model-variant-product-cap 500
+  "Max rows when expanding model × model_config × thought_level.")
+
+(defun emagent-acp--config-options-by-categories (options categories)
+  "Return select OPTIONS whose :category is in CATEGORIES, in order."
+  (let ((wanted (mapcar #'downcase categories))
+        (found nil))
+    (dolist (option options)
+      (let ((cat (downcase (or (map-elt option :category) "")))
+            (type (map-elt option :type)))
+        (when (and (member cat wanted)
+                   (or (null type) (equal type "select"))
+                   (map-elt option :options))
+          (push option found))))
+    (nreverse found)))
+
+(defun emagent-acp--model-option-values-bracketed-p (model-option)
+  "Return non-nil when any MODEL-OPTION value embeds bracket annotations."
+  (seq-some (lambda (value)
+              (let ((id (map-elt value :value)))
+                (and (stringp id) (string-match-p "\\[" id))))
+            (map-elt model-option :options)))
+
+(defun emagent-acp--cartesian-product (lists)
+  "Return the cartesian product of LISTS as a list of lists."
+  (if (null lists)
+      (list nil)
+    (cl-mapcan (lambda (head)
+                 (mapcar (lambda (tail) (cons head tail))
+                         (emagent-acp--cartesian-product (cdr lists))))
+               (car lists))))
+
+(defun emagent-acp--variant-row-label (model-value model-name sibling-cells)
+  "Return a faced picker label for MODEL-VALUE, MODEL-NAME, and SIBLING-CELLS.
+
+SIBLING-CELLS are ((DISPLAY . _) ...) whose DISPLAY strings are shown in
+brackets after the model label for filterability."
+  (let* ((base (emagent-model-choice-label-display model-value model-name))
+         (extra (mapconcat (lambda (cell)
+                             (format "[%s]" (car cell)))
+                           sibling-cells
+                           " ")))
+    (if (string-empty-p extra)
+        base
+      (concat base " "
+              (propertize extra 'face 'emagent-model-choice-detail)))))
+
+(defun emagent-acp--model-only-variant-rows (model-option)
+  "Return ((LABEL . SPEC) ...) rows for MODEL-OPTION values only."
+  (let ((config-id (map-elt model-option :id))
+        (rows nil))
+    (dolist (value (map-elt model-option :options))
+      (let ((id (map-elt value :value))
+            (name (map-elt value :name)))
+        (when (and (stringp id) (not (string-empty-p id)))
+          (push (cons (emagent-model-choice-label-display id name)
+                      (list (cons config-id id)))
+                rows))))
+    (nreverse rows)))
+
+(defun emagent-acp--compose-variant-rows (model-option sibling-options)
+  "Return cartesian ((LABEL . SPEC) ...) for MODEL-OPTION × SIBLING-OPTIONS.
+
+When the product would exceed
+`emagent-acp--model-variant-product-cap', fall back to model-only rows."
+  (let* ((model-id (map-elt model-option :id))
+         (model-cells
+          (mapcar (lambda (value)
+                    (list :config-id model-id
+                          :value (map-elt value :value)
+                          :name (map-elt value :name)
+                          :display nil))
+                  (map-elt model-option :options)))
+         (sibling-lists
+          (mapcar
+           (lambda (option)
+             (mapcar (lambda (value)
+                       (list :config-id (map-elt option :id)
+                             :value (map-elt value :value)
+                             :name (map-elt value :name)
+                             :display (or (map-elt value :name)
+                                          (map-elt value :value))))
+                     (map-elt option :options)))
+           sibling-options))
+         (product-size
+          (cl-reduce #'* (mapcar #'length (cons model-cells sibling-lists))
+                     :initial-value 1)))
+    (if (> product-size emagent-acp--model-variant-product-cap)
+        (progn
+          (message
+           "emagent: model variant product %s exceeds cap %s; listing models only"
+           product-size emagent-acp--model-variant-product-cap)
+          (emagent-acp--model-only-variant-rows model-option))
+      (mapcar
+       (lambda (cells)
+         (let* ((model-cell (car cells))
+                (siblings (cdr cells))
+                (mid (plist-get model-cell :value))
+                (mname (plist-get model-cell :name))
+                (spec (mapcar (lambda (cell)
+                                (cons (plist-get cell :config-id)
+                                      (plist-get cell :value)))
+                              cells))
+                (sib-display
+                 (mapcar (lambda (cell)
+                           (cons (plist-get cell :display) nil))
+                         siblings)))
+           (cons (emagent-acp--variant-row-label mid mname sib-display)
+                 spec)))
+       (emagent-acp--cartesian-product (cons model-cells sibling-lists))))))
+
+(defun emagent-acp--dedupe-variant-rows (rows)
+  "Return ROWS ((LABEL . SPEC) ...) deduplicated by equal SPEC."
+  (let ((seen (make-hash-table :test 'equal))
+        (out nil))
+    (dolist (row rows)
+      (let ((spec (cdr row)))
+        (unless (gethash spec seen)
+          (puthash spec t seen)
+          (push row out))))
+    (nreverse out)))
+
+(defun emagent-acp--sort-variant-rows (rows)
+  "Return ROWS sorted by plain label."
+  (sort (copy-sequence rows)
+        (lambda (a b)
+          (string-lessp (substring-no-properties (car a))
+                        (substring-no-properties (car b))))))
+
+(defun emagent-acp--model-variant-choices-from-options (options)
+  "Build flat ((LABEL . SPEC) ...) from normalized CONFIG OPTIONS.
+
+SPEC is ((CONFIG-ID . VALUE) ...).  When model values already embed
+bracket annotations, list each model value once.  Otherwise expand the
+cartesian product with `model_config' and `thought_level' selects."
+  (let* ((model-option
+          (or (seq-find (lambda (option)
+                          (equal "model" (map-elt option :category)))
+                        options)
+              (seq-find (lambda (option)
+                          (string= "model" (map-elt option :id)))
+                        options)))
+         (siblings
+          (emagent-acp--config-options-by-categories
+           options '("model_config" "thought_level"))))
+    (when model-option
+      (emagent-acp--sort-variant-rows
+       (emagent-acp--dedupe-variant-rows
+        (if (or (emagent-acp--model-option-values-bracketed-p model-option)
+                (null siblings))
+            (emagent-acp--model-only-variant-rows model-option)
+          (emagent-acp--compose-variant-rows model-option siblings)))))))
+
+(defun emagent-acp--model-variant-choices (state &optional models)
+  "Return flat ((LABEL . SPEC) ...) for interactive model pickers.
+
+Prefer STATE's configOptions.  Fall back to MODELS / available model
+entries as single-pair SPECs keyed by the model config id when known."
+  (let ((from-options
+         (emagent-acp--model-variant-choices-from-options
+          (emagent-acp--config-options state))))
+    (if from-options
+        from-options
+      (let* ((model-option (emagent-acp--model-config-option state))
+             (config-id (or (and model-option (map-elt model-option :id))
+                            "model")))
+        (mapcar (lambda (entry)
+                  (let ((id (or (map-elt entry :model-id)
+                                (emagent-acp--model-entry-id entry)))
+                        (name (or (map-elt entry :name)
+                                  (emagent-acp--model-entry-name entry))))
+                    (cons (emagent-model-choice-label-display id name)
+                          (list (cons config-id id)))))
+                (emagent-acp--get-available-models state models))))))
+
+(defun emagent-acp--choice-by-label (selection choices)
+  "Return the SPEC (cdr) for SELECTION in CHOICES ((LABEL . SPEC)...)."
+  (cdr (seq-find (lambda (cell)
+                   (string= selection
+                            (substring-no-properties (car cell))))
+                 choices)))
+
+(defun emagent-acp--spec-model-value (spec state)
+  "Return the model value from apply SPEC, using STATE's model config id."
+  (let* ((model-option (emagent-acp--model-config-option state))
+         (model-id (or (and model-option (map-elt model-option :id)) "model")))
+    (or (cdr (assoc model-id spec #'equal))
+        (cdr (assoc "model" spec #'equal))
+        (cdar spec))))
+
+(defun emagent-acp--order-apply-spec (spec state)
+  "Return SPEC with the model config pair first when present in STATE."
+  (let* ((model-option (emagent-acp--model-config-option state))
+         (model-id (and model-option (map-elt model-option :id)))
+         (model-pair (and model-id (assoc model-id spec #'equal)))
+         (rest (cl-remove model-id spec :key #'car :test #'equal)))
+    (if model-pair (cons model-pair rest) spec)))
+
+(defun emagent-acp--snapshot-config-values (state spec)
+  "Return ((CONFIG-ID . CURRENT-VALUE) ...) for CONFIG-IDs in SPEC from STATE."
+  (mapcar
+   (lambda (pair)
+     (let* ((config-id (car pair))
+            (option (seq-find (lambda (opt)
+                                (equal config-id (map-elt opt :id)))
+                              (emagent-acp--config-options state))))
+       (cons config-id (and option (map-elt option :current-value)))))
+   spec))
+
 (defun emagent-acp--model-available-p (model-id state models)
   
   "Internal helper for MODEL-ID and STATE and MODELS."
@@ -845,22 +1054,42 @@ over legacy `models'."
 (defun emagent-acp--match-model-id (model-id state models)
   "Return canonical MODEL-ID for set-config-option, matching by id or name.
 
+Name and normalized-id fallbacks apply only when exactly one available
+model shares that name or base, so ambiguous bare names do not pick an
+arbitrary variant.
+
 Arguments: STATE, MODELS."
   (when (and model-id (not (string-empty-p model-id)))
-    (let ((model-id (emagent-model-canonical-id model-id)))
-      (or (and (emagent-acp--model-available-p model-id state models) model-id)
-          (cl-loop for entry across (vconcat (emagent-acp--get-available-models state models))
-                   for id = (or (map-elt entry :model-id)
-                                (emagent-acp--model-entry-id entry))
-                   for name = (or (map-elt entry :name)
-                                  (emagent-acp--model-entry-name entry))
-                   when (or (string= id model-id)
-                            (string= name model-id)
-                            (string= (downcase name) (downcase model-id))
-                            (string= (emagent-model-normalize-id id)
-                                     (emagent-model-normalize-id model-id)))
-                   return id)
-          model-id))))
+    (let ((model-id (emagent-model-canonical-id model-id))
+          (available (append (emagent-acp--get-available-models state models)
+                             nil)))
+      (cl-labels
+          ((entry-id (entry)
+             (or (map-elt entry :model-id)
+                 (emagent-acp--model-entry-id entry)))
+           (entry-name (entry)
+             (or (map-elt entry :name)
+                 (emagent-acp--model-entry-name entry)))
+           (unique (pred)
+             (let ((hits (delq nil (mapcar (lambda (entry)
+                                            (when (funcall pred entry)
+                                              (entry-id entry)))
+                                          available))))
+               (when (= (length hits) 1) (car hits)))))
+        (or (and (emagent-acp--model-available-p model-id state models)
+                 model-id)
+            (unique (lambda (entry)
+                      (let ((name (entry-name entry)))
+                        (or (string= name model-id)
+                            (string= (downcase (or name ""))
+                                     (downcase model-id))))))
+            (let ((want (emagent-model-normalize-id model-id)))
+              (unique (lambda (entry)
+                        (let ((id (entry-id entry)))
+                          (and id
+                               (string= want
+                                        (emagent-model-normalize-id id)))))))
+            model-id)))))
 
 (defun emagent-acp--resolve-model-id (state models saved-model-id)
   "Return a model id for session connect without prompting.
@@ -937,6 +1166,71 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
                             (or (map-elt error 'message) (format "%s" error))))
                    (when on-failure (funcall on-failure))))))
 
+(cl-defun emagent-acp--config-option-set-spec (&key state session-id spec
+                                                    on-success on-failure
+                                                    (persist t))
+  "Apply SPEC ((CONFIG-ID . VALUE) ...) via session/set_config_option.
+
+Sets the model config first, then remaining pairs.  Refreshes configOptions
+after each response.  When PERSIST is non-nil, stores the model value as the
+buffer model after all pairs succeed.
+
+Arguments: STATE, SESSION-ID, SPEC, ON-SUCCESS, ON-FAILURE."
+  (let* ((spec (emagent-acp--order-apply-spec spec state))
+         (model-value (emagent-acp--spec-model-value spec state)))
+    (cl-labels
+        ((step (remaining)
+           (if (null remaining)
+               (progn
+                 (when (and persist model-value)
+                   (emagent-acp--persist-model-id state model-value))
+                 (unless persist (emagent-acp--refresh-mode-line state))
+                 (when model-value
+                   (emagent-acp--progress
+                    state
+                    (format "model %s"
+                            (or (emagent-acp--config-option-value-name
+                                 (emagent-acp--model-config-option state)
+                                 model-value)
+                                model-value))))
+                 (when on-success (funcall on-success)))
+             (pcase-let ((`(,config-id . ,value) (car remaining)))
+               (emagent-acp--send-request
+                :state state
+                :request (emagent-acp-make-session-set-config-option-request
+                          :session-id session-id
+                          :config-id config-id
+                          :value value)
+                :on-success
+                (lambda (response)
+                  (if (map-elt response 'configOptions)
+                      (emagent-acp--save-config-options
+                       state (map-elt response 'configOptions))
+                    (emagent-acp--config-option-set-value
+                     state config-id value))
+                  (step (cdr remaining)))
+                :on-failure
+                (lambda (error _raw)
+                  (emagent-acp--notify-user
+                   state
+                   (format "emagent: config %s=%s not applied: %s"
+                           config-id value
+                           (or (map-elt error 'message)
+                               (format "%s" error))))
+                  (when on-failure (funcall on-failure))))))))
+      (if (null spec)
+          (when on-success (funcall on-success))
+        (if (emagent-acp--model-config-option state)
+            (step spec)
+          ;; No configOptions model entry: fall back to session/set_model.
+          (emagent-acp--config-option-set-model-id
+           :state state
+           :session-id session-id
+           :model-id (or model-value (cdar spec))
+           :persist persist
+           :on-success on-success
+           :on-failure on-failure))))))
+
 (defun emagent-acp--save-session-modes (state response)
   "Store available modes and current mode id from session RESPONSE in STATE."
   (when-let ((modes (or (map-elt response 'modes) (map-elt response :modes))))
@@ -962,16 +1256,39 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
    :resumed resumed))
 
 (cl-defun emagent-acp--configure-model (&key state session-id response on-ready resumed)
-  
-  "Internal helper for STATE and SESSION-ID and RESPONSE and ON-READY and RESUMED."
+  "Apply saved/pending model config after session/new or session/load.
+
+Arguments: STATE, SESSION-ID, RESPONSE, ON-READY, RESUMED."
   (emagent-acp--progress state "selecting model…")
   (emagent-acp--save-config-options state (map-elt response 'configOptions))
   (emagent-acp--save-session-modes state response)
   (let* ((models (emagent-acp--models-from-response response))
          (current (emagent-acp--current-model-id state models))
-         (choice (emagent-acp--resolve-model-id state models
-                                                (emagent-acp--saved-model-id state))))
+         (pending (and (boundp 'emagent--pending-config-spec)
+                       emagent--pending-config-spec))
+         (choice (or (and pending
+                          (emagent-acp--spec-model-value pending state))
+                     (emagent-acp--resolve-model-id
+                      state models (emagent-acp--saved-model-id state))))
+         (finish
+          (lambda ()
+            (when (boundp 'emagent--pending-config-spec)
+              (setq emagent--pending-config-spec nil))
+            (emagent-acp--finish-configure-model
+             state session-id on-ready resumed))))
     (cond
+     ((and pending session-id)
+      (emagent-acp--progress
+       state
+       (format "setting model to %s…"
+               (emagent-acp--model-display-name state models choice)))
+      (emagent-acp--config-option-set-spec
+       :state state
+       :session-id session-id
+       :spec pending
+       :persist t
+       :on-success finish
+       :on-failure finish))
      ((and choice session-id (not (string-empty-p choice))
            current (string= choice current))
       (emagent-acp--progress
@@ -979,7 +1296,7 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
        (format "model %s"
                (emagent-acp--model-display-name state models choice)))
       (emagent-acp--persist-model-id state choice)
-      (emagent-acp--finish-configure-model state session-id on-ready resumed))
+      (funcall finish))
      ((and choice session-id (not (string-empty-p choice)))
       (emagent-acp--progress
        state
@@ -989,10 +1306,8 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
        :state state
        :session-id session-id
        :model-id choice
-       :on-success (lambda ()
-                     (emagent-acp--finish-configure-model state session-id on-ready resumed))
-       :on-failure (lambda ()
-                     (emagent-acp--finish-configure-model state session-id on-ready resumed))))
+       :on-success finish
+       :on-failure finish))
      (t
       (when current
         (emagent-acp--progress
@@ -1000,7 +1315,7 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
          (format "model %s"
                  (emagent-acp--model-display-name state models current)))
         (emagent-acp--persist-model-id state current))
-      (emagent-acp--finish-configure-model state session-id on-ready resumed)))))
+      (funcall finish)))))
 
 ;; Backward compatibility (aliases before their referents).
 (define-obsolete-variable-alias 'emagent-acp-emacs-native 'emagent-acp-prefer-emacs "0.1.0")

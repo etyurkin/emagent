@@ -1336,6 +1336,69 @@ the emagent gate can show what was edited instead of a bare arrow line."
                       '((availableModels . [((modelId . "default[]")
                                               (name . "Auto"))])))))))
 
+(ert-deftest emagent-acp-session-test-match-model-id-ambiguous-normalized ()
+  (let* ((state (emagent-test--make-acp-state))
+         (models '((availableModels
+                    . [((modelId . "grok-4.3[context=200k]") (name . "grok-4.3"))
+                       ((modelId . "grok-4.3[context=1m]") (name . "grok-4.3"))]))))
+    (should (string= "grok-4.3"
+                     (emagent-acp--match-model-id "grok-4.3" state models)))
+    (should (string= "grok-4.3[context=1m]"
+                     (emagent-acp--match-model-id
+                      "grok-4.3[context=1m]" state models)))))
+
+(ert-deftest emagent-acp-session-test-variant-choices-bracketed ()
+  (let* ((options
+          '((( :id . "model") (:category . "model") (:type . "select")
+             (:options . (((:value . "grok-4.3[context=200k]") (:name . "grok-4.3"))
+                          ((:value . "grok-4.3[context=1m]") (:name . "grok-4.3"))
+                          ((:value . "composer-2.5[fast=true]")
+                           (:name . "composer-2.5")))))))
+         (rows (emagent-acp--model-variant-choices-from-options options))
+         (labels (mapcar (lambda (row) (substring-no-properties (car row)))
+                         rows)))
+    (should (= 3 (length rows)))
+    (should (seq-every-p (lambda (label) (string-match-p "\\[" label)) labels))
+    (should (seq-find (lambda (label) (string-match-p "grok-4.3" label)) labels))
+    (let* ((label (seq-find (lambda (l) (string-match-p "context=1m" l)) labels))
+           (spec (emagent-acp--choice-by-label label rows)))
+      (should (equal "grok-4.3[context=1m]"
+                     (cdr (assoc "model" spec #'equal)))))))
+
+(ert-deftest emagent-acp-session-test-variant-choices-compose ()
+  (let* ((options
+          '((( :id . "model") (:category . "model") (:type . "select")
+             (:options . (((:value . "grok") (:name . "Grok"))
+                          ((:value . "sonnet") (:name . "Sonnet")))))
+            ((:id . "effort") (:category . "model_config") (:type . "select")
+             (:options . (((:value . "fast") (:name . "Fast"))
+                          ((:value . "high") (:name . "High")))))
+            ((:id . "thought") (:category . "thought_level") (:type . "select")
+             (:options . (((:value . "off") (:name . "Off"))
+                          ((:value . "on") (:name . "On")))))))
+         (rows (emagent-acp--model-variant-choices-from-options options)))
+    (should (= 8 (length rows)))
+    (let* ((label (substring-no-properties (caar rows)))
+           (spec (cdar rows)))
+      (should (string-match-p "\\[" label))
+      (should (= 3 (length spec)))
+      (should (assoc "model" spec #'equal))
+      (should (assoc "effort" spec #'equal))
+      (should (assoc "thought" spec #'equal)))))
+
+(ert-deftest emagent-acp-session-test-variant-product-cap-fallback ()
+  (let* ((emagent-acp--model-variant-product-cap 3)
+         (options
+          '((( :id . "model") (:category . "model") (:type . "select")
+             (:options . (((:value . "a") (:name . "A"))
+                          ((:value . "b") (:name . "B")))))
+            ((:id . "effort") (:category . "model_config") (:type . "select")
+             (:options . (((:value . "1") (:name . "One"))
+                          ((:value . "2") (:name . "Two")))))))
+         (rows (emagent-acp--model-variant-choices-from-options options)))
+    (should (= 2 (length rows)))
+    (should (seq-every-p (lambda (row) (= 1 (length (cdr row)))) rows))))
+
 ;;;; Filesystem handlers
 
 (ert-deftest emagent-acp-session-test-on-fs-read ()

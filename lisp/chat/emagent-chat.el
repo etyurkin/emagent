@@ -3858,21 +3858,20 @@ relative path, size in lines, and a short content preview."
 (defun emagent-chat--slash-model-apply-1 (bounds)
   "Prompt for a model and replace BOUNDS with the `/model' marker link."
   (let* ((state emagent-acp--session)
-         (choices (and state (emagent-acp--model-choices state nil))))
+         (choices (and state (emagent-acp--model-variant-choices state nil))))
     (cond
      ((not choices)
       (message "emagent: no models available yet — M-x emagent-connect"))
      (t
-      (let* ((selection (completing-read "Model for this turn: "
-                                         (mapcar #'car choices) nil t))
-             (model-id (cdr (assoc-string selection choices))))
+      (let* ((selection (emagent-acp--read-labeled-choice
+                         "Model for this turn: "
+                         (mapcar #'car choices)))
+             (spec (emagent-acp--choice-by-label selection choices))
+             (model-id (and spec (emagent-acp--spec-model-value spec state))))
         (when model-id
+          (setq emagent-chat--turn-apply-spec spec)
           (delete-region (car bounds) (cdr bounds))
           (goto-char (car bounds))
-          ;; An org link: agent/short-model as text, full id as target
-          ;; (shown on hover).  Org fontifies it, it survives saving the
-          ;; session file, deleting it cancels the override, and send strips
-          ;; it from the outgoing prompt.
           (insert (emagent-chat--model-link model-id))))))))
 
 (defun emagent-chat--slash-model-apply ()
@@ -4829,6 +4828,14 @@ across a failure so `retry' reuses the model.")
   "Session model to restore to when a per-turn override ends, or nil.
 Captured (once) from the live session model just before the first override
 switch, so restoring returns to whatever the session was really on.")
+
+(defvar-local emagent-chat--turn-apply-spec nil
+  "Apply-spec ((CONFIG-ID . VALUE) ...) for the in-flight `/model' turn.
+
+Set when `/model' picks a composed variant; consumed by `emagent-acp-send'.")
+
+(defvar-local emagent-chat--turn-config-base nil
+  "Snapshot of config values to restore after a per-turn `/model' override.")
 
 (defvar-local emagent-chat-slug nil
   "Filesystem slug for the current emagent buffer.")

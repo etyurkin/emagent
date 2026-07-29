@@ -198,8 +198,15 @@ When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
               " - "
               label))))
 
+(defvar emagent--pending-config-spec nil
+  "Apply-spec ((CONFIG-ID . VALUE) ...) from startup model picker, or nil.
+
+Consumed once by `emagent-acp--configure-model' after session/new.")
+
 (defun emagent--probe-provider-models (provider cwd)
-  "Return model entries advertised by PROVIDER at CWD, or nil on failure."
+  "Return session/new RESPONSE alist from PROVIDER at CWD, or nil.
+
+Callers extract model entries or variant choices from the response."
   (emagent-log "probing %s models…" (symbol-name provider))
   (let ((buffer (get-buffer-create " *emagent-probe*"))
         result)
@@ -218,13 +225,12 @@ When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
                                                   (title . "Emagent")
                                                   (version . "1.0.2")))
                          :sync t)
-                        (emagent-acp--model-entries-from-response
-                         (emagent-acp-send-request
-                          :client client
-                          :request (emagent-acp-make-session-new-request
-                                    :cwd default-directory
-                                    :mcp-servers [])
-                          :sync t)))
+                        (emagent-acp-send-request
+                         :client client
+                         :request (emagent-acp-make-session-new-request
+                                   :cwd default-directory
+                                   :mcp-servers [])
+                         :sync t))
                     (emagent-acp-shutdown :client client)))
               (error
                (let ((msg (error-message-string err)))
@@ -238,17 +244,40 @@ When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
     result))
 
 (defun emagent--agent-model-choices (cwd &optional providers)
-  "Return ((LABEL . (PROVIDER . MODEL-ID)) ...) for PROVIDERS at CWD."
+  "Return ((LABEL . (PROVIDER MODEL-ID . SPEC)) ...) for PROVIDERS at CWD.
+
+SPEC is the apply-spec alist for the chosen variant row."
   (let ((providers (or providers (emagent--available-providers)))
         (omit-prefix (= (length providers) 1))
         choices)
     (dolist (provider providers)
-      (dolist (entry (or (emagent--probe-provider-models provider cwd) '()))
-        (push (cons (emagent--agent-model-label provider entry omit-prefix)
-                    (cons provider
-                          (or (map-elt entry :model-id)
-                              (emagent-acp--model-entry-id entry))))
-              choices)))
+      (when-let ((response (emagent--probe-provider-models provider cwd)))
+        (let* ((options
+                (emagent-acp--normalize-config-options
+                 (map-elt response 'configOptions)))
+               (variant-rows
+                (or (emagent-acp--model-variant-choices-from-options options)
+                    (mapcar
+                     (lambda (entry)
+                       (let ((id (map-elt entry :model-id))
+                             (name (map-elt entry :name)))
+                         (cons (emagent-model-choice-label-display id name)
+                               (list (cons "model" id)))))
+                     (emagent-acp--model-entries-from-response response)))))
+          (dolist (row variant-rows)
+            (let* ((label (car row))
+                   (spec (cdr row))
+                   (model-id (or (cdr (assoc "model" spec #'equal))
+                                 (cdar spec)))
+                   (faced
+                    (if omit-prefix
+                        label
+                      (concat
+                       (propertize (symbol-name provider)
+                                   'face 'emagent-model-choice-agent)
+                       " - "
+                       label))))
+              (push (cons faced (list provider model-id spec)) choices))))))
     (sort choices (lambda (a b)
                     (string-lessp (substring-no-properties (car a))
                                   (substring-no-properties (car b)))))))
@@ -257,7 +286,9 @@ When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
   "Return (PROVIDER . MODEL-ID) for a new session at CWD.
 
 When FIXED-PROVIDER is non-nil, only that agent is probed.  Falls back to
-`emagent--read-provider' when probing is disabled or returns no models."
+`emagent--read-provider' when probing is disabled or returns no models.
+Sets `emagent--pending-config-spec' when the chosen row has an apply-spec."
+  (setq emagent--pending-config-spec nil)
   (if (not emagent-probe-models-at-start)
       (cons (or fixed-provider (emagent--read-provider)) nil)
     (let* ((providers (if fixed-provider (list fixed-provider)
@@ -268,14 +299,26 @@ When FIXED-PROVIDER is non-nil, only that agent is probed.  Falls back to
         (emagent-log "available agents/models:")
         (dolist (choice choices)
           (emagent-log "  %s" (car choice)))
-        (if (= (length choices) 1)
-            (cdr (car choices))
-          (let* ((labels (mapcar #'car choices))
-                 (selection (emagent-acp--read-labeled-choice
-                             "Emagent agent - model: "
-                             labels)))
-            (or (cdr (assoc-string selection choices))
-                (user-error "Unknown agent/model: %s" selection))))))))
+        (cl-labels
+            ((accept (cell)
+               (pcase-let ((`(,provider ,model-id ,spec) (cdr cell)))
+                 (setq emagent--pending-config-spec
+                       (and spec (> (length spec) 0) spec))
+                 (cons provider model-id))))
+          (if (= (length choices) 1)
+              (accept (car choices))
+            (let* ((labels (mapcar #'car choices))
+                   (selection (emagent-acp--read-labeled-choice
+                               "Emagent agent - model: "
+                               labels))
+                   (cell (seq-find
+                          (lambda (c)
+                            (string= selection
+                                     (substring-no-properties (car c))))
+                          choices)))
+              (unless cell
+                (user-error "Unknown agent/model: %s" selection))
+              (accept cell))))))))
 
 (defun emagent--project-directory (prompt)
   "Return a project directory for a new session.

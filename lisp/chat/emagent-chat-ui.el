@@ -2349,12 +2349,12 @@ to the agent."
 
 (defun emagent-chat--model-link (model-id)
   "Return the `/model' marker link for MODEL-ID.
-The visible text is the short model name; the link target is
-`agent/full-model-id', revealed on hover.  The `emagent://' scheme
-\(never shown) tags this as the model marker so unrelated links a user
-pastes are not mistaken for it."
+The visible text keeps bracket annotations so variants stay distinct; the
+link target is `agent/full-model-id', revealed on hover.  The `emagent://'
+scheme \(never shown) tags this as the model marker so unrelated links a
+user pastes are not mistaken for it."
   (let* ((agent (emagent-session-agent))
-         (short (or (emagent-model-normalize-id model-id) model-id))
+         (short (or (emagent-model-choice-label model-id) model-id))
          (path (if agent (format "%s/%s" agent model-id) model-id)))
     (format "[[emagent://%s][%s]]" path short)))
 

@@ -319,6 +319,16 @@ signal), so finalizing a response containing one does not crash."
   (should (string= "grok-4.3[context=200k]"
                    (emagent-model-canonical-id "grok-4.3[context=200k]"))))
 
+(ert-deftest emagent-chat-test-model-link-keeps-brackets ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (emagent-session-set-agent 'cursor)
+       (let ((link (emagent-chat--model-link "grok-4.3[context=200k]")))
+         (should (string-match-p "context=200k" link))
+         (should-not (string-match-p "\\[\\[emagent://cursor/grok-4.3\\]\\]"
+                                     link)))))))
+
 (ert-deftest emagent-chat-test-model-choice-label ()
   (should (string= "grok-4.3[context=200k]"
                    (emagent-model-choice-label
