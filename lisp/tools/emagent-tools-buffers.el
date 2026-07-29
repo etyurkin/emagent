@@ -108,7 +108,10 @@ When FRAME-FILTER-REGEX is nil, return non-nil (no frame constraint)."
                                                    name-filter-regex
                                                    path-filter-glob
                                                    mode-filter-regex)
-  "Return non-nil if BUFFER satisfies the list-buffers filters."
+  "Return non-nil if BUFFER matches TYPE-FILTER and the other filters.
+
+WINDOW-FILTER, FRAME-FILTER-REGEX, NAME-FILTER-REGEX, PATH-FILTER-GLOB,
+and MODE-FILTER-REGEX are optional list_buffers constraints."
   (let* ((type (symbol-name (emagent-tools--buffer-type buffer)))
          (name (buffer-name buffer))
          (path (buffer-local-value 'buffer-file-name buffer))
@@ -116,11 +119,11 @@ When FRAME-FILTER-REGEX is nil, return non-nil (no frame constraint)."
          (visible (get-buffer-window buffer t)))
     (when (and type-filter
                (not (member type-filter '("file" "non-file" "internal"))))
-      (error "list_buffers: invalid type_filter %S (use file, non-file, or internal)"
+      (error "List_buffers: invalid type_filter %S (use file, non-file, or internal)"
              type-filter))
     (when (and window-filter
                (not (member window-filter '("visible" "hidden"))))
-      (error "list_buffers: invalid window_filter %S (use visible or hidden)"
+      (error "List_buffers: invalid window_filter %S (use visible or hidden)"
              window-filter))
     (and (or (null type-filter) (string= type-filter type))
          (or (null window-filter)
@@ -166,7 +169,7 @@ SORT-BY is one of \"mru\", \"name\", \"mode\", or \"file_mtime\".  Null
              (less (string-lessp sa sb)))
         (if descending (not less) less)))
      (t
-      (error "list_buffers: invalid sort_by %S (use mru, name, mode, or file_mtime)"
+      (error "List_buffers: invalid sort_by %S (use mru, name, mode, or file_mtime)"
              sort-by)))))
 
 (defun emagent-tool-list-buffers (&optional type-filter window-filter
@@ -177,9 +180,11 @@ SORT-BY is one of \"mru\", \"name\", \"mode\", or \"file_mtime\".  Null
                                             sort-by sort-descending limit)
   "List Emacs buffers as wide alist records.
 
-Filters combine as AND.  Omit any filter to leave that dimension
-unconstrained.  Matching buffers are sorted by SORT-BY (default mru),
-then truncated to LIMIT.
+TYPE-FILTER, WINDOW-FILTER, FRAME-FILTER-REGEX, NAME-FILTER-REGEX,
+PATH-FILTER-GLOB, and MODE-FILTER-REGEX combine as AND.  Omit any filter
+to leave that dimension unconstrained.  Matching buffers are sorted by
+SORT-BY (default mru), optionally SORT-DESCENDING, then truncated to
+LIMIT.
 
 Each element is an alist of string keys (see MCP tool description)."
   (let* ((selected-buffer (window-buffer (selected-window)))
@@ -216,8 +221,8 @@ Each element is an alist of string keys (see MCP tool description)."
 
 NAME is a buffer name string, MRU a 0-based `buffer-list' index, and
 SELECTED / OTHER / CURRENT are flags (true to use that buffer).  With no
-selector, use the selected-window buffer.  Signal an error when more than
-one selector is set or when the chosen selector matches no buffer."
+selector, use the `selected-window' buffer.  Signal an error when more
+than one selector is set or when the chosen selector matches no buffer."
   (let* ((selected-buffer (window-buffer (selected-window)))
          (current-buf (current-buffer))
          (other-buf (other-buffer selected-buffer t))
@@ -231,30 +236,30 @@ one selector is set or when the chosen selector matches no buffer."
                           (list 'current))))
          (count (length flags)))
     (when (> count 1)
-      (error "buffer_info: multiple selectors %S; use exactly one of name, mru, selected, other, current"
+      (error "Buffer_info: multiple selectors %S; use exactly one of name, mru, selected, other, current"
              flags))
     (cond
      ((zerop count) selected-buffer)
      (name
       (or (get-buffer name)
-          (error "buffer_info: no buffer named %S" name)))
+          (error "Buffer_info: no buffer named %S" name)))
      ((integerp mru)
       (let ((buffers (buffer-list)))
         (if (and (>= mru 0) (< mru (length buffers)))
             (nth mru buffers)
-          (error "buffer_info: mru %S out of range (0..%d)"
+          (error "Buffer_info: mru %S out of range (0..%d)"
                  mru (1- (length buffers))))))
      ((emagent-tools--selector-flag-p selected)
       (or selected-buffer
-          (error "buffer_info: no selected buffer")))
+          (error "Buffer_info: no selected buffer")))
      ((emagent-tools--selector-flag-p other)
       (or other-buf
-          (error "buffer_info: no other buffer")))
+          (error "Buffer_info: no other buffer")))
      ((emagent-tools--selector-flag-p current)
       (or current-buf
-          (error "buffer_info: no current buffer")))
+          (error "Buffer_info: no current buffer")))
      (t
-      (error "buffer_info: internal selector error")))))
+      (error "Buffer_info: internal selector error")))))
 
 (defun emagent-tools--buffer-pos-fields (prefix position)
   "Return alist fields for POSITION using keys prefixed by PREFIX.
@@ -294,12 +299,12 @@ PREFIX is \"point\" or \"mark\".  When POSITION is nil, value fields are nil."
          ("window_end" . ,(and win (window-end win t))))))))
 
 (defun emagent-tools--buffer-info-record (buffer)
-  "Return full buffer-info alist for BUFFER (list-buffers row plus extras)."
+  "Return full buffer_info alist for BUFFER (list_buffers row plus extras)."
   (let* ((selected-buffer (window-buffer (selected-window)))
          (current-buf (current-buffer))
          (other-buf (other-buffer selected-buffer t))
          (mru (or (emagent-tools--buffer-mru-index buffer)
-                  (error "buffer_info: buffer %S not in buffer-list"
+                  (error "Buffer_info: buffer %S not in buffer-list"
                          (buffer-name buffer))))
          (base (emagent-tools--buffer-record buffer mru selected-buffer other-buf
                                              current-buf)))

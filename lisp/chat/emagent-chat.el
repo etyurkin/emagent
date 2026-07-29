@@ -181,7 +181,7 @@ instead; emagent then writes whatever port it gets into the agent config."
   "Shared JSON-schema property for a per-call subprocess timeout.")
 
 (defun emagent-mcp--alist-p (value)
-  "Return non-nil when VALUE looks like a string-key alist for JSON objects."
+  "Return non-nil when VALUE is a string-key alist for JSON objects."
   (and (listp value)
        (not (null value))
        (seq-every-p (lambda (cell)
@@ -703,10 +703,10 @@ Each entry: (NAME DESCRIPTION PROPERTIES REQUIRED HANDLER . PLIST).
 PLIST may have :available, a predicate returning non-nil to show the tool.")
 
 (defun emagent-mcp--register-tool (name description properties required handler &rest plist)
-  "Register MCP tool NAME, replacing any prior entry with the same name.
+  "Register MCP tool NAME with DESCRIPTION, PROPERTIES, REQUIRED, HANDLER.
 
-Builds the same entry shape as `emagent-mcp--tool'.  NAME matching is
-case-insensitive.  Returns the new entry."
+PLIST may include `:available' and `:async'.  Replaces any prior entry with
+the same NAME (case-insensitive).  Returns the new entry."
   (let ((entry (apply #'emagent-mcp--tool name description properties
                       required handler plist))
         (existing (assoc-string name emagent-mcp--tools t)))
@@ -723,15 +723,15 @@ and the handler forms."
   (let ((plist nil))
     (while (and body (keywordp (car body)))
       (unless (cdr body)
-        (error "emagent-mcp-deftool: keyword %s needs a value" (car body)))
+        (error "Emagent-mcp-deftool: keyword %s needs a value" (car body)))
       (setq plist (plist-put plist (car body) (cadr body)))
       (setq body (cddr body)))
     (unless (and body (stringp (car body)))
-      (error "emagent-mcp-deftool: missing docstring"))
+      (error "Emagent-mcp-deftool: missing docstring"))
     (let ((docstring (car body))
           (rest (cdr body)))
       (unless (and rest (listp (car rest)))
-        (error "emagent-mcp-deftool: missing handler arglist"))
+        (error "Emagent-mcp-deftool: missing handler arglist"))
       (list plist docstring (car rest) (cdr rest)))))
 
 (defmacro emagent-mcp-deftool (name &rest body)
@@ -739,7 +739,7 @@ and the handler forms."
 
 NAME is the wire-facing tool string.  BODY is keyword options, a
 docstring (also the MCP description), a one-arg lambda list (usually
-(args)), then handler forms.
+\=(args)), then handler forms.
 
 Keywords:
   :properties ALIST  -- JSON-schema properties (required)
@@ -758,7 +758,7 @@ Keywords:
          (async (plist-get opts :async))
          (handler (gensym "emagent-mcp-tool-")))
     (unless properties
-      (error "emagent-mcp-deftool: :properties is required"))
+      (error "Emagent-mcp-deftool: :properties is required"))
     `(progn
        (defun ,handler ,arglist
          ,docstring
