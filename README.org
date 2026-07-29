@@ -209,23 +209,31 @@ re-read trust; after updating trust run
 =emagent-trust-claude-reconnect= (or clear the session id and reconnect) so
 Claude does =session/new=.
 
-* MCP tools (op-dispatchers)
+* MCP tools
 
-Emagent advertises a small set of MCP tools.  Most take an =op= argument; full
-op docs live behind =elisp= =op=guide= / =describe= when needed
+Emagent advertises a small set of MCP tools.  Families like =fs=, =git=,
+=shell=, =elisp=, and =structural= take an =op= argument; session/UI tools are
+typed top-level names that return wide JSON records (filters + =limit=).
+Full op docs live behind =elisp= =op=guide= / =describe= when needed
 (=emagent-mcp-compact-schemas= keeps =tools/list= short).
 
 | Tool | Ops / role |
 |------+------------|
 | =fs= | =read= =write= =undo= =delete= =delete_directory= =list= =find= (writes need =expected_tick=; Lisp → =structural=) |
-| =search= | =grep= |
+| =search= | Regexp search over the session tree (=rg= when available) |
 | =git= | =status= =diff= =log= |
 | =shell= | =run= (shell) or =compile= (compilation-mode; prefer for builds/tests) |
 | =eval= | Evaluate a form in the live Emacs (FS/process blocked) |
-| =emacs= | =buffers= =imenu= =project_directory= =where_is= |
 | =elisp= | =check= =guide= =apropos= =apropos_doc= =describe= =find_function= |
 | =structural= | Lisp sexp edits via [[https://github.com/etyurkin/lisp-sitter][lisp-sitter]] (=tree= =get= =replace= …; mutate needs =expected_tick=) |
 | =fetch_url= | HTTP(S) fetch |
+| =project_directory= / =where_is= | Session root path / key bindings for a command |
+| =list_buffers= / =buffer_info= | Filterable buffer records / one-buffer detail |
+| =list_windows= / =list_frames= | Live window and frame layout |
+| =list_marks= / =list_registers= / =list_bookmarks= | Marks, registers, bookmarks |
+| =list_diagnostics= | Flymake diagnostics |
+| =list_processes= | Emacs subprocesses and network processes |
+| =imenu_index= | Buffer outline (any major mode with imenu) |
 
 Builds (=mvn=, =gradle=, =cargo=, =make=, =npm test=, …) should use
 =shell= =op=compile= for navigable errors.
