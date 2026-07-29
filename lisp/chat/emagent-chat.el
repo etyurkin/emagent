@@ -1005,6 +1005,33 @@ Each element has name, type, preview, and optional buffer_name/position."
   (apply #'vector
          (emagent-tool-list-registers type-filter limit)))
 
+(emagent-mcp-deftool "list_diagnostics"
+  ((buffer string "Buffer name; omit to scan file buffers with flymake-mode." :optional)
+   (buffer-name-regex string "Regexp matched against buffer-name." :optional)
+   (path-filter-glob string "Glob matched against buffer-file-name." :optional)
+   (severity string "Min severity: note, warning, or error." :optional)
+   (limit integer "Max rows after filters." :optional))
+  "List Flymake diagnostics as wide JSON records.
+
+Each element has buffer_name, path, line, column, end_line, end_column,
+severity, type, message, and backend.  Empty when Flymake is idle."
+  (apply #'vector
+         (emagent-tool-list-diagnostics
+          buffer buffer-name-regex path-filter-glob severity limit)))
+
+(emagent-mcp-deftool "list_bookmarks"
+  ((name-filter-regex string "Regexp matched against bookmark name." :optional)
+   (path-filter-glob string "Glob matched against bookmark filename." :optional)
+   (type-filter string "Keep file, buffer, or other bookmarks only." :optional)
+   (limit integer "Max rows after filters." :optional))
+  "List Emacs bookmarks as wide JSON records.
+
+Each element has name, type, path, position, line, front_context, and
+rear_context."
+  (apply #'vector
+         (emagent-tool-list-bookmarks
+          name-filter-regex path-filter-glob type-filter limit)))
+
 (emagent-mcp-deftool "imenu_index"
   ((file string "File for imenu; omit for current buffer." :optional))
   "Return imenu outline as wide JSON records (name, path, line, position).

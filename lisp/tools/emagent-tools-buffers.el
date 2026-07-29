@@ -29,12 +29,28 @@
 ;;; Commentary:
 ;;
 ;; Filterable wide alist records for Emacs session UI state: buffers,
-;; windows, frames, marks, and registers.
+;; windows, frames, marks, registers, diagnostics, and bookmarks.
 ;;
 ;;; Code:
 
 (require 'cl-lib)
 (require 'seq)
+
+(declare-function flymake--lookup-type-property "flymake" (type prop &optional default))
+(declare-function flymake--severity "flymake" (type))
+(declare-function flymake-diagnostic-beg "flymake" (diag))
+(declare-function flymake-diagnostic-end "flymake" (diag))
+(declare-function flymake-diagnostic-type "flymake" (diag))
+(declare-function flymake-diagnostic-text "flymake" (diag))
+(declare-function flymake-diagnostic-backend "flymake" (diag))
+(declare-function flymake-diagnostics "flymake" (&optional beg end))
+(declare-function bookmark-get-filename "bookmark" (bookmark-name-or-record))
+(declare-function bookmark-get-position "bookmark" (bookmark-name-or-record))
+(declare-function bookmark-get-front-context-string "bookmark" (bookmark-name-or-record))
+(declare-function bookmark-get-rear-context-string "bookmark" (bookmark-name-or-record))
+(declare-function bookmark-name-from-full-record "bookmark" (bookmark-record))
+(declare-function bookmark-prop-get "bookmark" (bookmark-record prop))
+
 (require 'register)
 
 (defun emagent-tools--buffer-type (buffer)
@@ -543,6 +559,188 @@ window, frame, or other).  Matching rows are truncated to LIMIT when set."
              (type (alist-get "type" row nil nil #'equal)))
         (when (or (null type-filter)
                   (equal type-filter type))
+          (push row rows))))
+    (setq rows (nreverse rows))
+    (if limit
+        (seq-take rows limit)
+      rows)))
+
+
+
+(defun emagent-tools--flymake-severity-string (type)
+  "Return a coarse severity string for Flymake diagnostic TYPE."
+  (require 'flymake)
+  (let* ((name (and (fboundp 'flymake--lookup-type-property)
+                    (flymake--lookup-type-property type 'flymake-type-name)))
+         (sev (and (fboundp 'flymake--severity)
+                   (flymake--severity type))))
+    (cond
+     ((and (stringp name) (not (string-empty-p name))) name)
+     ((and (numberp sev) (>= sev (warning-numeric-level :error))) "error")
+     ((and (numberp sev) (>= sev (warning-numeric-level :warning)))
+      "warning")
+     (t "note"))))
+
+(defun emagent-tools--severity-rank (severity)
+  "Return a sort/filter rank for SEVERITY string (higher is worse)."
+  (pcase severity
+    ("error" 3)
+    ("warning" 2)
+    ("note" 1)
+    (_ 0)))
+
+(defun emagent-tools--diagnostic-record (buffer diag)
+  "Return a wide alist for Flymake DIAG in BUFFER."
+  (require 'flymake)
+  (with-current-buffer buffer
+    (let* ((beg (flymake-diagnostic-beg diag))
+           (end (flymake-diagnostic-end diag))
+           (type (flymake-diagnostic-type diag))
+           (backend (and (fboundp 'flymake-diagnostic-backend)
+                         (flymake-diagnostic-backend diag)))
+           (path buffer-file-name)
+           (beg-ok (and (integer-or-marker-p beg)
+                        (>= beg (point-min))
+                        (<= beg (point-max))))
+           (end-ok (and (integer-or-marker-p end)
+                        (>= end (point-min))
+                        (<= end (point-max)))))
+      (save-excursion
+        `(("buffer_name" . ,(buffer-name))
+          ("path" . ,path)
+          ("line" . ,(and beg-ok (line-number-at-pos beg t)))
+          ("column" . ,(and beg-ok
+                            (progn (goto-char beg) (current-column))))
+          ("end_line" . ,(and end-ok (line-number-at-pos end t)))
+          ("end_column" . ,(and end-ok
+                                (progn (goto-char end) (current-column))))
+          ("severity" . ,(emagent-tools--flymake-severity-string type))
+          ("type" . ,(and type (format "%s" type)))
+          ("message" . ,(flymake-diagnostic-text diag))
+          ("backend" . ,(and backend (format "%s" backend))))))))
+
+(defun emagent-tools--list-diagnostics-match-p (row buffer-name-regex
+                                                    path-filter-glob
+                                                    severity-filter)
+  "Return non-nil when diagnostic ROW matches list_diagnostics filters.
+
+BUFFER-NAME-REGEX, PATH-FILTER-GLOB, and SEVERITY-FILTER are optional
+constraints on buffer name, path, and minimum severity."
+  (let ((name (alist-get "buffer_name" row nil nil #'equal))
+        (path (alist-get "path" row nil nil #'equal))
+        (severity (alist-get "severity" row nil nil #'equal)))
+    (and (or (null buffer-name-regex)
+             (and name (string-match-p buffer-name-regex name)))
+         (or (null path-filter-glob)
+             (and path (string-match-p (wildcard-to-regexp path-filter-glob)
+                                       path)))
+         (or (null severity-filter)
+             (>= (emagent-tools--severity-rank severity)
+                 (emagent-tools--severity-rank severity-filter))))))
+
+(defun emagent-tool-list-diagnostics (&optional buffer buffer-name-regex
+                                                 path-filter-glob
+                                                 severity limit)
+  "List Flymake diagnostics as wide alist records.
+
+BUFFER is an optional buffer name; when nil, scan file-visiting buffers
+with `flymake-mode'.  BUFFER-NAME-REGEX, PATH-FILTER-GLOB, and SEVERITY
+\(min level: note < warning < error\) further filter.  Truncate to LIMIT."
+  (require 'flymake nil t)
+  (unless (fboundp 'flymake-diagnostics)
+    (error "List_diagnostics: flymake is not available"))
+  (when (and severity
+             (not (member severity '("error" "warning" "note"))))
+    (error "List_diagnostics: invalid severity %S (use error, warning, or note)"
+           severity))
+  (let* ((buffers
+          (if buffer
+              (list (or (get-buffer buffer)
+                        (error "List_diagnostics: no buffer named %S" buffer)))
+            (seq-filter
+             (lambda (buf)
+               (and (buffer-file-name buf)
+                    (buffer-local-value 'flymake-mode buf)))
+             (buffer-list))))
+         (rows nil))
+    (dolist (buf buffers)
+      (dolist (diag (with-current-buffer buf (flymake-diagnostics)))
+        (let ((row (emagent-tools--diagnostic-record buf diag)))
+          (when (emagent-tools--list-diagnostics-match-p
+                 row buffer-name-regex path-filter-glob severity)
+            (push row rows)))))
+    (setq rows (nreverse rows))
+    (if limit
+        (seq-take rows limit)
+      rows)))
+
+(defun emagent-tools--bookmark-type (record)
+  "Return a coarse type string for bookmark RECORD."
+  (cond
+   ((bookmark-get-filename record) "file")
+   ((bookmark-prop-get record 'buffer-name) "buffer")
+   ((bookmark-prop-get record 'handler) "other")
+   (t "other")))
+
+(defun emagent-tools--bookmark-record (name record)
+  "Return a wide alist for bookmark NAME with RECORD."
+  (require 'bookmark)
+  (let* ((path (bookmark-get-filename record))
+         (pos (bookmark-get-position record))
+         (front (bookmark-get-front-context-string record))
+         (rear (bookmark-get-rear-context-string record))
+         (type (emagent-tools--bookmark-type record))
+         (visiting (and path (find-buffer-visiting path)))
+         (line (and visiting pos
+                    (with-current-buffer visiting
+                      (line-number-at-pos pos t)))))
+    `(("name" . ,name)
+      ("type" . ,type)
+      ("path" . ,path)
+      ("position" . ,pos)
+      ("line" . ,line)
+      ("front_context" . ,(and front
+                               (truncate-string-to-width front 80 nil nil t)))
+      ("rear_context" . ,(and rear
+                              (truncate-string-to-width rear 80 nil nil t))))))
+
+(defun emagent-tools--list-bookmarks-match-p (row name-filter-regex
+                                                  path-filter-glob
+                                                  type-filter)
+  "Return non-nil when bookmark ROW matches list_bookmarks filters.
+
+NAME-FILTER-REGEX, PATH-FILTER-GLOB, and TYPE-FILTER are optional
+constraints on bookmark name, path, and type."
+  (let ((name (alist-get "name" row nil nil #'equal))
+        (path (alist-get "path" row nil nil #'equal))
+        (type (alist-get "type" row nil nil #'equal)))
+    (and (or (null name-filter-regex)
+             (and name (string-match-p name-filter-regex name)))
+         (or (null path-filter-glob)
+             (and path (string-match-p (wildcard-to-regexp path-filter-glob)
+                                       path)))
+         (or (null type-filter)
+             (equal type-filter type)))))
+
+(defun emagent-tool-list-bookmarks (&optional name-filter-regex
+                                              path-filter-glob
+                                              type-filter limit)
+  "List `bookmark-alist' entries as wide alist records.
+
+NAME-FILTER-REGEX, PATH-FILTER-GLOB, and TYPE-FILTER (file, buffer, or
+other) constrain the result.  Truncate to LIMIT when set."
+  (require 'bookmark)
+  (when (and type-filter
+             (not (member type-filter '("file" "buffer" "other"))))
+    (error "List_bookmarks: invalid type_filter %S (use file, buffer, or other)"
+           type-filter))
+  (let ((rows nil))
+    (dolist (cell bookmark-alist)
+      (let* ((name (bookmark-name-from-full-record cell))
+             (record cell)
+             (row (emagent-tools--bookmark-record name record)))
+        (when (emagent-tools--list-bookmarks-match-p
+               row name-filter-regex path-filter-glob type-filter)
           (push row rows))))
     (setq rows (nreverse rows))
     (if limit
