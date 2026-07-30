@@ -3801,6 +3801,7 @@ COMPRESS is forwarded to `emagent-acp-send-prompt': set by
 summary prompt rather than ordinary chat input."
   (let ((buf (current-buffer))
         (turn-model emagent-chat--turn-model)
+        (turn-spec emagent-chat--turn-apply-spec)
         (token emagent-chat--send-token))
     (emagent-acp-ensure-connected
      :on-ready
@@ -3817,14 +3818,28 @@ summary prompt rather than ordinary chat input."
                         (emagent-acp--resolve-explore-model state)))
                   (turn-model (or turn-model explore))
                   (target (and turn-model state
-                               (emagent-acp--match-model-id turn-model state nil))))
+                               (emagent-acp--match-model-id turn-model state nil)))
+                  (spec
+                   (and turn-spec state target
+                        (equal (emagent-acp--spec-model-value turn-spec state)
+                               target)
+                        turn-spec))
+                  (need-switch
+                   (or (and target current (not (string= target current)))
+                       (and spec (> (length spec) 1)))))
              (when (and explore target)
                (setq emagent-chat--turn-model target
-                     emagent-chat--explore-sticky t))
-             (if (and target current (not (string= target current)))
+                     emagent-chat--explore-sticky t
+                     emagent-chat--turn-apply-spec nil))
+             (if need-switch
                  (progn
                    (unless emagent-chat--turn-model-base
                      (setq emagent-chat--turn-model-base current))
+                   (unless emagent-chat--turn-config-base
+                     (setq emagent-chat--turn-config-base
+                           (and state spec
+                                (emagent-acp--snapshot-config-values
+                                 state spec))))
                    (when (fboundp 'emagent-acp--progress)
                      (emagent-acp--progress
                       state
@@ -3836,7 +3851,8 @@ summary prompt rather than ordinary chat input."
                     target
                     (lambda ()
                       (when (emagent-chat--send-active-p token)
-                        (emagent-acp--send-prompt-safe buf user-text compress)))))
+                        (emagent-acp--send-prompt-safe buf user-text compress)))
+                    spec))
                (emagent-acp--send-prompt-safe buf user-text compress)))))))))
 
 (defun emagent-acp--wire-chat-buffer ()
@@ -3854,10 +3870,18 @@ function slots are needed."
 Called on a successful turn: switches back to the captured base model and clears
 `emagent-chat--turn-model' so the next prompt uses the buffer model again."
   (when emagent-chat--turn-model
-    (when emagent-chat--turn-model-base
-      (emagent-acp-set-model-transient emagent-chat--turn-model-base #'ignore))
+    (cond
+     (emagent-chat--turn-config-base
+      (emagent-acp-set-model-transient
+       emagent-chat--turn-model-base
+       #'ignore
+       emagent-chat--turn-config-base))
+     (emagent-chat--turn-model-base
+      (emagent-acp-set-model-transient emagent-chat--turn-model-base #'ignore)))
     (setq emagent-chat--turn-model nil
-          emagent-chat--turn-model-base nil)))
+          emagent-chat--turn-model-base nil
+          emagent-chat--turn-apply-spec nil
+          emagent-chat--turn-config-base nil)))
 
 (defun emagent-acp--turn-model-on-failure (&optional message)
   "After a failed `/model' turn, keep or restore the per-turn override.
@@ -3939,47 +3963,69 @@ Choices:
   (when-let ((state (emagent-acp--session)))
     (emagent-acp--current-model-id state nil)))
 
-(defun emagent-acp-set-model-transient (model-id on-done)
+(defun emagent-acp-set-model-transient (model-id on-done &optional spec)
   "Switch this buffer's ACP session model to MODEL-ID without persisting it.
 The buffer model (`emagent-session-model') is left unchanged, so this is a
 per-turn override.  ON-DONE is called once the switch resolves (success or
-failure) so the caller can proceed to send the prompt."
+failure) so the caller can proceed to send the prompt.
+
+Optional SPEC is ((CONFIG-ID . VALUE) ...) applied instead of MODEL-ID alone
+when non-nil (composed model_config / thought_level rows)."
   (let ((state (emagent-acp--session)))
     (if state
-        (emagent-acp--config-option-set-model-id
-         :state state
-         :session-id (emagent-acp-state-session-id state)
-         :model-id model-id
-         :persist nil
-         :on-success on-done
-         :on-failure (lambda (&rest _) (when on-done (funcall on-done))))
+        (if spec
+            (emagent-acp--config-option-set-spec
+             :state state
+             :session-id (emagent-acp-state-session-id state)
+             :spec spec
+             :persist nil
+             :on-success on-done
+             :on-failure (lambda (&rest _) (when on-done (funcall on-done))))
+          (emagent-acp--config-option-set-model-id
+           :state state
+           :session-id (emagent-acp-state-session-id state)
+           :model-id model-id
+           :persist nil
+           :on-success on-done
+           :on-failure (lambda (&rest _) (when on-done (funcall on-done)))))
       (when on-done (funcall on-done)))))
 
 (defun emagent-set-model ()
-  "Set the ACP model for the current emagent session."
+  "Set the ACP model for the current emagent session.
+
+Offers a flat, filterable list of advertised model variants (including
+bracketed Cursor ids and composed model_config / thought_level rows)."
   (interactive)
-  (let* ((state (emagent-acp--session))
-         (session-id (emagent-acp-state-session-id state))
-         (choices (emagent-acp--model-choices state nil))
-         (labels (mapcar #'car choices))
-         (selection (emagent-acp--read-labeled-choice
-                     "Set emagent model: "
-                     labels))
-         (model-id (cdr (assoc-string selection choices))))
-    (unless session-id
+  (let ((state (emagent-acp--session))
+        (buf (current-buffer)))
+    (unless state
       (user-error "No active session"))
-    (unless choices
-      (user-error "No models available"))
-    (unless model-id
-      (user-error "Unknown model: %s" selection))
-    (when-let ((current (emagent-acp--current-model-id state nil)))
-      (when (string= model-id current)
-        (user-error "Model already %s"
-                    (emagent-acp--model-display-name state nil model-id))))
-    (emagent-acp--config-option-set-model-id
-     :state state
-     :session-id session-id
-     :model-id model-id)))
+    (emagent-acp--with-model-variant-choices
+     state nil
+     (lambda (choices)
+       (with-current-buffer buf
+         (let* ((session-id (emagent-acp-state-session-id state))
+                (labels (mapcar (function car) choices))
+                (selection (emagent-acp--read-labeled-choice
+                            "Set emagent model: "
+                            labels))
+                (spec (emagent-acp--choice-by-label selection choices))
+                (model-id (and spec (emagent-acp--spec-model-value spec state))))
+           (unless session-id
+             (user-error "No active session"))
+           (unless choices
+             (user-error "No models available"))
+           (unless spec
+             (user-error "Unknown model: %s" selection))
+           (when-let ((current (emagent-acp--current-model-id state nil)))
+             (when (and model-id (string= model-id current)
+                        (= (length spec) 1))
+               (user-error "Model already %s"
+                           (emagent-acp--model-display-name state nil model-id))))
+           (emagent-acp--config-option-set-spec
+            :state state
+            :session-id session-id
+            :spec spec)))))))
 
 (provide 'emagent-acp)
 ;;; emagent-acp.el ends here

@@ -3007,8 +3007,10 @@ Arguments: LIT."
   (concat " " (emagent-chat--spinner-string)))
 
 (defun emagent-chat--spinner-active-p ()
-  "Return non-nil when the mode-line thinking spinner should animate."
-  (and (or (plist-get emagent-chat--status :busy) emagent-chat--send-pending)
+  "Return non-nil when the mode-line busy spinner should animate."
+  (and (or (plist-get emagent-chat--status :busy)
+           (plist-get emagent-chat--status :connecting)
+           emagent-chat--send-pending)
        (not (plist-get emagent-chat--status :waiting-permission))))
 
 (defun emagent-chat--spinner-animate-p (&optional buffer)
@@ -3113,8 +3115,9 @@ deferred org table alignment on the chat buffer until Emacs pegged CPU."
 (defvar-local emagent-chat--status nil
   "Plist snapshot of ACP session status, pushed by the ACP layer via :cb-status.
 
-Keys: :busy :waiting-permission :ready :prompt-finishing :tool :tool-kind :rss
-:emacs-rss :model-id :ctx-usage (a (USED . SIZE) cons or nil) :ctx-unavailable.
+Keys: :busy :waiting-permission :ready :connecting :prompt-finishing :tool
+:tool-kind :rss :emacs-rss :model-id :ctx-usage (a (USED . SIZE) cons or nil)
+:ctx-unavailable.
 The mode line renders from this snapshot so the UI never calls up into the ACP
 runtime.")
 
@@ -3135,9 +3138,16 @@ per-turn switches), otherwise the buffer's saved #+EMAGENT_MODEL."
               (t (emagent-session-model)))))
     (when id (emagent-session-model-display id))))
 
-(defun emagent-chat-set-model (model)
-  "Store ACP MODEL id in the current buffer and refresh the mode line."
+(defun emagent-chat-set-model (model &optional spec)
+  "Store ACP MODEL id (and optional SPEC) and refresh the mode line.
+
+SPEC is ((CONFIG-ID . VALUE) ...); non-model pairs are written to
+#+EMAGENT_MODEL_SPEC.  When SPEC is omitted, leave sibling pairs
+unchanged.  Pass nil explicitly via `emagent-session-set-model-spec'
+to clear."
   (emagent-session-set-model model)
+  (when (and spec (listp spec))
+    (emagent-session-set-model-spec spec))
   (emagent-chat--refresh-mode-line))
 
 (defun emagent-chat-set-status (status)
@@ -3145,9 +3155,11 @@ per-turn switches), otherwise the buffer's saved #+EMAGENT_MODEL."
 This is the ACP layer's downward entry point (wired as :cb-status); it replaces
 the mode line pulling session state back out of the ACP layer."
   (setq emagent-chat--status status)
-  (when (emagent-chat--stat :busy)
+  (when (or (emagent-chat--stat :busy)
+            (emagent-chat--stat :connecting))
     (emagent-chat--spinner-ensure-running))
-  (if (emagent-chat--stat :busy)
+  (if (or (emagent-chat--stat :busy)
+          (emagent-chat--stat :connecting))
       (emagent-chat--refresh-mode-line-soon)
     (emagent-chat--refresh-mode-line)))
 
@@ -3205,58 +3217,60 @@ the mode line pulling session state back out of the ACP layer."
   (let* ((busy  (emagent-chat--stat :busy))
          (waiting-permission (emagent-chat--stat :waiting-permission))
          (ready (emagent-chat--stat :ready))
+         (connecting (emagent-chat--stat :connecting))
          (tool  (emagent-chat--stat :tool))
          (kind  (emagent-chat--stat :tool-kind))
          (rss   (emagent-chat--stat :rss))
          (emacs-rss (emagent-chat--stat :emacs-rss))
-         (connected (or busy ready))
          (spinner (when (emagent-chat--spinner-animate-p)
                     (emagent-chat--mode-line-spinner-suffix)))
-         (busy-face '(bold mode-line-emphasis))
+         (busy-face (quote (bold mode-line-emphasis)))
          (head (cond
                 (waiting-permission
-                 (propertize "emagent:Allow?" 'face 'warning))
+                 (propertize "emagent:Allow?" (quote face) (quote warning)))
                 ((and (not busy) ready
                       (emagent-chat--open-response-p)
                       (not (emagent-chat--stat :prompt-finishing)))
-                 (propertize "emagent:stalled" 'face 'warning))
-                ((and busy tool (member kind '("write" "execute")))
-                 (concat (propertize "Executing" 'face busy-face)
+                 (propertize "emagent:stalled" (quote face) (quote warning)))
+                ((and busy tool (member kind (quote ("write" "execute"))))
+                 (concat (propertize "Executing" (quote face) busy-face)
                          spinner))
                 (emagent-chat--send-pending
                  (concat (propertize
                           (if emagent-chat--turn-model "Switching" "Preparing")
-                          'face busy-face)
+                          (quote face) busy-face)
                          spinner))
                 (busy
-                 (concat (propertize "Thinking" 'face busy-face)
+                 (concat (propertize "Thinking" (quote face) busy-face)
                          spinner))
-                (ready (propertize "emagent:Idle" 'face 'success))
-                (connected (propertize "emagent:connecting" 'face 'warning))
+                (connecting
+                 (concat (propertize "Connecting" (quote face) busy-face)
+                         spinner))
+                (ready (propertize "emagent:Idle" (quote face) (quote success)))
                 (t "emagent")))
          (model (emagent-chat-model-display))
-         (sep (propertize " | " 'face 'shadow))
+         (sep (propertize " | " (quote face) (quote shadow)))
          (model-str (when (and model (not (string-empty-p model)))
-                      (propertize model 'face 'shadow)))
+                      (propertize model (quote face) (quote shadow))))
          (mode-id (emagent-chat--stat :mode-id))
          (mode-str (when (and (stringp mode-id)
                               (not (string-empty-p mode-id))
-                              (not (member mode-id '("agent" "default"))))
-                     (propertize mode-id 'face 'shadow)))
+                              (not (member mode-id (quote ("agent" "default")))))
+                     (propertize mode-id (quote face) (quote shadow))))
          (context (emagent-chat--mode-line-context-usage))
          (tokens (emagent-chat--mode-line-token-usage))
          (mcp-bytes (emagent-chat--mode-line-mcp-bytes))
          (rss-str (when rss
                     (propertize (format "agent:%dMB" rss)
-                                'face (cond ((>= rss 1000) 'error)
-                                            ((>= rss 500)  'warning)
-                                            (t             'success)))))
+                                (quote face) (cond ((>= rss 1000) (quote error))
+                                            ((>= rss 500)  (quote warning))
+                                            (t             (quote success))))))
          (emacs-rss-str
           (when emacs-rss
             (propertize (format "emacs:%dMB" emacs-rss)
-                        'face (cond ((>= emacs-rss 1000) 'error)
-                                    ((>= emacs-rss 500)  'warning)
-                                    (t             'success)))))
+                        (quote face) (cond ((>= emacs-rss 1000) (quote error))
+                                    ((>= emacs-rss 500)  (quote warning))
+                                    (t             (quote success))))))
          (tail (concat (when model-str (concat sep model-str))
                        (when mode-str  (concat sep mode-str))
                        (when context   (concat sep (string-trim-left context)))
@@ -3569,7 +3583,9 @@ Sending a previous prompt replaces its old response."
            ;; have chosen to keep one).
            (input (emagent-chat--strip-model-links
                    (string-trim (emagent-chat--strip-user-heading raw))))
-           (override (emagent-chat--region-turn-model (car bounds) (cdr bounds))))
+           (override (emagent-chat--region-turn-model (car bounds) (cdr bounds)))
+           (link-spec (emagent-chat--region-turn-apply-spec
+                       (car bounds) (cdr bounds))))
       (when (string-empty-p input)
         (user-error "Prompt is empty"))
       ;; Client slash commands never go to the agent.
@@ -3585,7 +3601,9 @@ Sending a previous prompt replaces its old response."
         (emagent-archive-apply input))
        (t
         (when override
-          (setq emagent-chat--turn-model override))
+          (setq emagent-chat--turn-model override
+                ;; Link query is source of truth for variant params.
+                emagent-chat--turn-apply-spec link-spec))
         (let ((response-pos
                (save-excursion
                  (goto-char (cdr bounds))
@@ -3857,23 +3875,30 @@ relative path, size in lines, and a short content preview."
 
 (defun emagent-chat--slash-model-apply-1 (bounds)
   "Prompt for a model and replace BOUNDS with the `/model' marker link."
-  (let* ((state emagent-acp--session)
-         (choices (and state (emagent-acp--model-choices state nil))))
-    (cond
-     ((not choices)
-      (message "emagent: no models available yet — M-x emagent-connect"))
-     (t
-      (let* ((selection (completing-read "Model for this turn: "
-                                         (mapcar #'car choices) nil t))
-             (model-id (cdr (assoc-string selection choices))))
-        (when model-id
-          (delete-region (car bounds) (cdr bounds))
-          (goto-char (car bounds))
-          ;; An org link: agent/short-model as text, full id as target
-          ;; (shown on hover).  Org fontifies it, it survives saving the
-          ;; session file, deleting it cancels the override, and send strips
-          ;; it from the outgoing prompt.
-          (insert (emagent-chat--model-link model-id))))))))
+  (let ((state emagent-acp--session)
+        (buf (current-buffer)))
+    (emagent-acp--with-model-variant-choices
+     state nil
+     (lambda (choices)
+       (with-current-buffer buf
+         (cond
+          ((not choices)
+           (message "emagent: no models available yet -- M-x emagent-connect"))
+          (t
+           (let* ((selection (emagent-acp--read-labeled-choice
+                              "Model for this turn: "
+                              (mapcar (function car) choices)))
+                  (spec (emagent-acp--choice-by-label selection choices))
+                  (model-id (and spec (emagent-acp--spec-model-value spec state))))
+             (when model-id
+               (setq emagent-chat--turn-apply-spec spec)
+               (when (and (car bounds) (cdr bounds)
+                          (<= (cdr bounds) (point-max))
+                          (>= (car bounds) (point-min)))
+                 (delete-region (car bounds) (cdr bounds))
+                 (goto-char (car bounds))
+                 (insert (emagent-chat--model-link
+                          model-id selection spec))))))))))))
 
 (defun emagent-chat--slash-model-apply ()
   "Prompt for a model and replace the `/model' token with its marker link.
@@ -4633,22 +4658,35 @@ Run \\[emagent-mode] to reconnect a saved session."
     (interactive "P")
     (emagent-mode-entry arg)))
 
+(defun emagent-chat-find-project-buffer (project-dir)
+  "Return the first live emagent buffer whose project is PROJECT-DIR, or nil."
+  (let ((dir (file-name-as-directory (expand-file-name project-dir))))
+    (seq-find
+     (lambda (buffer)
+       (with-current-buffer buffer
+         (when-let ((project (emagent-session-project-directory)))
+           (equal dir (file-name-as-directory (expand-file-name project))))))
+     (emagent-chat--buffers))))
+
 (cl-defun emagent-chat-open (&key project-dir)
   "Open or create an emagent buffer for PROJECT-DIR.
 
-Buffer names look like *emagent myproj* from a short cwd label.
+An existing emagent buffer for PROJECT-DIR is reused — one session per
+project; a fresh `M-x emagent' must not silently spawn a second buffer.
+New buffer names look like *emagent myproj* from a short cwd label.
 PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
   (unless project-dir
     (user-error "PROJECT-DIR is required"))
   (let* ((dir (expand-file-name project-dir))
+         (existing (emagent-chat-find-project-buffer dir))
          (label (emagent-chat--short-cwd-label dir))
          (slug (emagent-chat--sanitize-slug label))
-         (buffer-name (emagent-chat--buffer-name-for-label label))
-         (buffer (get-buffer-create buffer-name)))
+         (buffer (or existing
+                     (get-buffer-create
+                      (emagent-chat--buffer-name-for-label label)))))
     (with-current-buffer buffer
       (unless (eq major-mode 'emagent-mode)
         (emagent-mode-force))
-      (rename-buffer buffer-name t)
       (setq emagent-chat-slug slug
             emagent-chat-session-id (or emagent-chat-session-id
                                         (emagent-session-store-read-session-property)))
@@ -4829,6 +4867,14 @@ across a failure so `retry' reuses the model.")
   "Session model to restore to when a per-turn override ends, or nil.
 Captured (once) from the live session model just before the first override
 switch, so restoring returns to whatever the session was really on.")
+
+(defvar-local emagent-chat--turn-apply-spec nil
+  "Apply-spec ((CONFIG-ID . VALUE) ...) for the in-flight `/model' turn.
+
+Set when `/model' picks a composed variant; consumed by `emagent-acp-send'.")
+
+(defvar-local emagent-chat--turn-config-base nil
+  "Snapshot of config values to restore after a per-turn `/model' override.")
 
 (defvar-local emagent-chat-slug nil
   "Filesystem slug for the current emagent buffer.")

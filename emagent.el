@@ -198,8 +198,66 @@ When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
               " - "
               label))))
 
+(defvar emagent--pending-config-spec nil
+  "Apply-spec ((CONFIG-ID . VALUE) ...) from startup model picker, or nil.
+
+Consumed once by `emagent-acp--configure-model' after session/new.")
+
+(defun emagent--probe-claude-model-catalog (client response)
+  "Return a per-model catalog from a throwaway Claude session.
+
+CLIENT is the probe client, RESPONSE the session/new alist.  Claude only
+advertises effort levels for the current model, so switch the scratch
+session through each advertised model and snapshot the sibling options.
+No restore is needed — the session is discarded."
+  (let* ((session-id (map-elt response 'sessionId))
+         (options (emagent-acp--normalize-config-options
+                   (map-elt response 'configOptions)))
+         (model-option
+          (or (seq-find (lambda (option)
+                          (equal "model" (map-elt option :category)))
+                        options)
+              (seq-find (lambda (option)
+                          (string= "model" (map-elt option :id)))
+                        options)))
+         (config-id (and model-option (map-elt model-option :id)))
+         (values (and model-option (map-elt model-option :options)))
+         (current (and model-option (map-elt model-option :current-value)))
+         (catalog nil))
+    (when (and session-id config-id (> (length values) 1))
+      (dolist (entry values)
+        (let ((value (map-elt entry :value))
+              (name (map-elt entry :name)))
+          (when (and (stringp value) (not (string-empty-p value)))
+            (let ((siblings
+                   (if (equal value current)
+                       (emagent-acp--catalog-sibling-options options)
+                     (condition-case _err
+                         (emagent-acp--catalog-sibling-options
+                          (emagent-acp--normalize-config-options
+                           (map-elt
+                            (emagent-acp-send-request
+                             :client client
+                             :request
+                             (emagent-acp-make-session-set-config-option-request
+                              :session-id session-id
+                              :config-id config-id
+                              :value value)
+                             :sync t)
+                            'configOptions)))
+                       (error nil)))))
+              (push `((:value . ,value)
+                      (:name . ,(or name value))
+                      (:config-options . ,siblings))
+                    catalog)))))
+      (nreverse catalog))))
+
 (defun emagent--probe-provider-models (provider cwd)
-  "Return model entries advertised by PROVIDER at CWD, or nil on failure."
+  "Return (RESPONSE . CATALOG) from PROVIDER at CWD, or nil.
+
+RESPONSE is the session/new alist.  CATALOG is the per-model variant
+catalog: cursor/list_available_models for Cursor, probed model switches
+for Claude (`emagent--probe-claude-model-catalog'), otherwise nil."
   (emagent-log "probing %s models…" (symbol-name provider))
   (let ((buffer (get-buffer-create " *emagent-probe*"))
         result)
@@ -216,15 +274,36 @@ When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
                                    :protocol-version 1
                                    :client-info `((name . "emagent")
                                                   (title . "Emagent")
-                                                  (version . "1.0.2")))
+                                                  (version . "1.0.2"))
+                                   :read-text-file-capability t
+                                   :write-text-file-capability t)
                          :sync t)
-                        (emagent-acp--model-entries-from-response
-                         (emagent-acp-send-request
-                          :client client
-                          :request (emagent-acp-make-session-new-request
-                                    :cwd default-directory
-                                    :mcp-servers [])
-                          :sync t)))
+                        (let* ((response
+                                (emagent-acp-send-request
+                                 :client client
+                                 :request (emagent-acp-make-session-new-request
+                                           :cwd default-directory
+                                           :mcp-servers [])
+                                 :sync t))
+                               (catalog
+                                (pcase provider
+                                  ('cursor
+                                   (condition-case _cerr
+                                       (emagent-acp--normalize-model-catalog
+                                        (map-elt
+                                         (emagent-acp-send-request
+                                          :client client
+                                          :request
+                                          (emagent-acp-make-cursor-list-available-models-request)
+                                          :sync t)
+                                         'models))
+                                     (error nil)))
+                                  ('claude
+                                   (condition-case _cerr
+                                       (emagent--probe-claude-model-catalog
+                                        client response)
+                                     (error nil))))))
+                          (cons response catalog)))
                     (emagent-acp-shutdown :client client)))
               (error
                (let ((msg (error-message-string err)))
@@ -237,18 +316,63 @@ When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
     (ignore-errors (kill-buffer buffer))
     result))
 
+(defun emagent--live-session-variant-rows (provider cwd)
+  "Return live ((LABEL . SPEC) ...) for CWD's connected PROVIDER buffer.
+Nil otherwise — the caller then probes a throwaway session instead."
+  (when-let ((buffer (emagent-chat-find-project-buffer cwd)))
+    (with-current-buffer buffer
+      (when (and (eq (emagent-session-agent) provider)
+                 (emagent-acp--connected-p))
+        (emagent-acp--model-variant-choices emagent-acp--session nil)))))
+
+(defun emagent--probed-variant-rows (provider cwd)
+  "Return ((LABEL . SPEC) ...) from a throwaway PROVIDER session at CWD."
+  (when-let ((probed (emagent--probe-provider-models provider cwd)))
+    (let* ((response (car probed))
+           (catalog (cdr probed))
+           (options
+            (emagent-acp--normalize-config-options
+             (map-elt response 'configOptions))))
+      (or (and catalog
+               (emagent-acp--model-variant-choices-from-catalog catalog))
+          (emagent-acp--model-variant-choices-from-options
+           options
+           (eq provider 'cursor))
+          (mapcar
+           (lambda (entry)
+             (let ((id (map-elt entry :model-id))
+                   (name (map-elt entry :name)))
+               (cons (emagent-model-choice-label-display id name)
+                     (list (cons "model" id)))))
+           (emagent-acp--model-entries-from-response response))))))
+
 (defun emagent--agent-model-choices (cwd &optional providers)
-  "Return ((LABEL . (PROVIDER . MODEL-ID)) ...) for PROVIDERS at CWD."
+  "Return ((LABEL . (PROVIDER MODEL-ID . SPEC)) ...) for PROVIDERS at CWD.
+
+SPEC is the apply-spec alist for the chosen variant row.  A connected
+session buffer for CWD supplies its rows directly; other providers are
+probed with a throwaway session."
   (let ((providers (or providers (emagent--available-providers)))
         (omit-prefix (= (length providers) 1))
         choices)
     (dolist (provider providers)
-      (dolist (entry (or (emagent--probe-provider-models provider cwd) '()))
-        (push (cons (emagent--agent-model-label provider entry omit-prefix)
-                    (cons provider
-                          (or (map-elt entry :model-id)
-                              (emagent-acp--model-entry-id entry))))
-              choices)))
+      (when-let ((variant-rows
+                  (or (emagent--live-session-variant-rows provider cwd)
+                      (emagent--probed-variant-rows provider cwd))))
+        (dolist (row variant-rows)
+          (let* ((label (car row))
+                 (spec (cdr row))
+                 (model-id (or (cdr (assoc "model" spec #'equal))
+                               (cdar spec)))
+                 (faced
+                  (if omit-prefix
+                      label
+                    (concat
+                     (propertize (symbol-name provider)
+                                 'face 'emagent-model-choice-agent)
+                     " - "
+                     label))))
+            (push (cons faced (list provider model-id spec)) choices)))))
     (sort choices (lambda (a b)
                     (string-lessp (substring-no-properties (car a))
                                   (substring-no-properties (car b)))))))
@@ -257,7 +381,9 @@ When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
   "Return (PROVIDER . MODEL-ID) for a new session at CWD.
 
 When FIXED-PROVIDER is non-nil, only that agent is probed.  Falls back to
-`emagent--read-provider' when probing is disabled or returns no models."
+`emagent--read-provider' when probing is disabled or returns no models.
+Sets `emagent--pending-config-spec' when the chosen row has an apply-spec."
+  (setq emagent--pending-config-spec nil)
   (if (not emagent-probe-models-at-start)
       (cons (or fixed-provider (emagent--read-provider)) nil)
     (let* ((providers (if fixed-provider (list fixed-provider)
@@ -268,14 +394,26 @@ When FIXED-PROVIDER is non-nil, only that agent is probed.  Falls back to
         (emagent-log "available agents/models:")
         (dolist (choice choices)
           (emagent-log "  %s" (car choice)))
-        (if (= (length choices) 1)
-            (cdr (car choices))
-          (let* ((labels (mapcar #'car choices))
-                 (selection (emagent-acp--read-labeled-choice
-                             "Emagent agent - model: "
-                             labels)))
-            (or (cdr (assoc-string selection choices))
-                (user-error "Unknown agent/model: %s" selection))))))))
+        (cl-labels
+            ((accept (cell)
+               (pcase-let ((`(,provider ,model-id ,spec) (cdr cell)))
+                 (setq emagent--pending-config-spec
+                       (and spec (> (length spec) 0) spec))
+                 (cons provider model-id))))
+          (if (= (length choices) 1)
+              (accept (car choices))
+            (let* ((labels (mapcar #'car choices))
+                   (selection (emagent-acp--read-labeled-choice
+                               "Emagent agent - model: "
+                               labels))
+                   (cell (seq-find
+                          (lambda (c)
+                            (string= selection
+                                     (substring-no-properties (car c))))
+                          choices)))
+              (unless cell
+                (user-error "Unknown agent/model: %s" selection))
+              (accept cell))))))))
 
 (defun emagent--project-directory (prompt)
   "Return a project directory for a new session.
@@ -289,26 +427,60 @@ current buffer."
 (defun emagent--start-with-provider (provider project-dir connect &optional model-id _handshake)
   "Start emagent using PROVIDER in PROJECT-DIR.
 CONNECT non-nil connects the ACP session immediately.
-When MODEL-ID is non-nil, persist it before connecting."
-  (let ((buffer (emagent-chat-open :project-dir project-dir)))
+When MODEL-ID is non-nil, persist it before connecting.
+When `emagent--pending-config-spec' is set, also write
+#+EMAGENT_MODEL_SPEC so the variant is visible and restored.
+When the project buffer is already connected, the chosen variant is
+applied to the live session instead of waiting for a reconnect."
+  (let ((buffer (emagent-chat-open :project-dir project-dir))
+        (spec (and (boundp 'emagent--pending-config-spec)
+                   emagent--pending-config-spec)))
     (with-current-buffer buffer
       (when (eq provider 'cursor)
         (kill-local-variable 'emagent-chat-cursor-acp-extra-args))
       (emagent-session-set-agent provider)
       (when (and model-id (not (string-empty-p model-id)))
-        (emagent-chat-set-model model-id))
-      (if connect
-          (let ((reveal (lambda () (pop-to-buffer buffer))))
-            (emagent-acp-ensure-connected :on-reveal reveal))
-        (pop-to-buffer buffer)))
+        (emagent-chat-set-model model-id spec))
+      (cond
+       ((not connect)
+        (pop-to-buffer buffer))
+       ((emagent-acp--connected-p)
+        (when (and model-id (not (string-empty-p model-id)))
+          (when-let ((state emagent-acp--session)
+                     (session-id (emagent-acp-state-session-id state)))
+            (emagent-acp--config-option-set-spec
+             :state state
+             :session-id session-id
+             :spec (emagent-session-model-apply-spec))))
+        (pop-to-buffer buffer))
+       (t
+        (let ((reveal (lambda () (pop-to-buffer buffer))))
+          (emagent-acp-ensure-connected :on-reveal reveal)))))
     buffer))
 
+(defun emagent--existing-buffer-agent (project-dir)
+  "Return the agent symbol of an existing emagent buffer for PROJECT-DIR.
+Nil when no buffer exists for PROJECT-DIR or it has no #+EMAGENT_AGENT."
+  (when-let ((buffer (emagent-chat-find-project-buffer project-dir)))
+    (with-current-buffer buffer
+      (emagent-session-agent))))
+
 (defun emagent--start-session (project-dir &optional fixed-provider)
-  "Start emagent in PROJECT-DIR, optionally limiting to FIXED-PROVIDER."
-  (let* ((pair (emagent--read-agent-and-model project-dir fixed-provider))
-         (provider (car pair))
-         (handshake (emagent-trust--configure provider project-dir)))
-    (emagent--start-with-provider provider project-dir t (cdr pair) handshake)))
+  "Start emagent in PROJECT-DIR, optionally limiting to FIXED-PROVIDER.
+
+When PROJECT-DIR already has an emagent buffer with an agent, the picker
+is limited to that agent — `emagent-chat-open' reuses the buffer, and
+its session cannot change agents."
+  (let* ((existing (and (null fixed-provider)
+                        (emagent--existing-buffer-agent project-dir)))
+         (fixed-provider (or fixed-provider existing)))
+    (when existing
+      (emagent-log "existing %s session buffer; offering %s models only"
+                   (symbol-name existing) (symbol-name existing)))
+    (let* ((pair (emagent--read-agent-and-model project-dir fixed-provider))
+           (provider (car pair))
+           (handshake (emagent-trust--configure provider project-dir)))
+      (emagent--start-with-provider provider project-dir t (cdr pair) handshake))))
 
 (defun emagent--project-directory-initial ()
   "Default project directory for a new emagent session.

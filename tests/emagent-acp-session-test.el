@@ -1336,6 +1336,385 @@ the emagent gate can show what was edited instead of a bare arrow line."
                       '((availableModels . [((modelId . "default[]")
                                               (name . "Auto"))])))))))
 
+(ert-deftest emagent-acp-session-test-match-model-id-ambiguous-normalized ()
+  (let* ((state (emagent-test--make-acp-state))
+         (models '((availableModels
+                    . [((modelId . "grok-4.3[context=200k]") (name . "grok-4.3"))
+                       ((modelId . "grok-4.3[context=1m]") (name . "grok-4.3"))]))))
+    (should (string= "grok-4.3"
+                     (emagent-acp--match-model-id "grok-4.3" state models)))
+    (should (string= "grok-4.3[context=1m]"
+                     (emagent-acp--match-model-id
+                      "grok-4.3[context=1m]" state models)))))
+
+(ert-deftest emagent-acp-session-test-variant-choices-bracketed ()
+  (let* ((options
+          '((( :id . "model") (:category . "model") (:type . "select")
+             (:options . (((:value . "grok-4.3[context=200k]") (:name . "grok-4.3"))
+                          ((:value . "grok-4.3[context=1m]") (:name . "grok-4.3"))
+                          ((:value . "composer-2.5[fast=true]")
+                           (:name . "composer-2.5")))))))
+         (rows (emagent-acp--model-variant-choices-from-options options))
+         (labels (mapcar (lambda (row) (substring-no-properties (car row)))
+                         rows)))
+    (should (= 3 (length rows)))
+    (should (seq-every-p (lambda (label) (string-match-p "\\[" label)) labels))
+    (should (seq-find (lambda (label) (string-match-p "grok-4.3" label)) labels))
+    (let* ((label (seq-find (lambda (l) (string-match-p "context=1m" l)) labels))
+           (spec (emagent-acp--choice-by-label label rows)))
+      (should (equal "grok-4.3[context=1m]"
+                     (cdr (assoc "model" spec #'equal)))))))
+
+(ert-deftest emagent-acp-session-test-variant-choices-compose ()
+  (let* ((options
+          '((( :id . "model") (:category . "model") (:type . "select")
+             (:options . (((:value . "grok") (:name . "Grok"))
+                          ((:value . "sonnet") (:name . "Sonnet")))))
+            ((:id . "effort") (:category . "model_config") (:type . "select")
+             (:options . (((:value . "fast") (:name . "Fast"))
+                          ((:value . "high") (:name . "High")))))
+            ((:id . "thought") (:category . "thought_level") (:type . "select")
+             (:options . (((:value . "off") (:name . "Off"))
+                          ((:value . "on") (:name . "On")))))))
+         (rows (emagent-acp--model-variant-choices-from-options options))
+         (labels (mapcar (lambda (row) (substring-no-properties (car row)))
+                         rows)))
+    ;; Off cells stay in the product (2x2x2 = 8 rows) but are hidden from
+    ;; labels: a row's brackets show only what it turns on.
+    (should (= 8 (length rows)))
+    (should-not (seq-find (lambda (l) (string-match-p "Off" l)) labels))
+    (let* ((label (substring-no-properties (caar rows)))
+           (spec (cdar rows)))
+      (should (string-match-p "\\[" label))
+      (should (= 3 (length spec)))
+      (should (assoc "model" spec #'equal))
+      (should (assoc "effort" spec #'equal))
+      (should (assoc "thought" spec #'equal)))
+    ;; The thought=off rows exist, applied but unlabeled.
+    (let ((off-row (seq-find (lambda (row)
+                               (equal "off"
+                                      (cdr (assoc "thought" (cdr row)
+                                                  #'equal))))
+                             rows)))
+      (should off-row)
+      (should-not (string-match-p
+                   "O\\(n\\|ff\\)"
+                   (substring-no-properties (car off-row)))))))
+
+(ert-deftest emagent-acp-session-test-variant-product-cap-fallback ()
+  (let* ((emagent-acp--model-variant-product-cap 3)
+         (options
+          '((( :id . "model") (:category . "model") (:type . "select")
+             (:options . (((:value . "a") (:name . "A"))
+                          ((:value . "b") (:name . "B")))))
+            ((:id . "effort") (:category . "model_config") (:type . "select")
+             (:options . (((:value . "1") (:name . "One"))
+                          ((:value . "2") (:name . "Two")))))))
+         (rows (emagent-acp--model-variant-choices-from-options options)))
+    (should (= 2 (length rows)))
+    (should (seq-every-p (lambda (row) (= 1 (length (cdr row)))) rows))))
+
+(ert-deftest emagent-acp-session-test-variant-choices-from-catalog ()
+  "Per-model catalog expands each model; Off cells are applied but unlabeled."
+  (let* ((catalog
+          (emagent-acp--normalize-model-catalog
+           '[((value . "grok-4.5")
+              (name . "Cursor Grok 4.5")
+              (configOptions
+               . [((id . "effort") (category . "thought_level") (type . "select")
+                   (options . [((value . "low") (name . "Low"))
+                               ((value . "high") (name . "High"))]))
+                  ((id . "fast") (category . "model_config") (type . "select")
+                   (options . [((value . "false") (name . "Off"))
+                               ((value . "true") (name . "Fast"))]))]))
+             ((value . "composer-2.5")
+              (name . "Composer 2.5")
+              (configOptions
+               . [((id . "fast") (category . "model_config") (type . "select")
+                   (options . [((value . "false") (name . "Off"))
+                               ((value . "true") (name . "Fast"))]))]))]))
+         (rows (emagent-acp--model-variant-choices-from-catalog catalog))
+         (labels (mapcar (lambda (row) (substring-no-properties (car row)))
+                         rows))
+         (grok (seq-filter (lambda (row)
+                             (equal "grok-4.5"
+                                    (cdr (assoc "model" (cdr row) #'equal))))
+                           rows))
+         (composer (seq-filter (lambda (row)
+                                 (equal "composer-2.5"
+                                        (cdr (assoc "model" (cdr row) #'equal))))
+                               rows)))
+    ;; Off cells stay: grok = 2 effort x 2 fast, composer = 2 fast rows.
+    (should (= 6 (length rows)))
+    (should (= 4 (length grok)))
+    (should (= 2 (length composer)))
+    (should-not (seq-find (lambda (l) (string-match-p "Off" l)) labels))
+    (should (seq-find (lambda (l) (string-match-p "Low" l)) labels))
+    ;; Composer's bare row carries the fast=false pair invisibly.
+    (let ((bare (seq-find (lambda (row)
+                            (equal "false"
+                                   (cdr (assoc "fast" (cdr row) #'equal))))
+                          composer)))
+      (should bare)
+      (should (string= "composer-2.5 (Composer 2.5)"
+                       (substring-no-properties (car bare)))))
+    (let* ((label (seq-find (lambda (l)
+                              (and (string-match-p "Grok" l)
+                                   (string-match-p "Low" l)
+                                   (string-match-p "Fast" l)))
+                            labels))
+           (spec (emagent-acp--choice-by-label label rows)))
+      (should (equal "grok-4.5" (cdr (assoc "model" spec #'equal))))
+      (should (equal "low" (cdr (assoc "effort" spec #'equal))))
+      (should (equal "true" (cdr (assoc "fast" spec #'equal)))))))
+
+(ert-deftest emagent-acp-session-test-variant-no-compose-when-disabled ()
+  (let* ((options
+          '((( :id . "model") (:category . "model") (:type . "select")
+             (:options . (((:value . "grok") (:name . "Grok"))
+                          ((:value . "sonnet") (:name . "Sonnet")))))
+            ((:id . "effort") (:category . "thought_level") (:type . "select")
+             (:options . (((:value . "low") (:name . "Low"))
+                          ((:value . "high") (:name . "High")))))))
+         (rows (emagent-acp--model-variant-choices-from-options options t)))
+    (should (= 2 (length rows)))
+    (should (seq-every-p (lambda (row) (= 1 (length (cdr row)))) rows))))
+
+(ert-deftest emagent-acp-session-test-variant-choices-claude-compose ()
+  "Claude model ids embed [1m]; thought_level siblings still compose."
+  (let* ((options
+          '((( :id . "mode") (:category . "mode") (:type . "select")
+             (:options . (((:value . "default") (:name . "Default")))))
+            ((:id . "model") (:category . "model") (:type . "select")
+             (:options . (((:value . "opus[1m]") (:name . "Opus"))
+                          ((:value . "haiku") (:name . "Haiku")))))
+            ((:id . "effort") (:category . "thought_level") (:type . "select")
+             (:options . (((:value . "default") (:name . "Default"))
+                          ((:value . "high") (:name . "High")))))))
+         (rows (emagent-acp--model-variant-choices-from-options options))
+         (labels (mapcar (lambda (row) (substring-no-properties (car row)))
+                         rows)))
+    ;; 2 models x 2 effort levels; mode is never composed.
+    (should (= 4 (length rows)))
+    (let* ((label (seq-find (lambda (l) (and (string-match-p "opus" l)
+                                             (string-match-p "High" l)))
+                            labels))
+           (spec (and label (emagent-acp--choice-by-label label rows))))
+      (should label)
+      (should (equal "opus[1m]" (cdr (assoc "model" spec #'equal))))
+      (should (equal "high" (cdr (assoc "effort" spec #'equal)))))
+    ;; The effort=default row is the bare model row — no [Default] tag.
+    (let ((bare (seq-find (lambda (row)
+                            (and (equal "opus[1m]"
+                                        (cdr (assoc "model" (cdr row) #'equal)))
+                                 (equal "default"
+                                        (cdr (assoc "effort" (cdr row) #'equal)))))
+                          rows)))
+      (should bare)
+      (should-not (string-match-p "Default"
+                                  (substring-no-properties (car bare)))))))
+
+(defconst emagent-test--set-spec-config-options
+  '((( :id . "model") (:category . "model") (:type . "select")
+     (:options . (((:value . "opus[1m]") (:name . "Opus"))
+                  ((:value . "haiku") (:name . "Haiku")))))
+    ((:id . "effort") (:category . "thought_level") (:type . "select")
+     (:options . (((:value . "default") (:name . "Default"))
+                  ((:value . "high") (:name . "High"))))))
+  "Config options used by the set-spec tests.")
+
+(defun emagent-test--set-spec-request-sender (fail-config-ids)
+  "Return a send-request mock failing configIds in FAIL-CONFIG-IDS."
+  (cl-function
+   (lambda (&key request on-success on-failure &allow-other-keys)
+     (let ((config-id (map-elt (map-elt request :params) 'configId)))
+       (if (member config-id fail-config-ids)
+           (funcall on-failure '((message . "not supported")) nil)
+         (funcall on-success '()))))))
+
+(ert-deftest emagent-acp-session-test-set-spec-skips-failed-sibling ()
+  "A failing sibling pair is skipped; the model still applies and persists."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let ((state (emagent-test--make-acp-state nil buffer))
+           (succeeded nil)
+           (failed nil))
+       (setf (emagent-acp-state-config-options state)
+             (copy-tree emagent-test--set-spec-config-options))
+       (emagent-test--with-mocks
+           (((symbol-function 'emagent-acp--send-request)
+             (emagent-test--set-spec-request-sender '("effort")))
+            ((symbol-function 'emagent-acp--notify-user)
+             (lambda (&rest _args) nil)))
+         (emagent-acp--config-option-set-spec
+          :state state
+          :session-id "sess"
+          :spec '(("model" . "haiku") ("effort" . "high"))
+          :on-success (lambda () (setq succeeded t))
+          :on-failure (lambda () (setq failed t))))
+       (should succeeded)
+       (should-not failed)
+       (with-current-buffer buffer
+         (should (string= "haiku" (emagent-session-model)))
+         ;; The skipped effort pair must not be persisted for reconnect.
+         (should-not (emagent-session-model-spec-pairs)))))))
+
+(defun emagent-test--claude-raw-options (current-model effort-values effort-current)
+  "Return raw Claude-style configOptions for stub responses.
+CURRENT-MODEL is the model currentValue; EFFORT-VALUES nil omits the
+effort option entirely; EFFORT-CURRENT is its currentValue."
+  (let ((base
+         `[((id . "mode") (name . "Mode") (category . "mode")
+            (type . "select") (currentValue . "default")
+            (options . [((value . "default") (name . "Default"))
+                        ((value . "plan") (name . "Plan"))]))
+           ((id . "model") (name . "Model") (category . "model")
+            (type . "select") (currentValue . ,current-model)
+            (options . [((value . "fable[1m]") (name . "Fable"))
+                        ((value . "haiku") (name . "Haiku"))
+                        ((value . "sonnet") (name . "Sonnet"))]))]))
+    (if (null effort-values)
+        base
+      (vconcat
+       base
+       `[((id . "effort") (name . "Effort") (category . "thought_level")
+          (type . "select") (currentValue . ,effort-current)
+          (options . ,(vconcat
+                       (mapcar (lambda (v)
+                                 `((value . ,v) (name . ,(capitalize v))))
+                               effort-values))))]))))
+
+(defun emagent-test--claude-probe-request-sender (sent)
+  "Return an `emagent-acp--send-request' mock for Claude catalog probing.
+SENT is a cons cell whose car accumulates (CONFIG-ID . VALUE) pairs."
+  (cl-function
+   (lambda (&key request on-success &allow-other-keys)
+     (let* ((params (map-elt request :params))
+            (config-id (map-elt params 'configId))
+            (value (map-elt params 'value)))
+       (setcar sent (cons (cons config-id value) (car sent)))
+       (funcall
+        on-success
+        `((configOptions
+           . ,(pcase (cons config-id value)
+                ('("model" . "haiku")
+                 (emagent-test--claude-raw-options "haiku" nil nil))
+                ('("model" . "sonnet")
+                 (emagent-test--claude-raw-options
+                  "sonnet" '("default" "low" "high") "default"))
+                ('("model" . "fable[1m]")
+                 (emagent-test--claude-raw-options
+                  "fable[1m]" '("default" "low" "high" "xhigh") "default"))
+                (_
+                 (emagent-test--claude-raw-options
+                  "fable[1m]" '("default" "low" "high" "xhigh") "high"))))))))))
+
+(ert-deftest emagent-acp-session-test-claude-probe-model-catalog ()
+  "Probing builds per-model siblings and restores the original state."
+  (let ((state (emagent-test--make-acp-state))
+        (sent (cons nil nil))
+        (result 'unset))
+    (setf (emagent-acp-state-session-id state) "sess")
+    (emagent-acp--save-config-options
+     state
+     (emagent-test--claude-raw-options
+      "fable[1m]" '("default" "low" "high" "xhigh") "high"))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--send-request)
+          (emagent-test--claude-probe-request-sender sent))
+         ((symbol-function 'emagent-acp--notify-user)
+          (lambda (&rest _args) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line)
+          (lambda (&rest _args) nil)))
+      (emagent-acp--claude-probe-model-catalog
+       state (lambda (catalog) (setq result catalog))))
+    (should (listp result))
+    (should (= 3 (length result)))
+    (let ((fable (seq-find (lambda (e) (equal "fable[1m]" (map-elt e :value)))
+                           result))
+          (haiku (seq-find (lambda (e) (equal "haiku" (map-elt e :value)))
+                           result))
+          (sonnet (seq-find (lambda (e) (equal "sonnet" (map-elt e :value)))
+                            result)))
+      ;; Current model's siblings come from the pristine snapshot.
+      (should (= 4 (length (map-elt (car (map-elt fable :config-options))
+                                    :options))))
+      (should (null (map-elt haiku :config-options)))
+      (should (= 3 (length (map-elt (car (map-elt sonnet :config-options))
+                                    :options)))))
+    ;; Probes for the two non-current models, then a restore of model+effort
+    ;; (the last probed response left the session on sonnet/effort default).
+    (let ((calls (nreverse (car sent))))
+      (should (equal '(("model" . "haiku")
+                       ("model" . "sonnet")
+                       ("model" . "fable[1m]")
+                       ("effort" . "high"))
+                     calls)))
+    ;; From-catalog rows: fable 4 efforts, sonnet 3, haiku bare = 8 rows.
+    (let ((rows (emagent-acp--model-variant-choices-from-catalog result)))
+      (should (= 8 (length rows)))
+      (should (seq-find (lambda (row)
+                          (equal '(("model" . "haiku"))
+                                 (cdr row)))
+                        rows))
+      (should-not (seq-find (lambda (row)
+                              (and (equal "sonnet"
+                                          (cdr (assoc "model" (cdr row) #'equal)))
+                                   (equal "xhigh"
+                                          (cdr (assoc "effort" (cdr row) #'equal)))))
+                            rows)))))
+
+(ert-deftest emagent-acp-session-test-claude-probe-requires-idle ()
+  "Probing is skipped when a prompt is in flight."
+  (let ((state (emagent-test--make-acp-state))
+        (result 'unset))
+    (setf (emagent-acp-state-session-id state) "sess")
+    (setf (emagent-acp-state-busy state) t)
+    (emagent-acp--save-config-options
+     state
+     (emagent-test--claude-raw-options
+      "fable[1m]" '("default" "high") "high"))
+    (emagent-acp--claude-probe-model-catalog
+     state (lambda (catalog) (setq result catalog)))
+    (should (null result))))
+
+(ert-deftest emagent-acp-session-test-config-values-diff-spec ()
+  (let ((state (emagent-test--make-acp-state)))
+    (emagent-acp--save-config-options
+     state
+     (emagent-test--claude-raw-options "haiku" nil nil))
+    ;; Snapshot from a different model with an effort option that has since
+    ;; vanished: model differs, mode matches, effort is kept (option gone).
+    (should (equal '(("model" . "fable[1m]") ("effort" . "high"))
+                   (emagent-acp--config-values-diff-spec
+                    state
+                    '(("mode" . "default")
+                      ("model" . "fable[1m]")
+                      ("effort" . "high")))))))
+
+(ert-deftest emagent-acp-session-test-set-spec-model-failure-aborts ()
+  "A failing model pair aborts the spec via on-failure."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let ((state (emagent-test--make-acp-state nil buffer))
+           (succeeded nil)
+           (failed nil))
+       (setf (emagent-acp-state-config-options state)
+             (copy-tree emagent-test--set-spec-config-options))
+       (emagent-test--with-mocks
+           (((symbol-function 'emagent-acp--send-request)
+             (emagent-test--set-spec-request-sender '("model")))
+            ((symbol-function 'emagent-acp--notify-user)
+             (lambda (&rest _args) nil)))
+         (emagent-acp--config-option-set-spec
+          :state state
+          :session-id "sess"
+          :spec '(("model" . "haiku") ("effort" . "high"))
+          :on-success (lambda () (setq succeeded t))
+          :on-failure (lambda () (setq failed t))))
+       (should failed)
+       (should-not succeeded)))))
+
 ;;;; Filesystem handlers
 
 (ert-deftest emagent-acp-session-test-on-fs-read ()

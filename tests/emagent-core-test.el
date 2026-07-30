@@ -190,6 +190,73 @@ the buffer.  Cookie housekeeping had the same bug when inserting."
          (when (buffer-live-p buf) (kill-buffer buf))
          (when (file-exists-p file) (delete-file file)))))))
 
+(ert-deftest emagent-core-test-probe-claude-model-catalog ()
+  "The startup Claude probe switches models and collects per-model siblings."
+  (let* ((response
+          '((sessionId . "sess")
+            (configOptions
+             . [((id . "mode") (category . "mode") (type . "select")
+                 (currentValue . "default")
+                 (options . [((value . "default") (name . "Default"))]))
+                ((id . "model") (category . "model") (type . "select")
+                 (currentValue . "fable[1m]")
+                 (options . [((value . "fable[1m]") (name . "Fable"))
+                             ((value . "haiku") (name . "Haiku"))]))
+                ((id . "effort") (category . "thought_level") (type . "select")
+                 (currentValue . "high")
+                 (options . [((value . "default") (name . "Default"))
+                             ((value . "high") (name . "High"))]))])))
+         (sent nil)
+         (catalog
+          (emagent-test--with-mocks
+              (((symbol-function 'emagent-acp-send-request)
+                (cl-function
+                 (lambda (&key request &allow-other-keys)
+                   (push (map-elt (map-elt request :params) 'value) sent)
+                   ;; Haiku has no effort option.
+                   '((configOptions
+                      . [((id . "model") (category . "model") (type . "select")
+                          (currentValue . "haiku")
+                          (options . [((value . "fable[1m]") (name . "Fable"))
+                                      ((value . "haiku") (name . "Haiku"))]))]))))))
+            (emagent--probe-claude-model-catalog nil response))))
+    (should (equal '("haiku") sent))
+    (should (= 2 (length catalog)))
+    (let ((fable (seq-find (lambda (e) (equal "fable[1m]" (map-elt e :value)))
+                           catalog))
+          (haiku (seq-find (lambda (e) (equal "haiku" (map-elt e :value)))
+                           catalog)))
+      (should (equal "effort"
+                     (map-elt (car (map-elt fable :config-options)) :id)))
+      (should (null (map-elt haiku :config-options))))
+    (let ((rows (emagent-acp--model-variant-choices-from-catalog catalog)))
+      ;; fable: default+high effort rows; haiku: bare row.
+      (should (= 3 (length rows))))))
+
+(ert-deftest emagent-core-test-existing-buffer-agent ()
+  "An existing session buffer pins the startup picker to its agent."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer dir)
+     (with-current-buffer buffer
+       (emagent-session-set-agent 'claude))
+     (should (eq buffer (emagent-chat-find-project-buffer dir)))
+     (should (eq 'claude (emagent--existing-buffer-agent dir)))
+     (should-not (emagent--existing-buffer-agent
+                  "/nonexistent/emagent-test-dir")))))
+
+(ert-deftest emagent-core-test-chat-open-reuses-project-buffer ()
+  "`emagent-chat-open' returns the existing buffer for a project."
+  (emagent-test--with-temp-project
+   (lambda (dir)
+     (let (b1 b2)
+       (unwind-protect
+           (progn
+             (setq b1 (emagent-chat-open :project-dir dir)
+                   b2 (emagent-chat-open :project-dir dir))
+             (should (eq b1 b2)))
+         (when (buffer-live-p b1) (kill-buffer b1))
+         (when (buffer-live-p b2) (kill-buffer b2)))))))
+
 (provide 'emagent-core-test)
 
 ;;; emagent-core-test.el ends here

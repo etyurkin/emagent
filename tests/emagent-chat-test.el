@@ -319,6 +319,57 @@ signal), so finalizing a response containing one does not crash."
   (should (string= "grok-4.3[context=200k]"
                    (emagent-model-canonical-id "grok-4.3[context=200k]"))))
 
+(ert-deftest emagent-chat-test-model-link-keeps-brackets ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (emagent-session-set-agent 'cursor)
+       (let ((link (emagent-chat--model-link "grok-4.3[context=200k]")))
+         (should (string-match-p "context=200k" link))
+         (should-not (string-match-p "\\[\\[emagent://cursor/grok-4.3\\]\\]"
+                                     link)))))))
+
+(ert-deftest emagent-chat-test-model-link-variant-query-roundtrip ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (emagent-session-set-agent 'cursor)
+       (let* ((spec '(("model" . "grok-4.5")
+                      ("effort" . "low")
+                      ("fast" . "true")))
+              (link (emagent-chat--model-link
+                     "grok-4.5" "grok-4.5 [Low] [Fast]" spec))
+              (path (progn
+                      (should (string-match emagent-chat--model-link-re link))
+                      (match-string 1 link)))
+              (parsed (emagent-chat--model-link-parse-path path)))
+         (should (string-match-p "effort=low" link))
+         (should (string-match-p "fast=true" link))
+         (should (string-match-p "(Low)" link))
+         (should (string= "grok-4.5" (car parsed)))
+         (should (equal spec (cdr parsed))))))))
+
+(ert-deftest emagent-chat-test-region-turn-apply-spec-from-link ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (emagent-session-set-agent 'cursor)
+       (let* ((spec '(("model" . "grok-4.5")
+                      ("effort" . "high")))
+              (link (emagent-chat--model-link
+                     "grok-4.5" "grok-4.5 [High]" spec)))
+         (insert "* user> " link " hello\n")
+         (goto-char (point-min))
+         (should (string= "grok-4.5"
+                          (emagent-chat--region-turn-model
+                           (point-min) (point-max))))
+         (should (equal spec
+                        (emagent-chat--region-turn-apply-spec
+                         (point-min) (point-max))))
+         (should (string-empty-p
+                  (string-trim
+                   (emagent-chat--strip-model-links link)))))))))
+
 (ert-deftest emagent-chat-test-model-choice-label ()
   (should (string= "grok-4.3[context=200k]"
                    (emagent-model-choice-label
@@ -356,6 +407,29 @@ signal), so finalizing a response containing one does not crash."
        (should (string= "grok-4.3[context=200k]" (emagent-session-model)))
        (should (string= "grok-4.3" (emagent-chat-model-display)))))))
 
+(ert-deftest emagent-chat-test-model-spec-header-roundtrip ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (let ((spec '(("model" . "grok-4.5")
+                     ("effort" . "low")
+                     ("fast" . "true"))))
+         (emagent-chat-set-model "grok-4.5" spec)
+         (should (string-match-p "^#\\+EMAGENT_MODEL: grok-4\\.5$"
+                                 (buffer-string)))
+         (should (string-match-p
+                  "^#\\+EMAGENT_MODEL_SPEC: effort=low&fast=true$"
+                  (buffer-string)))
+         (should (equal '(("effort" . "low") ("fast" . "true"))
+                        (emagent-session-model-spec-pairs)))
+         (should (equal spec (emagent-session-model-apply-spec)))
+         (should (string= "grok-4.5[low][true]"
+                          (emagent-session-model-display)))
+         (emagent-session-set-model-spec nil)
+         (should-not (emagent-session-model-spec-pairs))
+         (should-not
+          (string-match-p "EMAGENT_MODEL_SPEC" (buffer-string))))))))
+
 (ert-deftest emagent-chat-test-mode-line-thinking ()
   (emagent-test--with-emagent-buffer
    (lambda (buffer _dir)
@@ -386,6 +460,20 @@ session present (the UI no longer pulls from the ACP layer)."
        (emagent-chat-set-status '(:ready t))
        (should-not (string-match-p "Thinking"
                                    (car (emagent-chat--mode-line-strings))))))))
+
+(ert-deftest emagent-chat-test-mode-line-connecting ()
+  "Connecting shows a Thinking-style busy head with a spinner."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (pop-to-buffer buffer)
+     (with-current-buffer buffer
+       (setq emagent-acp--session nil)
+       (emagent-chat-set-status '(:connecting t))
+       (let ((head (substring-no-properties
+                    (car (emagent-chat--mode-line-strings)))))
+         (should (string-match-p "^Connecting " head))
+         (should (string-match-p "●\\|○" head)))
+       (should (emagent-chat--spinner-active-p))))))
 
 (ert-deftest emagent-chat-test-mode-line-allow-no-spinner ()
   (emagent-test--with-busy-session
