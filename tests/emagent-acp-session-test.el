@@ -1530,6 +1530,139 @@ the emagent gate can show what was edited instead of a bare arrow line."
          ;; The skipped effort pair must not be persisted for reconnect.
          (should-not (emagent-session-model-spec-pairs)))))))
 
+(defun emagent-test--claude-raw-options (current-model effort-values effort-current)
+  "Return raw Claude-style configOptions for stub responses.
+CURRENT-MODEL is the model currentValue; EFFORT-VALUES nil omits the
+effort option entirely; EFFORT-CURRENT is its currentValue."
+  (let ((base
+         `[((id . "mode") (name . "Mode") (category . "mode")
+            (type . "select") (currentValue . "default")
+            (options . [((value . "default") (name . "Default"))
+                        ((value . "plan") (name . "Plan"))]))
+           ((id . "model") (name . "Model") (category . "model")
+            (type . "select") (currentValue . ,current-model)
+            (options . [((value . "fable[1m]") (name . "Fable"))
+                        ((value . "haiku") (name . "Haiku"))
+                        ((value . "sonnet") (name . "Sonnet"))]))]))
+    (if (null effort-values)
+        base
+      (vconcat
+       base
+       `[((id . "effort") (name . "Effort") (category . "thought_level")
+          (type . "select") (currentValue . ,effort-current)
+          (options . ,(vconcat
+                       (mapcar (lambda (v)
+                                 `((value . ,v) (name . ,(capitalize v))))
+                               effort-values))))]))))
+
+(defun emagent-test--claude-probe-request-sender (sent)
+  "Return an `emagent-acp--send-request' mock for Claude catalog probing.
+SENT is a cons cell whose car accumulates (CONFIG-ID . VALUE) pairs."
+  (cl-function
+   (lambda (&key request on-success &allow-other-keys)
+     (let* ((params (map-elt request :params))
+            (config-id (map-elt params 'configId))
+            (value (map-elt params 'value)))
+       (setcar sent (cons (cons config-id value) (car sent)))
+       (funcall
+        on-success
+        `((configOptions
+           . ,(pcase (cons config-id value)
+                ('("model" . "haiku")
+                 (emagent-test--claude-raw-options "haiku" nil nil))
+                ('("model" . "sonnet")
+                 (emagent-test--claude-raw-options
+                  "sonnet" '("default" "low" "high") "default"))
+                ('("model" . "fable[1m]")
+                 (emagent-test--claude-raw-options
+                  "fable[1m]" '("default" "low" "high" "xhigh") "default"))
+                (_
+                 (emagent-test--claude-raw-options
+                  "fable[1m]" '("default" "low" "high" "xhigh") "high"))))))))))
+
+(ert-deftest emagent-acp-session-test-claude-probe-model-catalog ()
+  "Probing builds per-model siblings and restores the original state."
+  (let ((state (emagent-test--make-acp-state))
+        (sent (cons nil nil))
+        (result 'unset))
+    (setf (emagent-acp-state-session-id state) "sess")
+    (emagent-acp--save-config-options
+     state
+     (emagent-test--claude-raw-options
+      "fable[1m]" '("default" "low" "high" "xhigh") "high"))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--send-request)
+          (emagent-test--claude-probe-request-sender sent))
+         ((symbol-function 'emagent-acp--notify-user)
+          (lambda (&rest _args) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line)
+          (lambda (&rest _args) nil)))
+      (emagent-acp--claude-probe-model-catalog
+       state (lambda (catalog) (setq result catalog))))
+    (should (listp result))
+    (should (= 3 (length result)))
+    (let ((fable (seq-find (lambda (e) (equal "fable[1m]" (map-elt e :value)))
+                           result))
+          (haiku (seq-find (lambda (e) (equal "haiku" (map-elt e :value)))
+                           result))
+          (sonnet (seq-find (lambda (e) (equal "sonnet" (map-elt e :value)))
+                            result)))
+      ;; Current model's siblings come from the pristine snapshot.
+      (should (= 4 (length (map-elt (car (map-elt fable :config-options))
+                                    :options))))
+      (should (null (map-elt haiku :config-options)))
+      (should (= 3 (length (map-elt (car (map-elt sonnet :config-options))
+                                    :options)))))
+    ;; Probes for the two non-current models, then a restore of model+effort
+    ;; (the last probed response left the session on sonnet/effort default).
+    (let ((calls (nreverse (car sent))))
+      (should (equal '(("model" . "haiku")
+                       ("model" . "sonnet")
+                       ("model" . "fable[1m]")
+                       ("effort" . "high"))
+                     calls)))
+    ;; From-catalog rows: fable 4 efforts, sonnet 3, haiku bare = 8 rows.
+    (let ((rows (emagent-acp--model-variant-choices-from-catalog result)))
+      (should (= 8 (length rows)))
+      (should (seq-find (lambda (row)
+                          (equal '(("model" . "haiku"))
+                                 (cdr row)))
+                        rows))
+      (should-not (seq-find (lambda (row)
+                              (and (equal "sonnet"
+                                          (cdr (assoc "model" (cdr row) #'equal)))
+                                   (equal "xhigh"
+                                          (cdr (assoc "effort" (cdr row) #'equal)))))
+                            rows)))))
+
+(ert-deftest emagent-acp-session-test-claude-probe-requires-idle ()
+  "Probing is skipped when a prompt is in flight."
+  (let ((state (emagent-test--make-acp-state))
+        (result 'unset))
+    (setf (emagent-acp-state-session-id state) "sess")
+    (setf (emagent-acp-state-busy state) t)
+    (emagent-acp--save-config-options
+     state
+     (emagent-test--claude-raw-options
+      "fable[1m]" '("default" "high") "high"))
+    (emagent-acp--claude-probe-model-catalog
+     state (lambda (catalog) (setq result catalog)))
+    (should (null result))))
+
+(ert-deftest emagent-acp-session-test-config-values-diff-spec ()
+  (let ((state (emagent-test--make-acp-state)))
+    (emagent-acp--save-config-options
+     state
+     (emagent-test--claude-raw-options "haiku" nil nil))
+    ;; Snapshot from a different model with an effort option that has since
+    ;; vanished: model differs, mode matches, effort is kept (option gone).
+    (should (equal '(("model" . "fable[1m]") ("effort" . "high"))
+                   (emagent-acp--config-values-diff-spec
+                    state
+                    '(("mode" . "default")
+                      ("model" . "fable[1m]")
+                      ("effort" . "high")))))))
+
 (ert-deftest emagent-acp-session-test-set-spec-model-failure-aborts ()
   "A failing model pair aborts the spec via on-failure."
   (emagent-test--with-emagent-buffer

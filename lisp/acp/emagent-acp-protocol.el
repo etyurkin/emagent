@@ -1114,59 +1114,175 @@ Never blocks the UI.  Callers that need a fresh catalog should use
       (setf (emagent-acp-state-model-catalog state) catalog))
     catalog))
 
-(defun emagent-acp--prefetch-model-catalog (state)
-  "Fetch Cursor per-model catalog for STATE asynchronously when needed."
-  (when (and state
-             (eq (emagent-acp--provider-symbol state) (quote cursor))
-             (null (emagent-acp-state-model-catalog state))
-             (emagent-acp-state-client state)
-             (not (emagent-acp-state-model-catalog-loading state)))
-    (setf (emagent-acp-state-model-catalog-loading state) t)
-    (emagent-acp-send-request
-     :client (emagent-acp-state-client state)
-     :request (emagent-acp-make-cursor-list-available-models-request)
-     :buffer (emagent-acp--chat-buffer state)
-     :on-success
-     (lambda (response)
-       (setf (emagent-acp-state-model-catalog-loading state) nil)
-       (emagent-acp--store-model-catalog state response)
-       (emagent-acp--refresh-mode-line state))
-     :on-failure
-     (lambda (&rest _)
-       (setf (emagent-acp-state-model-catalog-loading state) nil)
-       (emagent-acp--refresh-mode-line state)))))
+(defun emagent-acp--catalog-sibling-options (options)
+  "Return catalog-entry sibling OPTIONS (everything but model and mode)."
+  (cl-remove-if (lambda (option)
+                  (member (or (map-elt option :category) "")
+                          '("model" "mode")))
+                options))
+
+(defun emagent-acp--config-current-values (state)
+  "Return ((CONFIG-ID . CURRENT-VALUE) ...) for STATE's config options.
+Options without a string current value are omitted."
+  (delq nil
+        (mapcar (lambda (option)
+                  (let ((id (map-elt option :id))
+                        (value (map-elt option :current-value)))
+                    (when (and id (stringp value))
+                      (cons id value))))
+                (emagent-acp--config-options state))))
+
+(defun emagent-acp--config-values-diff-spec (state snapshot)
+  "Return SNAPSHOT pairs whose current value in STATE differs.
+Pairs whose option vanished from STATE are kept — setting the model
+back first (see `emagent-acp--order-apply-spec') re-creates them."
+  (cl-remove-if
+   (lambda (pair)
+     (let ((option (seq-find (lambda (opt)
+                               (equal (car pair) (map-elt opt :id)))
+                             (emagent-acp--config-options state))))
+       (and option (equal (map-elt option :current-value) (cdr pair)))))
+   snapshot))
+
+(defun emagent-acp--claude-probe-model-catalog (state on-done)
+  "Build a per-model variant catalog for STATE by probing each model.
+
+Claude's adapter advertises effort levels only for the current model and
+has no catalog endpoint, so switch the idle session through each
+advertised model, snapshot the sibling options each switch reveals, then
+restore the original model/effort/mode (diffed, so no-op sets are
+skipped).  Calls ON-DONE with a catalog in the shape of
+`emagent-acp--normalize-model-catalog', or nil when probing is not
+possible.  Aborts (and still restores) if a prompt starts mid-probe."
+  (let* ((model-option (emagent-acp--model-config-option state))
+         (config-id (and model-option (map-elt model-option :id)))
+         (values (and model-option
+                      (append (map-elt model-option :options) nil)))
+         (session-id (emagent-acp-state-session-id state))
+         (current (and model-option (map-elt model-option :current-value)))
+         (pristine (emagent-acp--config-current-values state))
+         (current-siblings (emagent-acp--catalog-sibling-options
+                            (emagent-acp--config-options state)))
+         (catalog nil)
+         (aborted nil))
+    (if (or (null config-id) (null session-id) (< (length values) 2)
+            (emagent-acp-state-busy state))
+        (funcall on-done nil)
+      (cl-labels
+          ((record (value name siblings)
+             (push `((:value . ,value)
+                     (:name . ,(or name value))
+                     (:config-options . ,siblings))
+                   catalog))
+           (finish ()
+             (let ((restore (emagent-acp--config-values-diff-spec
+                             state pristine))
+                   (deliver (lambda (ok)
+                              (funcall on-done
+                                       (and ok (not aborted)
+                                            (nreverse catalog))))))
+               (if (null restore)
+                   (funcall deliver t)
+                 (emagent-acp--config-option-set-spec
+                  :state state
+                  :session-id session-id
+                  :spec restore
+                  :persist nil
+                  :on-success (lambda () (funcall deliver t))
+                  :on-failure (lambda (&rest _) (funcall deliver nil))))))
+           (step (remaining)
+             (cond
+              ((null remaining) (finish))
+              ((emagent-acp-state-busy state)
+               (setq aborted t)
+               (finish))
+              (t
+               (let* ((entry (car remaining))
+                      (value (map-elt entry :value))
+                      (name (map-elt entry :name)))
+                 (cond
+                  ((or (not (stringp value)) (string-empty-p value))
+                   (step (cdr remaining)))
+                  ((equal value current)
+                   (record value name current-siblings)
+                   (step (cdr remaining)))
+                  (t
+                   (emagent-acp--send-request
+                    :state state
+                    :request
+                    (emagent-acp-make-session-set-config-option-request
+                     :session-id session-id
+                     :config-id config-id
+                     :value value)
+                    :on-success
+                    (lambda (response)
+                      (when (map-elt response 'configOptions)
+                        (emagent-acp--save-config-options
+                         state (map-elt response 'configOptions)))
+                      (record value name
+                              (emagent-acp--catalog-sibling-options
+                               (emagent-acp--config-options state)))
+                      (step (cdr remaining)))
+                    :on-failure
+                    (lambda (&rest _) (step (cdr remaining)))))))))))
+        (step values)))))
+
+(defun emagent-acp--prefetch-model-catalog (state &optional on-done)
+  "Fetch the per-model catalog for STATE asynchronously when needed.
+
+Cursor: cursor/list_available_models.  Claude: probe model switches
+\(see `emagent-acp--claude-probe-model-catalog').  Always calls ON-DONE
+\(when non-nil) once finished, including when there is nothing to fetch."
+  (let* ((provider (and state (emagent-acp--provider-symbol state)))
+         (fetchable (and state
+                         (memq provider '(cursor claude))
+                         (null (emagent-acp-state-model-catalog state))
+                         (emagent-acp-state-client state)
+                         (not (emagent-acp-state-model-catalog-loading state))))
+         (done (lambda ()
+                 (setf (emagent-acp-state-model-catalog-loading state) nil)
+                 (emagent-acp--refresh-mode-line state)
+                 (when on-done (funcall on-done)))))
+    (if (not fetchable)
+        (when on-done (funcall on-done))
+      (setf (emagent-acp-state-model-catalog-loading state) t)
+      (pcase provider
+        ('cursor
+         (emagent-acp-send-request
+          :client (emagent-acp-state-client state)
+          :request (emagent-acp-make-cursor-list-available-models-request)
+          :buffer (emagent-acp--chat-buffer state)
+          :on-success
+          (lambda (response)
+            (emagent-acp--store-model-catalog state response)
+            (funcall done))
+          :on-failure
+          (lambda (&rest _) (funcall done))))
+        ('claude
+         (emagent-acp--claude-probe-model-catalog
+          state
+          (lambda (catalog)
+            (when catalog
+              (setf (emagent-acp-state-model-catalog state) catalog))
+            (funcall done))))))))
 
 (defun emagent-acp--with-model-variant-choices (state models on-done)
   "Call ON-DONE with flat variant choices for STATE and MODELS.
 
-ON-DONE receives ((LABEL . SPEC) ...).  Loads the Cursor catalog
+ON-DONE receives ((LABEL . SPEC) ...).  Loads the per-model catalog
 asynchronously when needed instead of blocking the UI."
   (let ((deliver
          (lambda ()
            (funcall on-done
                     (emagent-acp--model-variant-choices state models)))))
     (if (or (emagent-acp--ensure-model-catalog state)
-            (not (eq (emagent-acp--provider-symbol state) (quote cursor)))
-            (null (and state (emagent-acp-state-client state))))
+            (not (memq (and state (emagent-acp--provider-symbol state))
+                       '(cursor claude)))
+            (null (and state (emagent-acp-state-client state)))
+            (emagent-acp-state-model-catalog-loading state))
         (funcall deliver)
-      (progn
-        (emagent-acp--progress state "loading models...")
-        (setf (emagent-acp-state-model-catalog-loading state) t)
-        (emagent-acp-send-request
-         :client (emagent-acp-state-client state)
-         :request (emagent-acp-make-cursor-list-available-models-request)
-         :buffer (emagent-acp--chat-buffer state)
-         :on-success
-         (lambda (response)
-           (setf (emagent-acp-state-model-catalog-loading state) nil)
-           (emagent-acp--store-model-catalog state response)
-           (emagent-acp--refresh-mode-line state)
-           (funcall deliver))
-         :on-failure
-         (lambda (&rest _)
-           (setf (emagent-acp-state-model-catalog-loading state) nil)
-           (emagent-acp--refresh-mode-line state)
-           (funcall deliver)))))))
+      (emagent-acp--progress state "loading models...")
+      (emagent-acp--prefetch-model-catalog state deliver))))
 
 (defun emagent-acp--model-variant-choices (state &optional models)
   "Return flat ((LABEL . SPEC) ...) for interactive model pickers.
@@ -1222,15 +1338,22 @@ single-pair SPECs keyed by the model config id when known."
     (if model-pair (cons model-pair rest) spec)))
 
 (defun emagent-acp--snapshot-config-values (state spec)
-  "Return ((CONFIG-ID . CURRENT-VALUE) ...) for CONFIG-IDs in SPEC from STATE."
-  (mapcar
-   (lambda (pair)
-     (let* ((config-id (car pair))
-            (option (seq-find (lambda (opt)
-                                (equal config-id (map-elt opt :id)))
-                              (emagent-acp--config-options state))))
-       (cons config-id (and option (map-elt option :current-value)))))
-   spec))
+  "Return ((CONFIG-ID . CURRENT-VALUE) ...) for CONFIG-IDs in SPEC from STATE.
+
+Config ids that are absent from STATE's options (or have no string
+current value) are omitted — restoring them is impossible and a nil
+value would break the set request."
+  (delq nil
+        (mapcar
+         (lambda (pair)
+           (let* ((config-id (car pair))
+                  (option (seq-find (lambda (opt)
+                                      (equal config-id (map-elt opt :id)))
+                                    (emagent-acp--config-options state)))
+                  (value (and option (map-elt option :current-value))))
+             (when (stringp value)
+               (cons config-id value))))
+         spec)))
 
 (defun emagent-acp--model-available-p (model-id state models)
   
@@ -1449,15 +1572,24 @@ Arguments: STATE, SESSION-ID, SPEC, ON-SUCCESS, ON-FAILURE."
 (defun emagent-acp--finish-configure-model (state session-id on-ready resumed)
   "Finish model configuration and mark the session ready.
 
+Cursor's catalog fetch is read-only, so it runs in the background.
+Claude's catalog probe switches the session model back and forth, so
+ready is deferred until the probe has restored the session — a prompt
+sent mid-probe would otherwise run on a probed model.
+
 Arguments: STATE, SESSION-ID, ON-READY, RESUMED."
   (unless (fboundp (quote emagent-acp--session-ready))
     (require (quote emagent-acp)))
-  (emagent-acp--prefetch-model-catalog state)
-  (emagent-acp--session-ready
-   :state state
-   :session-id session-id
-   :on-ready on-ready
-   :resumed resumed))
+  (let ((ready (lambda ()
+                 (emagent-acp--session-ready
+                  :state state
+                  :session-id session-id
+                  :on-ready on-ready
+                  :resumed resumed))))
+    (if (eq (emagent-acp--provider-symbol state) 'claude)
+        (emagent-acp--prefetch-model-catalog state ready)
+      (emagent-acp--prefetch-model-catalog state)
+      (funcall ready))))
 
 (cl-defun emagent-acp--configure-model (&key state session-id response on-ready resumed)
   "Apply saved/pending model config after session/new or session/load.

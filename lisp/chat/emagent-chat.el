@@ -4658,22 +4658,35 @@ Run \\[emagent-mode] to reconnect a saved session."
     (interactive "P")
     (emagent-mode-entry arg)))
 
+(defun emagent-chat-find-project-buffer (project-dir)
+  "Return the first live emagent buffer whose project is PROJECT-DIR, or nil."
+  (let ((dir (file-name-as-directory (expand-file-name project-dir))))
+    (seq-find
+     (lambda (buffer)
+       (with-current-buffer buffer
+         (when-let ((project (emagent-session-project-directory)))
+           (equal dir (file-name-as-directory (expand-file-name project))))))
+     (emagent-chat--buffers))))
+
 (cl-defun emagent-chat-open (&key project-dir)
   "Open or create an emagent buffer for PROJECT-DIR.
 
-Buffer names look like *emagent myproj* from a short cwd label.
+An existing emagent buffer for PROJECT-DIR is reused — one session per
+project; a fresh `M-x emagent' must not silently spawn a second buffer.
+New buffer names look like *emagent myproj* from a short cwd label.
 PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
   (unless project-dir
     (user-error "PROJECT-DIR is required"))
   (let* ((dir (expand-file-name project-dir))
+         (existing (emagent-chat-find-project-buffer dir))
          (label (emagent-chat--short-cwd-label dir))
          (slug (emagent-chat--sanitize-slug label))
-         (buffer-name (emagent-chat--buffer-name-for-label label))
-         (buffer (get-buffer-create buffer-name)))
+         (buffer (or existing
+                     (get-buffer-create
+                      (emagent-chat--buffer-name-for-label label)))))
     (with-current-buffer buffer
       (unless (eq major-mode 'emagent-mode)
         (emagent-mode-force))
-      (rename-buffer buffer-name t)
       (setq emagent-chat-slug slug
             emagent-chat-session-id (or emagent-chat-session-id
                                         (emagent-session-store-read-session-property)))

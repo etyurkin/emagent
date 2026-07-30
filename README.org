@@ -111,10 +111,18 @@ Sent to the agent (may compress/reset the ACP session):
 advertised variant.  For Cursor, emagent advertises
 =_meta.parameterizedModelPicker= and expands each model with its own
 parameter selects from =cursor/list_available_models= (effort, fast,
-context, thinking, …).  Other agents still use bracketed model ids and/or
-global =model_config= / =thought_level= rows.  Type part of a model name to
-narrow the list.  Reconnect the session after upgrading so Cursor picks up
-the capability.
+context, thinking, …).  For Claude, whose adapter only reports effort
+levels for the current model, emagent probes each model once at connect
+\(switching the idle session through the model list and restoring it) so
+every row shows exactly the effort levels that model supports.  Other
+agents use bracketed model ids and/or global =model_config= /
+=thought_level= rows.  Type part of a model name to narrow the list.
+Reconnect the session after upgrading so Cursor picks up the capability.
+
+=M-x emagent= reuses the project's existing session buffer instead of
+creating a second one; with an existing buffer the picker is limited to
+that buffer's agent (a session cannot change agents), and picking a
+variant applies it to the live session.
 =/model= inserts an Org link (=[[emagent://AGENT/MODEL][label]]=).  Emagent
 runs that turn on the chosen model, shows a ~** Thinking (model)~ heading,
 then restores the buffer model.  Delete the link to cancel.  On failure,
