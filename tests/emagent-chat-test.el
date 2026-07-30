@@ -397,6 +397,20 @@ session present (the UI no longer pulls from the ACP layer)."
        (should-not (string-match-p "Thinking"
                                    (car (emagent-chat--mode-line-strings))))))))
 
+(ert-deftest emagent-chat-test-mode-line-connecting ()
+  "Connecting shows a Thinking-style busy head with a spinner."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (pop-to-buffer buffer)
+     (with-current-buffer buffer
+       (setq emagent-acp--session nil)
+       (emagent-chat-set-status '(:connecting t))
+       (let ((head (substring-no-properties
+                    (car (emagent-chat--mode-line-strings)))))
+         (should (string-match-p "^Connecting " head))
+         (should (string-match-p "●\\|○" head)))
+       (should (emagent-chat--spinner-active-p))))))
+
 (ert-deftest emagent-chat-test-mode-line-allow-no-spinner ()
   (emagent-test--with-busy-session
    (lambda ()

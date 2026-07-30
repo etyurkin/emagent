@@ -1376,8 +1376,12 @@ the emagent gate can show what was edited instead of a bare arrow line."
             ((:id . "thought") (:category . "thought_level") (:type . "select")
              (:options . (((:value . "off") (:name . "Off"))
                           ((:value . "on") (:name . "On")))))))
-         (rows (emagent-acp--model-variant-choices-from-options options)))
-    (should (= 8 (length rows)))
+         (rows (emagent-acp--model-variant-choices-from-options options))
+         (labels (mapcar (lambda (row) (substring-no-properties (car row)))
+                         rows)))
+    ;; Off is filtered from thought_level, leaving 2x2x1 = 4 rows.
+    (should (= 4 (length rows)))
+    (should-not (seq-find (lambda (l) (string-match-p "Off" l)) labels))
     (let* ((label (substring-no-properties (caar rows)))
            (spec (cdar rows)))
       (should (string-match-p "\\[" label))
@@ -1400,7 +1404,7 @@ the emagent gate can show what was edited instead of a bare arrow line."
     (should (seq-every-p (lambda (row) (= 1 (length (cdr row)))) rows))))
 
 (ert-deftest emagent-acp-session-test-variant-choices-from-catalog ()
-  "Per-model catalog expands each model with its own parameter selects."
+  "Per-model catalog expands each model; Off/false boolean values are omitted."
   (let* ((catalog
           (emagent-acp--normalize-model-catalog
            '[((value . "grok-4.5")
@@ -1429,9 +1433,11 @@ the emagent gate can show what was edited instead of a bare arrow line."
                                  (equal "composer-2.5"
                                         (cdr (assoc "model" (cdr row) #'equal))))
                                rows)))
-    (should (= 6 (length rows)))
-    (should (= 4 (length grok)))
-    (should (= 2 (length composer)))
+    ;; Off/false is filtered: grok = 2 effort x Fast, composer = Fast only.
+    (should (= 3 (length rows)))
+    (should (= 2 (length grok)))
+    (should (= 1 (length composer)))
+    (should-not (seq-find (lambda (l) (string-match-p "Off" l)) labels))
     (should (seq-find (lambda (l) (string-match-p "Low" l)) labels))
     (let* ((label (seq-find (lambda (l)
                               (and (string-match-p "Grok" l)

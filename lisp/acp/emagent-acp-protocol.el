@@ -92,7 +92,7 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
   ;; After cursor/create_plan accept: follow-up Build turn
   plan-build-prompt plan-build-timer
   ;; Cursor parameterized model catalog (cursor/list_available_models).
-  model-catalog
+  model-catalog model-catalog-loading
   ;; Session mode (ACP modes / current_mode_update); kept last for hot-reload.
   session-mode-id available-modes)
 
@@ -452,24 +452,28 @@ Arguments: STATE."
 Built entirely from STATE so it does not depend on the current buffer; the UI
 renders from this snapshot instead of pulling session state back out of the ACP
 layer (see `emagent-chat-set-status')."
-  (let ((usage (emagent-acp-state-usage state)))
-    (list :busy (and (emagent-acp-state-busy state) t)
+  (let ((usage (emagent-acp-state-usage state))
+        (ready (and (emagent-acp-state-ready state) t))
+        (busy (and (emagent-acp-state-busy state) t)))
+    (list :busy busy
           :waiting-permission (and (emagent-acp--permission-pending-p state) t)
-          :ready (and (emagent-acp-state-ready state) t)
+          :ready ready
+          :connecting (and (not ready)
+                           (not busy)
+                           (emagent-acp--connecting-p)
+                           t)
           :prompt-finishing (and (emagent-acp-state-prompt-finishing state) t)
           :tool (emagent-acp-state-current-tool state)
           :tool-kind (emagent-acp-state-current-tool-kind state)
           :rss (emagent-acp-state-agent-rss state)
           :emacs-rss (emagent-acp--emacs-rss-mb)
-          :model-id (and (emagent-acp-state-ready state)
-                         (emagent-acp--current-model-id state nil))
+          :model-id (and ready (emagent-acp--current-model-id state nil))
           :ctx-usage (when-let ((used (and usage (map-elt usage :context-used)))
                                 (size (map-elt usage :context-size)))
                        (cons used size))
           :total-tokens (and usage (map-elt usage :total-tokens))
           :cost-usd (and usage (map-elt usage :cost-usd))
-          :ctx-unavailable (and (or (emagent-acp-state-busy state)
-                                    (emagent-acp-state-ready state))
+          :ctx-unavailable (and (or busy ready)
                                 (emagent-acp--provider-context-usage-unavailable-p
                                  state))
           :mode-id (emagent-acp-state-session-mode-id state))))
@@ -866,15 +870,25 @@ over legacy `models'."
                          (emagent-acp--cartesian-product (cdr lists))))
                (car lists))))
 
+(defun emagent-acp--variant-off-display-p (display)
+  "Return non-nil when DISPLAY is an Off/false boolean parameter label."
+  (let ((text (downcase (string-trim (or display "")))))
+    (member text '("off" "false"))))
+
 (defun emagent-acp--variant-row-label (model-value model-name sibling-cells)
   "Return a faced picker label for MODEL-VALUE, MODEL-NAME, and SIBLING-CELLS.
 
 SIBLING-CELLS are ((DISPLAY . _) ...) whose DISPLAY strings are shown in
-brackets after the model label for filterability."
+brackets after the model label for filterability.  Off/false boolean
+displays are omitted so rows match Cursor's flat list (no [Off])."
   (let* ((base (emagent-model-choice-label-display model-value model-name))
+         (shown (cl-remove-if
+                 (lambda (cell)
+                   (emagent-acp--variant-off-display-p (car cell)))
+                 sibling-cells))
          (extra (mapconcat (lambda (cell)
                              (format "[%s]" (car cell)))
-                           sibling-cells
+                           shown
                            " ")))
     (if (string-empty-p extra)
         base
@@ -897,7 +911,8 @@ brackets after the model label for filterability."
 (defun emagent-acp--compose-variant-rows (model-option sibling-options)
   "Return cartesian ((LABEL . SPEC) ...) for MODEL-OPTION × SIBLING-OPTIONS.
 
-When the product would exceed
+Off/false boolean parameter values are omitted from the product so the
+picker matches Cursor (no [Off] rows).  When the product would exceed
 `emagent-acp--model-variant-product-cap', fall back to model-only rows."
   (let* ((model-id (map-elt model-option :id))
          (model-cells
@@ -908,18 +923,29 @@ When the product would exceed
                           :display nil))
                   (map-elt model-option :options)))
          (sibling-lists
-          (mapcar
-           (lambda (option)
-             (mapcar (lambda (value)
-                       (list :config-id (map-elt option :id)
-                             :value (map-elt value :value)
-                             :name (map-elt value :name)
-                             :display (or (map-elt value :name)
-                                          (map-elt value :value))))
-                     (map-elt option :options)))
-           sibling-options))
+          (delq nil
+                (mapcar
+                 (lambda (option)
+                   (let ((values
+                          (cl-remove-if
+                           (lambda (value)
+                             (emagent-acp--variant-off-display-p
+                              (or (map-elt value :name)
+                                  (map-elt value :value))))
+                           (map-elt option :options))))
+                     (when values
+                       (mapcar (lambda (value)
+                                 (list :config-id (map-elt option :id)
+                                       :value (map-elt value :value)
+                                       :name (map-elt value :name)
+                                       :display (or (map-elt value :name)
+                                                    (map-elt value :value))))
+                               values))))
+                 sibling-options)))
          (product-size
-          (cl-reduce #'* (mapcar #'length (cons model-cells sibling-lists))
+          (cl-reduce (function *)
+                     (mapcar (function length)
+                             (cons model-cells sibling-lists))
                      :initial-value 1)))
     (if (> product-size emagent-acp--model-variant-product-cap)
         (progn
@@ -1065,27 +1091,74 @@ its own `model_config' / `thought_level' selects."
     (:params . ,(make-hash-table :test 'equal))))
 
 (defun emagent-acp--ensure-model-catalog (state)
-  "Return Cursor per-model catalog for STATE, fetching when needed.
+  "Return cached Cursor model catalog for STATE, or nil.
 
-Returns nil for non-Cursor providers or when the extension call fails."
-  (or (emagent-acp-state-model-catalog state)
-      (when (and state (eq (emagent-acp--provider-symbol state) 'cursor)
-                 (emagent-acp-state-client state))
-        (let ((catalog
-               (condition-case _err
-                   (emagent-acp--normalize-model-catalog
-                    (map-elt
-                     (emagent-acp-send-request
-                      :client (emagent-acp-state-client state)
-                      :request
-                      (emagent-acp-make-cursor-list-available-models-request)
-                      :buffer (emagent-acp--chat-buffer state)
-                      :sync t)
-                     'models))
-                 (error nil))))
-          (when catalog
-            (setf (emagent-acp-state-model-catalog state) catalog))
-          catalog))))
+Never blocks the UI.  Callers that need a fresh catalog should use
+`emagent-acp--with-model-variant-choices' or
+`emagent-acp--prefetch-model-catalog'."
+  (and state (emagent-acp-state-model-catalog state)))
+
+(defun emagent-acp--store-model-catalog (state response)
+  "Normalize and store cursor/list_available_models RESPONSE on STATE."
+  (let ((catalog (emagent-acp--normalize-model-catalog
+                  (map-elt response (quote models)))))
+    (when catalog
+      (setf (emagent-acp-state-model-catalog state) catalog))
+    catalog))
+
+(defun emagent-acp--prefetch-model-catalog (state)
+  "Fetch Cursor per-model catalog for STATE asynchronously when needed."
+  (when (and state
+             (eq (emagent-acp--provider-symbol state) (quote cursor))
+             (null (emagent-acp-state-model-catalog state))
+             (emagent-acp-state-client state)
+             (not (emagent-acp-state-model-catalog-loading state)))
+    (setf (emagent-acp-state-model-catalog-loading state) t)
+    (emagent-acp-send-request
+     :client (emagent-acp-state-client state)
+     :request (emagent-acp-make-cursor-list-available-models-request)
+     :buffer (emagent-acp--chat-buffer state)
+     :on-success
+     (lambda (response)
+       (setf (emagent-acp-state-model-catalog-loading state) nil)
+       (emagent-acp--store-model-catalog state response)
+       (emagent-acp--refresh-mode-line state))
+     :on-failure
+     (lambda (&rest _)
+       (setf (emagent-acp-state-model-catalog-loading state) nil)
+       (emagent-acp--refresh-mode-line state)))))
+
+(defun emagent-acp--with-model-variant-choices (state models on-done)
+  "Call ON-DONE with flat variant choices for STATE and MODELS.
+
+ON-DONE receives ((LABEL . SPEC) ...).  Loads the Cursor catalog
+asynchronously when needed instead of blocking the UI."
+  (let ((deliver
+         (lambda ()
+           (funcall on-done
+                    (emagent-acp--model-variant-choices state models)))))
+    (if (or (emagent-acp--ensure-model-catalog state)
+            (not (eq (emagent-acp--provider-symbol state) (quote cursor)))
+            (null (and state (emagent-acp-state-client state))))
+        (funcall deliver)
+      (progn
+        (emagent-acp--progress state "loading models...")
+        (setf (emagent-acp-state-model-catalog-loading state) t)
+        (emagent-acp-send-request
+         :client (emagent-acp-state-client state)
+         :request (emagent-acp-make-cursor-list-available-models-request)
+         :buffer (emagent-acp--chat-buffer state)
+         :on-success
+         (lambda (response)
+           (setf (emagent-acp-state-model-catalog-loading state) nil)
+           (emagent-acp--store-model-catalog state response)
+           (emagent-acp--refresh-mode-line state)
+           (funcall deliver))
+         :on-failure
+         (lambda (&rest _)
+           (setf (emagent-acp-state-model-catalog-loading state) nil)
+           (emagent-acp--refresh-mode-line state)
+           (funcall deliver)))))))
 
 (defun emagent-acp--model-variant-choices (state &optional models)
   "Return flat ((LABEL . SPEC) ...) for interactive model pickers.
@@ -1355,10 +1428,12 @@ Arguments: STATE, SESSION-ID, SPEC, ON-SUCCESS, ON-FAILURE."
         (setf (emagent-acp-state-session-mode-id state) mode-id)))))
 
 (defun emagent-acp--finish-configure-model (state session-id on-ready resumed)
-  
-  "Internal helper for STATE and SESSION-ID and ON-READY and RESUMED."
-  (unless (fboundp 'emagent-acp--session-ready)
-    (require 'emagent-acp))
+  "Finish model configuration and mark the session ready.
+
+Arguments: STATE, SESSION-ID, ON-READY, RESUMED."
+  (unless (fboundp (quote emagent-acp--session-ready))
+    (require (quote emagent-acp)))
+  (emagent-acp--prefetch-model-catalog state)
   (emagent-acp--session-ready
    :state state
    :session-id session-id

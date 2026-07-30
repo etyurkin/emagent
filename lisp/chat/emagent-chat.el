@@ -3007,8 +3007,10 @@ Arguments: LIT."
   (concat " " (emagent-chat--spinner-string)))
 
 (defun emagent-chat--spinner-active-p ()
-  "Return non-nil when the mode-line thinking spinner should animate."
-  (and (or (plist-get emagent-chat--status :busy) emagent-chat--send-pending)
+  "Return non-nil when the mode-line busy spinner should animate."
+  (and (or (plist-get emagent-chat--status :busy)
+           (plist-get emagent-chat--status :connecting)
+           emagent-chat--send-pending)
        (not (plist-get emagent-chat--status :waiting-permission))))
 
 (defun emagent-chat--spinner-animate-p (&optional buffer)
@@ -3113,8 +3115,9 @@ deferred org table alignment on the chat buffer until Emacs pegged CPU."
 (defvar-local emagent-chat--status nil
   "Plist snapshot of ACP session status, pushed by the ACP layer via :cb-status.
 
-Keys: :busy :waiting-permission :ready :prompt-finishing :tool :tool-kind :rss
-:emacs-rss :model-id :ctx-usage (a (USED . SIZE) cons or nil) :ctx-unavailable.
+Keys: :busy :waiting-permission :ready :connecting :prompt-finishing :tool
+:tool-kind :rss :emacs-rss :model-id :ctx-usage (a (USED . SIZE) cons or nil)
+:ctx-unavailable.
 The mode line renders from this snapshot so the UI never calls up into the ACP
 runtime.")
 
@@ -3145,9 +3148,11 @@ per-turn switches), otherwise the buffer's saved #+EMAGENT_MODEL."
 This is the ACP layer's downward entry point (wired as :cb-status); it replaces
 the mode line pulling session state back out of the ACP layer."
   (setq emagent-chat--status status)
-  (when (emagent-chat--stat :busy)
+  (when (or (emagent-chat--stat :busy)
+            (emagent-chat--stat :connecting))
     (emagent-chat--spinner-ensure-running))
-  (if (emagent-chat--stat :busy)
+  (if (or (emagent-chat--stat :busy)
+          (emagent-chat--stat :connecting))
       (emagent-chat--refresh-mode-line-soon)
     (emagent-chat--refresh-mode-line)))
 
@@ -3205,58 +3210,60 @@ the mode line pulling session state back out of the ACP layer."
   (let* ((busy  (emagent-chat--stat :busy))
          (waiting-permission (emagent-chat--stat :waiting-permission))
          (ready (emagent-chat--stat :ready))
+         (connecting (emagent-chat--stat :connecting))
          (tool  (emagent-chat--stat :tool))
          (kind  (emagent-chat--stat :tool-kind))
          (rss   (emagent-chat--stat :rss))
          (emacs-rss (emagent-chat--stat :emacs-rss))
-         (connected (or busy ready))
          (spinner (when (emagent-chat--spinner-animate-p)
                     (emagent-chat--mode-line-spinner-suffix)))
-         (busy-face '(bold mode-line-emphasis))
+         (busy-face (quote (bold mode-line-emphasis)))
          (head (cond
                 (waiting-permission
-                 (propertize "emagent:Allow?" 'face 'warning))
+                 (propertize "emagent:Allow?" (quote face) (quote warning)))
                 ((and (not busy) ready
                       (emagent-chat--open-response-p)
                       (not (emagent-chat--stat :prompt-finishing)))
-                 (propertize "emagent:stalled" 'face 'warning))
-                ((and busy tool (member kind '("write" "execute")))
-                 (concat (propertize "Executing" 'face busy-face)
+                 (propertize "emagent:stalled" (quote face) (quote warning)))
+                ((and busy tool (member kind (quote ("write" "execute"))))
+                 (concat (propertize "Executing" (quote face) busy-face)
                          spinner))
                 (emagent-chat--send-pending
                  (concat (propertize
                           (if emagent-chat--turn-model "Switching" "Preparing")
-                          'face busy-face)
+                          (quote face) busy-face)
                          spinner))
                 (busy
-                 (concat (propertize "Thinking" 'face busy-face)
+                 (concat (propertize "Thinking" (quote face) busy-face)
                          spinner))
-                (ready (propertize "emagent:Idle" 'face 'success))
-                (connected (propertize "emagent:connecting" 'face 'warning))
+                (connecting
+                 (concat (propertize "Connecting" (quote face) busy-face)
+                         spinner))
+                (ready (propertize "emagent:Idle" (quote face) (quote success)))
                 (t "emagent")))
          (model (emagent-chat-model-display))
-         (sep (propertize " | " 'face 'shadow))
+         (sep (propertize " | " (quote face) (quote shadow)))
          (model-str (when (and model (not (string-empty-p model)))
-                      (propertize model 'face 'shadow)))
+                      (propertize model (quote face) (quote shadow))))
          (mode-id (emagent-chat--stat :mode-id))
          (mode-str (when (and (stringp mode-id)
                               (not (string-empty-p mode-id))
-                              (not (member mode-id '("agent" "default"))))
-                     (propertize mode-id 'face 'shadow)))
+                              (not (member mode-id (quote ("agent" "default")))))
+                     (propertize mode-id (quote face) (quote shadow))))
          (context (emagent-chat--mode-line-context-usage))
          (tokens (emagent-chat--mode-line-token-usage))
          (mcp-bytes (emagent-chat--mode-line-mcp-bytes))
          (rss-str (when rss
                     (propertize (format "agent:%dMB" rss)
-                                'face (cond ((>= rss 1000) 'error)
-                                            ((>= rss 500)  'warning)
-                                            (t             'success)))))
+                                (quote face) (cond ((>= rss 1000) (quote error))
+                                            ((>= rss 500)  (quote warning))
+                                            (t             (quote success))))))
          (emacs-rss-str
           (when emacs-rss
             (propertize (format "emacs:%dMB" emacs-rss)
-                        'face (cond ((>= emacs-rss 1000) 'error)
-                                    ((>= emacs-rss 500)  'warning)
-                                    (t             'success)))))
+                        (quote face) (cond ((>= emacs-rss 1000) (quote error))
+                                    ((>= emacs-rss 500)  (quote warning))
+                                    (t             (quote success))))))
          (tail (concat (when model-str (concat sep model-str))
                        (when mode-str  (concat sep mode-str))
                        (when context   (concat sep (string-trim-left context)))
@@ -3857,22 +3864,29 @@ relative path, size in lines, and a short content preview."
 
 (defun emagent-chat--slash-model-apply-1 (bounds)
   "Prompt for a model and replace BOUNDS with the `/model' marker link."
-  (let* ((state emagent-acp--session)
-         (choices (and state (emagent-acp--model-variant-choices state nil))))
-    (cond
-     ((not choices)
-      (message "emagent: no models available yet — M-x emagent-connect"))
-     (t
-      (let* ((selection (emagent-acp--read-labeled-choice
-                         "Model for this turn: "
-                         (mapcar #'car choices)))
-             (spec (emagent-acp--choice-by-label selection choices))
-             (model-id (and spec (emagent-acp--spec-model-value spec state))))
-        (when model-id
-          (setq emagent-chat--turn-apply-spec spec)
-          (delete-region (car bounds) (cdr bounds))
-          (goto-char (car bounds))
-          (insert (emagent-chat--model-link model-id))))))))
+  (let ((state emagent-acp--session)
+        (buf (current-buffer)))
+    (emagent-acp--with-model-variant-choices
+     state nil
+     (lambda (choices)
+       (with-current-buffer buf
+         (cond
+          ((not choices)
+           (message "emagent: no models available yet -- M-x emagent-connect"))
+          (t
+           (let* ((selection (emagent-acp--read-labeled-choice
+                              "Model for this turn: "
+                              (mapcar (function car) choices)))
+                  (spec (emagent-acp--choice-by-label selection choices))
+                  (model-id (and spec (emagent-acp--spec-model-value spec state))))
+             (when model-id
+               (setq emagent-chat--turn-apply-spec spec)
+               (when (and (car bounds) (cdr bounds)
+                          (<= (cdr bounds) (point-max))
+                          (>= (car bounds) (point-min)))
+                 (delete-region (car bounds) (cdr bounds))
+                 (goto-char (car bounds))
+                 (insert (emagent-chat--model-link model-id))))))))))))
 
 (defun emagent-chat--slash-model-apply ()
   "Prompt for a model and replace the `/model' token with its marker link.

@@ -3996,30 +3996,36 @@ when non-nil (composed model_config / thought_level rows)."
 Offers a flat, filterable list of advertised model variants (including
 bracketed Cursor ids and composed model_config / thought_level rows)."
   (interactive)
-  (let* ((state (emagent-acp--session))
-         (session-id (emagent-acp-state-session-id state))
-         (choices (emagent-acp--model-variant-choices state nil))
-         (labels (mapcar #'car choices))
-         (selection (emagent-acp--read-labeled-choice
-                     "Set emagent model: "
-                     labels))
-         (spec (emagent-acp--choice-by-label selection choices))
-         (model-id (and spec (emagent-acp--spec-model-value spec state))))
-    (unless session-id
+  (let ((state (emagent-acp--session))
+        (buf (current-buffer)))
+    (unless state
       (user-error "No active session"))
-    (unless choices
-      (user-error "No models available"))
-    (unless spec
-      (user-error "Unknown model: %s" selection))
-    (when-let ((current (emagent-acp--current-model-id state nil)))
-      (when (and model-id (string= model-id current)
-                 (= (length spec) 1))
-        (user-error "Model already %s"
-                    (emagent-acp--model-display-name state nil model-id))))
-    (emagent-acp--config-option-set-spec
-     :state state
-     :session-id session-id
-     :spec spec)))
+    (emagent-acp--with-model-variant-choices
+     state nil
+     (lambda (choices)
+       (with-current-buffer buf
+         (let* ((session-id (emagent-acp-state-session-id state))
+                (labels (mapcar (function car) choices))
+                (selection (emagent-acp--read-labeled-choice
+                            "Set emagent model: "
+                            labels))
+                (spec (emagent-acp--choice-by-label selection choices))
+                (model-id (and spec (emagent-acp--spec-model-value spec state))))
+           (unless session-id
+             (user-error "No active session"))
+           (unless choices
+             (user-error "No models available"))
+           (unless spec
+             (user-error "Unknown model: %s" selection))
+           (when-let ((current (emagent-acp--current-model-id state nil)))
+             (when (and model-id (string= model-id current)
+                        (= (length spec) 1))
+               (user-error "Model already %s"
+                           (emagent-acp--model-display-name state nil model-id))))
+           (emagent-acp--config-option-set-spec
+            :state state
+            :session-id session-id
+            :spec spec)))))))
 
 (provide 'emagent-acp)
 ;;; emagent-acp.el ends here
