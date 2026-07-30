@@ -2,7 +2,7 @@
 
 ;; Author: Evgeniy Tyurkin <etyurkin@kwarks.org>
 ;; SPDX-License-Identifier: MIT
-;; Version: 1.3.0
+;; Version: 1.3.1
 ;; This file is part of emagent.
 ;;
 ;; Permission is hereby granted, free of charge, to any person obtaining a copy
