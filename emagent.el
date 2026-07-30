@@ -356,14 +356,18 @@ current buffer."
 (defun emagent--start-with-provider (provider project-dir connect &optional model-id _handshake)
   "Start emagent using PROVIDER in PROJECT-DIR.
 CONNECT non-nil connects the ACP session immediately.
-When MODEL-ID is non-nil, persist it before connecting."
-  (let ((buffer (emagent-chat-open :project-dir project-dir)))
+When MODEL-ID is non-nil, persist it before connecting.
+When `emagent--pending-config-spec' is set, also write
+#+EMAGENT_MODEL_SPEC so the variant is visible and restored."
+  (let ((buffer (emagent-chat-open :project-dir project-dir))
+        (spec (and (boundp 'emagent--pending-config-spec)
+                   emagent--pending-config-spec)))
     (with-current-buffer buffer
       (when (eq provider 'cursor)
         (kill-local-variable 'emagent-chat-cursor-acp-extra-args))
       (emagent-session-set-agent provider)
       (when (and model-id (not (string-empty-p model-id)))
-        (emagent-chat-set-model model-id))
+        (emagent-chat-set-model model-id spec))
       (if connect
           (let ((reveal (lambda () (pop-to-buffer buffer))))
             (emagent-acp-ensure-connected :on-reveal reveal))

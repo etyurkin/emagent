@@ -400,16 +400,32 @@ buffer signals \"Selecting deleted buffer\"."
     (with-current-buffer buf
       (emagent-session-model))))
 
-(defun emagent-acp--persist-model-id (state model-id)
-  
-  "Internal helper for STATE and MODEL-ID."
+(defun emagent-acp--saved-model-apply-spec (state)
+  "Return buffer apply-spec for STATE when sibling pairs are saved.
+
+Nil when there is no model or only a bare model id (no
+#+EMAGENT_MODEL_SPEC).  Used on reconnect to reapply effort/fast/etc."
+  (when-let ((buf (emagent-acp--chat-buffer state)))
+    (with-current-buffer buf
+      (when-let ((pairs (emagent-session-model-spec-pairs)))
+        (emagent-session-model-apply-spec)))))
+
+(cl-defun emagent-acp--persist-model-id (state model-id &key (spec nil spec-supplied))
+  "Persist MODEL-ID into the chat buffer for STATE.
+
+When :SPEC is supplied, write non-model pairs to #+EMAGENT_MODEL_SPEC,
+with nil clearing it.  When :SPEC is omitted, leave any saved sibling
+pairs unchanged so reconnect of a bare model id does not drop the
+variant."
   (when-let ((buf (emagent-acp--chat-buffer state)))
     (with-current-buffer buf
       (let ((was-modified (buffer-modified-p)))
         (unwind-protect
-            (emagent-session-set-model model-id)
+            (progn
+              (emagent-session-set-model model-id)
+              (when spec-supplied
+                (emagent-session-set-model-spec spec)))
           (set-buffer-modified-p was-modified)))))
-  ;; The status push from --refresh-mode-line re-renders the model label.
   (emagent-acp--refresh-mode-line state))
 
 (defun emagent-acp--current-model-id (state models)
@@ -854,13 +870,6 @@ over legacy `models'."
           (push option found))))
     (nreverse found)))
 
-(defun emagent-acp--model-option-values-bracketed-p (model-option)
-  "Return non-nil when any MODEL-OPTION value embeds bracket annotations."
-  (seq-some (lambda (value)
-              (let ((id (map-elt value :value)))
-                (and (stringp id) (string-match-p "\\[" id))))
-            (map-elt model-option :options)))
-
 (defun emagent-acp--cartesian-product (lists)
   "Return the cartesian product of LISTS as a list of lists."
   (if (null lists)
@@ -992,11 +1001,11 @@ picker matches Cursor (no [Off] rows).  When the product would exceed
 (defun emagent-acp--model-variant-choices-from-options (options &optional no-compose)
   "Build flat ((LABEL . SPEC) ...) from normalized CONFIG OPTIONS.
 
-SPEC is ((CONFIG-ID . VALUE) ...).  When model values already embed
-bracket annotations, list each model value once.  Otherwise expand the
-cartesian product with `model_config' and `thought_level' selects,
-unless NO-COMPOSE is non-nil (Cursor session siblings are
-current-model-only)."
+SPEC is ((CONFIG-ID . VALUE) ...).  Expands the cartesian product of the
+model select with `model_config' and `thought_level' selects, unless
+NO-COMPOSE is non-nil (Cursor session siblings are current-model-only).
+Bracket suffixes in model values (e.g. Claude's opus[1m]) are genuine
+ids and do not disable composition."
   (let* ((model-option
           (or (seq-find (lambda (option)
                           (equal "model" (map-elt option :category)))
@@ -1010,8 +1019,7 @@ current-model-only)."
     (when model-option
       (emagent-acp--sort-variant-rows
        (emagent-acp--dedupe-variant-rows
-        (if (or (emagent-acp--model-option-values-bracketed-p model-option)
-                (null siblings)
+        (if (or (null siblings)
                 no-compose)
             (emagent-acp--model-only-variant-rows model-option)
           (emagent-acp--compose-variant-rows model-option siblings)))))))
@@ -1315,7 +1323,8 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
                        (emagent-acp--config-option-set-value state
                                                              (map-elt model-option :id)
                                                              model-id))
-                     (when persist (emagent-acp--persist-model-id state model-id))
+                     (when persist
+                       (emagent-acp--persist-model-id state model-id :spec nil))
                      (unless persist (emagent-acp--refresh-mode-line state))
                      (emagent-acp--progress
                       state
@@ -1335,7 +1344,8 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
                :session-id session-id
                :model-id model-id)
      :on-success (lambda (_response)
-                   (when persist (emagent-acp--persist-model-id state model-id))
+                   (when persist
+                     (emagent-acp--persist-model-id state model-id :spec nil))
                    (unless persist (emagent-acp--refresh-mode-line state))
                    (emagent-acp--notify-user
                     state
@@ -1355,18 +1365,24 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
   "Apply SPEC ((CONFIG-ID . VALUE) ...) via session/set_config_option.
 
 Sets the model config first, then remaining pairs.  Refreshes configOptions
-after each response.  When PERSIST is non-nil, stores the model value as the
-buffer model after all pairs succeed.
+after each response.  A failed model pair aborts via ON-FAILURE; a failed
+sibling pair (e.g. an effort level the selected model does not support) is
+reported, skipped, and omitted from the persisted spec.  When PERSIST is
+non-nil, stores the model value as the buffer model.
 
 Arguments: STATE, SESSION-ID, SPEC, ON-SUCCESS, ON-FAILURE."
   (let* ((spec (emagent-acp--order-apply-spec spec state))
-         (model-value (emagent-acp--spec-model-value spec state)))
+         (model-value (emagent-acp--spec-model-value spec state))
+         (model-config-id
+          (let ((option (emagent-acp--model-config-option state)))
+            (or (and option (map-elt option :id)) "model"))))
     (cl-labels
-        ((step (remaining)
+        ((step (remaining applied)
            (if (null remaining)
                (progn
                  (when (and persist model-value)
-                   (emagent-acp--persist-model-id state model-value))
+                   (emagent-acp--persist-model-id
+                    state model-value :spec (nreverse applied)))
                  (unless persist (emagent-acp--refresh-mode-line state))
                  (when model-value
                    (emagent-acp--progress
@@ -1378,33 +1394,36 @@ Arguments: STATE, SESSION-ID, SPEC, ON-SUCCESS, ON-FAILURE."
                                 model-value))))
                  (when on-success (funcall on-success)))
              (pcase-let ((`(,config-id . ,value) (car remaining)))
-               (emagent-acp--send-request
-                :state state
-                :request (emagent-acp-make-session-set-config-option-request
-                          :session-id session-id
-                          :config-id config-id
-                          :value value)
-                :on-success
-                (lambda (response)
-                  (if (map-elt response 'configOptions)
-                      (emagent-acp--save-config-options
-                       state (map-elt response 'configOptions))
-                    (emagent-acp--config-option-set-value
-                     state config-id value))
-                  (step (cdr remaining)))
-                :on-failure
-                (lambda (error _raw)
-                  (emagent-acp--notify-user
-                   state
-                   (format "emagent: config %s=%s not applied: %s"
-                           config-id value
-                           (or (map-elt error 'message)
-                               (format "%s" error))))
-                  (when on-failure (funcall on-failure))))))))
+               (let ((model-pair-p (equal config-id model-config-id)))
+                 (emagent-acp--send-request
+                  :state state
+                  :request (emagent-acp-make-session-set-config-option-request
+                            :session-id session-id
+                            :config-id config-id
+                            :value value)
+                  :on-success
+                  (lambda (response)
+                    (if (map-elt response 'configOptions)
+                        (emagent-acp--save-config-options
+                         state (map-elt response 'configOptions))
+                      (emagent-acp--config-option-set-value
+                       state config-id value))
+                    (step (cdr remaining) (cons (car remaining) applied)))
+                  :on-failure
+                  (lambda (error _raw)
+                    (emagent-acp--notify-user
+                     state
+                     (format "emagent: config %s=%s not applied: %s"
+                             config-id value
+                             (or (map-elt error 'message)
+                                 (format "%s" error))))
+                    (if model-pair-p
+                        (when on-failure (funcall on-failure))
+                      (step (cdr remaining) applied)))))))))
       (if (null spec)
           (when on-success (funcall on-success))
         (if (emagent-acp--model-config-option state)
-            (step spec)
+            (step spec nil)
           ;; No configOptions model entry: fall back to session/set_model.
           (emagent-acp--config-option-set-model-id
            :state state
@@ -1449,8 +1468,9 @@ Arguments: STATE, SESSION-ID, RESPONSE, ON-READY, RESUMED."
   (emagent-acp--save-session-modes state response)
   (let* ((models (emagent-acp--models-from-response response))
          (current (emagent-acp--current-model-id state models))
-         (pending (and (boundp 'emagent--pending-config-spec)
-                       emagent--pending-config-spec))
+         (pending (or (and (boundp 'emagent--pending-config-spec)
+                           emagent--pending-config-spec)
+                      (emagent-acp--saved-model-apply-spec state)))
          (choice (or (and pending
                           (emagent-acp--spec-model-value pending state))
                      (emagent-acp--resolve-model-id

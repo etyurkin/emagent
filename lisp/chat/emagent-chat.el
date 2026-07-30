@@ -3138,9 +3138,16 @@ per-turn switches), otherwise the buffer's saved #+EMAGENT_MODEL."
               (t (emagent-session-model)))))
     (when id (emagent-session-model-display id))))
 
-(defun emagent-chat-set-model (model)
-  "Store ACP MODEL id in the current buffer and refresh the mode line."
+(defun emagent-chat-set-model (model &optional spec)
+  "Store ACP MODEL id (and optional SPEC) and refresh the mode line.
+
+SPEC is ((CONFIG-ID . VALUE) ...); non-model pairs are written to
+#+EMAGENT_MODEL_SPEC.  When SPEC is omitted, leave sibling pairs
+unchanged.  Pass nil explicitly via `emagent-session-set-model-spec'
+to clear."
   (emagent-session-set-model model)
+  (when (and spec (listp spec))
+    (emagent-session-set-model-spec spec))
   (emagent-chat--refresh-mode-line))
 
 (defun emagent-chat-set-status (status)
@@ -3576,7 +3583,9 @@ Sending a previous prompt replaces its old response."
            ;; have chosen to keep one).
            (input (emagent-chat--strip-model-links
                    (string-trim (emagent-chat--strip-user-heading raw))))
-           (override (emagent-chat--region-turn-model (car bounds) (cdr bounds))))
+           (override (emagent-chat--region-turn-model (car bounds) (cdr bounds)))
+           (link-spec (emagent-chat--region-turn-apply-spec
+                       (car bounds) (cdr bounds))))
       (when (string-empty-p input)
         (user-error "Prompt is empty"))
       ;; Client slash commands never go to the agent.
@@ -3592,7 +3601,9 @@ Sending a previous prompt replaces its old response."
         (emagent-archive-apply input))
        (t
         (when override
-          (setq emagent-chat--turn-model override))
+          (setq emagent-chat--turn-model override
+                ;; Link query is source of truth for variant params.
+                emagent-chat--turn-apply-spec link-spec))
         (let ((response-pos
                (save-excursion
                  (goto-char (cdr bounds))
@@ -3886,7 +3897,8 @@ relative path, size in lines, and a short content preview."
                           (>= (car bounds) (point-min)))
                  (delete-region (car bounds) (cdr bounds))
                  (goto-char (car bounds))
-                 (insert (emagent-chat--model-link model-id))))))))))))
+                 (insert (emagent-chat--model-link
+                          model-id selection spec))))))))))))
 
 (defun emagent-chat--slash-model-apply ()
   "Prompt for a model and replace the `/model' token with its marker link.

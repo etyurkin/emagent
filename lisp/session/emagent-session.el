@@ -38,6 +38,7 @@
 (require 'subr-x)
 (require 'org)
 (require 'org-element)
+(require 'url-util)
 
 (defgroup emagent-trust nil
   "Workspace trust integration for emagent."
@@ -1030,15 +1031,95 @@ No UI side effects — callers that need a mode-line refresh add it themselves."
     (emagent-session-store-write-top-property "EMAGENT_MODEL" model))
   (setq emagent-chat-model (or emagent-chat-model model)))
 
+(defconst emagent-session-model-spec-property "EMAGENT_MODEL_SPEC"
+  "Header property storing non-model apply-spec pairs as k=v&k=v.")
+
+(defun emagent-session--encode-model-spec (spec)
+  "Encode non-model pairs of SPEC ((CONFIG-ID . VALUE) ...) as k=v&k=v."
+  (let ((pairs (cl-remove-if
+                (lambda (pair)
+                  (or (equal (car pair) "model")
+                      (null (cdr pair))
+                      (string-empty-p (format "%s" (cdr pair)))))
+                spec)))
+    (when pairs
+      (mapconcat
+       (lambda (pair)
+         (concat (url-hexify-string (format "%s" (car pair)))
+                 "="
+                 (url-hexify-string (format "%s" (cdr pair)))))
+       pairs
+       "&"))))
+
+(defun emagent-session--decode-model-spec (text)
+  "Decode TEXT `k=v&...' into ((CONFIG-ID . VALUE) ...)."
+  (when (and (stringp text) (not (string-empty-p (string-trim text))))
+    (let (pairs)
+      (dolist (cell (split-string text "&" t))
+        (let* ((eqpos (string-search "=" cell))
+               (key (url-unhex-string
+                     (if eqpos (substring cell 0 eqpos) cell)))
+               (val (url-unhex-string
+                     (if eqpos (substring cell (1+ eqpos)) ""))))
+          (when (and (not (string-empty-p key))
+                     (not (equal key "model")))
+            (push (cons key val) pairs))))
+      (nreverse pairs))))
+
+(defun emagent-session-set-model-spec (spec)
+  "Store apply-spec sibling pairs from SPEC in #+EMAGENT_MODEL_SPEC.
+
+SPEC is ((CONFIG-ID . VALUE) ...).  Model pairs are ignored here; use
+`emagent-session-set-model' for the model id.  Nil or model-only SPEC
+clears the property."
+  (let ((encoded (emagent-session--encode-model-spec spec)))
+    (if encoded
+        (emagent-session-store-write-top-property
+         emagent-session-model-spec-property encoded)
+      (emagent-session-store-delete-top-property
+       emagent-session-model-spec-property))))
+
+(defun emagent-session-model-spec-pairs ()
+  "Return non-model ((CONFIG-ID . VALUE) ...) from #+EMAGENT_MODEL_SPEC."
+  (emagent-session--decode-model-spec
+   (emagent-session-store-read-top-property
+    emagent-session-model-spec-property)))
+
+(defun emagent-session-model-apply-spec ()
+  "Return full apply-spec from header model + MODEL_SPEC, or nil.
+
+Nil when there is no model id.  Model-only sessions return a one-pair
+spec."
+  (when-let ((model (emagent-session-model)))
+    (cons (cons "model" model)
+          (emagent-session-model-spec-pairs))))
+
 (defun emagent-session-model ()
   "Return the ACP model id for the current emagent buffer."
   (emagent-model-canonical-id
    (or emagent-chat-model (emagent-session-store-read-model-property))))
 
 (defun emagent-session-model-display (&optional model)
-  "Return MODEL as a short label for the mode line."
-  (emagent-model-normalize-id
-   (or model (emagent-session-model))))
+  "Return MODEL as a short label for the mode line.
+
+When the buffer has #+EMAGENT_MODEL_SPEC sibling pairs and MODEL is
+the saved session model (or omitted), append `[VALUE]' tags for those
+pairs so the variant is visible throughout the session."
+  (let* ((id (or model (emagent-session-model)))
+         (base (emagent-model-normalize-id id))
+         (pairs (and base
+                     (or (null model)
+                         (equal (emagent-model-canonical-id model)
+                                (emagent-session-model)))
+                     (emagent-session-model-spec-pairs)))
+         (extra (and pairs
+                     (mapconcat (lambda (pair)
+                                  (format "[%s]" (cdr pair)))
+                                pairs
+                                ""))))
+    (if (and extra (not (string-empty-p extra)))
+        (concat base extra)
+      base)))
 
 (defun emagent-session-set-agent (agent)
   "Store the ACP provider AGENT symbol in the current buffer."

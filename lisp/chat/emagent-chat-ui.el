@@ -2322,22 +2322,97 @@ reveals the full agent/model id on hover.  The `emagent://' scheme
 tags this as the model marker so unrelated links a user pastes are not
 mistaken for it.")
 
+(defun emagent-chat--model-link-escape (text)
+  "Percent-encode TEXT for use in an emagent:// model-link path."
+  (url-hexify-string (or text "")))
+
+(defun emagent-chat--model-link-unescape (text)
+  "Decode a percent-encoded model-link path segment TEXT."
+  (url-unhex-string (or text "")))
+
+(defun emagent-chat--model-link-description (label model-id)
+  "Return Org-safe visible link text for LABEL or MODEL-ID.
+
+Org link descriptions cannot contain square brackets, so picker
+bracket suffixes are rewritten as parentheses."
+  (let ((text (substring-no-properties
+               (or label (emagent-model-choice-label model-id) model-id))))
+    (replace-regexp-in-string
+     "\\[\\([^]]*\\)\\]" "(\\1)" text)))
+
+(defun emagent-chat--model-link-parse-path (path)
+  "Return (MODEL-ID . SPEC) parsed from emagent:// PATH.
+
+SPEC is ((CONFIG-ID . VALUE) ...) including the model pair.  Query
+pairs encode non-model config options selected in the variant picker."
+  (let* ((path (string-remove-prefix "//" (or path "")))
+         (qpos (string-search "?" path))
+         (base (if qpos (substring path 0 qpos) path))
+         (query (when qpos (substring path (1+ qpos))))
+         (slash (string-search "/" base))
+         (model-id (emagent-chat--model-link-unescape
+                    (if slash (substring base (1+ slash)) base)))
+         (pairs nil))
+    (when (and query (not (string-empty-p query)))
+      (dolist (cell (split-string query "&" t))
+        (let* ((eqpos (string-search "=" cell))
+               (key (emagent-chat--model-link-unescape
+                     (if eqpos (substring cell 0 eqpos) cell)))
+               (val (emagent-chat--model-link-unescape
+                     (if eqpos (substring cell (1+ eqpos)) ""))))
+          (when (and (not (string-empty-p key))
+                     (not (equal key "model")))
+            (push (cons key val) pairs)))))
+    (cons model-id
+          (cons (cons "model" model-id) (nreverse pairs)))))
+
+(defun emagent-chat--model-link-query (spec _model-id)
+  "Return `?k=v&...' for non-model pairs in SPEC, or empty string."
+  (let ((pairs (cl-remove-if
+                (lambda (pair) (equal (car pair) "model"))
+                spec)))
+    (if (null pairs)
+        ""
+      (concat "?"
+              (mapconcat
+               (lambda (pair)
+                 (concat (emagent-chat--model-link-escape (car pair))
+                         "="
+                         (emagent-chat--model-link-escape (cdr pair))))
+               pairs
+               "&")))))
+
 (defun emagent-chat--model-link-path-id (path)
   "Return the model id from a link PATH `AGENT/MODEL' (or bare MODEL).
-PATH may carry a leading `//' authority slash from the raw link.  The
-agent is the first segment; the model id is the rest, so model ids are
-returned intact even if they contain slashes."
-  (let ((path (string-remove-prefix "//" path)))
-    (if (string-match "/" path)
-        (substring path (match-end 0))
-      path)))
+
+PATH may carry a leading `//' authority slash from the raw link, and an
+optional `?cfg=value' query for non-model config pairs.  The agent is
+the first segment; the model id is the rest before any query."
+  (car (emagent-chat--model-link-parse-path path)))
 
 (defun emagent-chat--region-turn-model (start end)
   "Return the model id of the first `/model' link between START and END."
+  (car (emagent-chat--region-turn-model-info start end)))
+
+(defun emagent-chat--region-turn-apply-spec (start end)
+  "Return apply-spec from the first `/model' link between START and END."
+  (cdr (emagent-chat--region-turn-model-info start end)))
+
+(defun emagent-chat--region-turn-model-info (start end)
+  "Return (MODEL-ID . SPEC) from the first `/model' link in START..END.
+
+SPEC may be nil when the link has no query (model-only override)."
   (save-excursion
     (goto-char start)
     (when (re-search-forward emagent-chat--model-link-re end t)
-      (emagent-chat--model-link-path-id (match-string-no-properties 1)))))
+      (let* ((parsed (emagent-chat--model-link-parse-path
+                      (match-string-no-properties 1)))
+             (model-id (car parsed))
+             (spec (cdr parsed)))
+        (cons model-id
+              (and spec
+                   (> (length spec) 1)
+                   spec))))))
 
 (defun emagent-chat--strip-model-links (text)
   "Remove `/model' override links from outgoing TEXT.
@@ -2347,15 +2422,17 @@ to the agent."
    (replace-regexp-in-string
     (concat "[ \t]*" emagent-chat--model-link-re) "" text)))
 
-(defun emagent-chat--model-link (model-id)
+(defun emagent-chat--model-link (model-id &optional label spec)
   "Return the `/model' marker link for MODEL-ID.
-The visible text keeps bracket annotations so variants stay distinct; the
-link target is `agent/full-model-id', revealed on hover.  The `emagent://'
-scheme \(never shown) tags this as the model marker so unrelated links a
-user pastes are not mistaken for it."
+
+Optional LABEL is the picker selection text (brackets rewritten as
+parentheses for Org).  Optional SPEC is ((CONFIG-ID . VALUE) ...);
+non-model pairs are stored in the link query so send can reapply them."
   (let* ((agent (emagent-session-agent))
-         (short (or (emagent-model-choice-label model-id) model-id))
-         (path (if agent (format "%s/%s" agent model-id) model-id)))
+         (short (emagent-chat--model-link-description label model-id))
+         (model-esc (emagent-chat--model-link-escape model-id))
+         (base (if agent (format "%s/%s" agent model-esc) model-esc))
+         (path (concat base (emagent-chat--model-link-query spec model-id))))
     (format "[[emagent://%s][%s]]" path short)))
 
 (defun emagent-chat--follow-model-link (path &optional _prefix)

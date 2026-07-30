@@ -1461,6 +1461,98 @@ the emagent gate can show what was edited instead of a bare arrow line."
     (should (= 2 (length rows)))
     (should (seq-every-p (lambda (row) (= 1 (length (cdr row)))) rows))))
 
+(ert-deftest emagent-acp-session-test-variant-choices-claude-compose ()
+  "Claude model ids embed [1m]; thought_level siblings still compose."
+  (let* ((options
+          '((( :id . "mode") (:category . "mode") (:type . "select")
+             (:options . (((:value . "default") (:name . "Default")))))
+            ((:id . "model") (:category . "model") (:type . "select")
+             (:options . (((:value . "opus[1m]") (:name . "Opus"))
+                          ((:value . "haiku") (:name . "Haiku")))))
+            ((:id . "effort") (:category . "thought_level") (:type . "select")
+             (:options . (((:value . "default") (:name . "Default"))
+                          ((:value . "high") (:name . "High")))))))
+         (rows (emagent-acp--model-variant-choices-from-options options))
+         (labels (mapcar (lambda (row) (substring-no-properties (car row)))
+                         rows)))
+    ;; 2 models x 2 effort levels; mode is never composed.
+    (should (= 4 (length rows)))
+    (let* ((label (seq-find (lambda (l) (and (string-match-p "opus" l)
+                                             (string-match-p "High" l)))
+                            labels))
+           (spec (and label (emagent-acp--choice-by-label label rows))))
+      (should label)
+      (should (equal "opus[1m]" (cdr (assoc "model" spec #'equal))))
+      (should (equal "high" (cdr (assoc "effort" spec #'equal)))))))
+
+(defconst emagent-test--set-spec-config-options
+  '((( :id . "model") (:category . "model") (:type . "select")
+     (:options . (((:value . "opus[1m]") (:name . "Opus"))
+                  ((:value . "haiku") (:name . "Haiku")))))
+    ((:id . "effort") (:category . "thought_level") (:type . "select")
+     (:options . (((:value . "default") (:name . "Default"))
+                  ((:value . "high") (:name . "High"))))))
+  "Config options used by the set-spec tests.")
+
+(defun emagent-test--set-spec-request-sender (fail-config-ids)
+  "Return a send-request mock failing configIds in FAIL-CONFIG-IDS."
+  (cl-function
+   (lambda (&key request on-success on-failure &allow-other-keys)
+     (let ((config-id (map-elt (map-elt request :params) 'configId)))
+       (if (member config-id fail-config-ids)
+           (funcall on-failure '((message . "not supported")) nil)
+         (funcall on-success '()))))))
+
+(ert-deftest emagent-acp-session-test-set-spec-skips-failed-sibling ()
+  "A failing sibling pair is skipped; the model still applies and persists."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let ((state (emagent-test--make-acp-state nil buffer))
+           (succeeded nil)
+           (failed nil))
+       (setf (emagent-acp-state-config-options state)
+             (copy-tree emagent-test--set-spec-config-options))
+       (emagent-test--with-mocks
+           (((symbol-function 'emagent-acp--send-request)
+             (emagent-test--set-spec-request-sender '("effort")))
+            ((symbol-function 'emagent-acp--notify-user)
+             (lambda (&rest _args) nil)))
+         (emagent-acp--config-option-set-spec
+          :state state
+          :session-id "sess"
+          :spec '(("model" . "haiku") ("effort" . "high"))
+          :on-success (lambda () (setq succeeded t))
+          :on-failure (lambda () (setq failed t))))
+       (should succeeded)
+       (should-not failed)
+       (with-current-buffer buffer
+         (should (string= "haiku" (emagent-session-model)))
+         ;; The skipped effort pair must not be persisted for reconnect.
+         (should-not (emagent-session-model-spec-pairs)))))))
+
+(ert-deftest emagent-acp-session-test-set-spec-model-failure-aborts ()
+  "A failing model pair aborts the spec via on-failure."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (let ((state (emagent-test--make-acp-state nil buffer))
+           (succeeded nil)
+           (failed nil))
+       (setf (emagent-acp-state-config-options state)
+             (copy-tree emagent-test--set-spec-config-options))
+       (emagent-test--with-mocks
+           (((symbol-function 'emagent-acp--send-request)
+             (emagent-test--set-spec-request-sender '("model")))
+            ((symbol-function 'emagent-acp--notify-user)
+             (lambda (&rest _args) nil)))
+         (emagent-acp--config-option-set-spec
+          :state state
+          :session-id "sess"
+          :spec '(("model" . "haiku") ("effort" . "high"))
+          :on-success (lambda () (setq succeeded t))
+          :on-failure (lambda () (setq failed t))))
+       (should failed)
+       (should-not succeeded)))))
+
 ;;;; Filesystem handlers
 
 (ert-deftest emagent-acp-session-test-on-fs-read ()
