@@ -1379,8 +1379,9 @@ the emagent gate can show what was edited instead of a bare arrow line."
          (rows (emagent-acp--model-variant-choices-from-options options))
          (labels (mapcar (lambda (row) (substring-no-properties (car row)))
                          rows)))
-    ;; Off is filtered from thought_level, leaving 2x2x1 = 4 rows.
-    (should (= 4 (length rows)))
+    ;; Off cells stay in the product (2x2x2 = 8 rows) but are hidden from
+    ;; labels: a row's brackets show only what it turns on.
+    (should (= 8 (length rows)))
     (should-not (seq-find (lambda (l) (string-match-p "Off" l)) labels))
     (let* ((label (substring-no-properties (caar rows)))
            (spec (cdar rows)))
@@ -1388,7 +1389,17 @@ the emagent gate can show what was edited instead of a bare arrow line."
       (should (= 3 (length spec)))
       (should (assoc "model" spec #'equal))
       (should (assoc "effort" spec #'equal))
-      (should (assoc "thought" spec #'equal)))))
+      (should (assoc "thought" spec #'equal)))
+    ;; The thought=off rows exist, applied but unlabeled.
+    (let ((off-row (seq-find (lambda (row)
+                               (equal "off"
+                                      (cdr (assoc "thought" (cdr row)
+                                                  #'equal))))
+                             rows)))
+      (should off-row)
+      (should-not (string-match-p
+                   "O\\(n\\|ff\\)"
+                   (substring-no-properties (car off-row)))))))
 
 (ert-deftest emagent-acp-session-test-variant-product-cap-fallback ()
   (let* ((emagent-acp--model-variant-product-cap 3)
@@ -1404,7 +1415,7 @@ the emagent gate can show what was edited instead of a bare arrow line."
     (should (seq-every-p (lambda (row) (= 1 (length (cdr row)))) rows))))
 
 (ert-deftest emagent-acp-session-test-variant-choices-from-catalog ()
-  "Per-model catalog expands each model; Off/false boolean values are omitted."
+  "Per-model catalog expands each model; Off cells are applied but unlabeled."
   (let* ((catalog
           (emagent-acp--normalize-model-catalog
            '[((value . "grok-4.5")
@@ -1433,12 +1444,20 @@ the emagent gate can show what was edited instead of a bare arrow line."
                                  (equal "composer-2.5"
                                         (cdr (assoc "model" (cdr row) #'equal))))
                                rows)))
-    ;; Off/false is filtered: grok = 2 effort x Fast, composer = Fast only.
-    (should (= 3 (length rows)))
-    (should (= 2 (length grok)))
-    (should (= 1 (length composer)))
+    ;; Off cells stay: grok = 2 effort x 2 fast, composer = 2 fast rows.
+    (should (= 6 (length rows)))
+    (should (= 4 (length grok)))
+    (should (= 2 (length composer)))
     (should-not (seq-find (lambda (l) (string-match-p "Off" l)) labels))
     (should (seq-find (lambda (l) (string-match-p "Low" l)) labels))
+    ;; Composer's bare row carries the fast=false pair invisibly.
+    (let ((bare (seq-find (lambda (row)
+                            (equal "false"
+                                   (cdr (assoc "fast" (cdr row) #'equal))))
+                          composer)))
+      (should bare)
+      (should (string= "composer-2.5 (Composer 2.5)"
+                       (substring-no-properties (car bare)))))
     (let* ((label (seq-find (lambda (l)
                               (and (string-match-p "Grok" l)
                                    (string-match-p "Low" l)
@@ -1483,7 +1502,17 @@ the emagent gate can show what was edited instead of a bare arrow line."
            (spec (and label (emagent-acp--choice-by-label label rows))))
       (should label)
       (should (equal "opus[1m]" (cdr (assoc "model" spec #'equal))))
-      (should (equal "high" (cdr (assoc "effort" spec #'equal)))))))
+      (should (equal "high" (cdr (assoc "effort" spec #'equal)))))
+    ;; The effort=default row is the bare model row — no [Default] tag.
+    (let ((bare (seq-find (lambda (row)
+                            (and (equal "opus[1m]"
+                                        (cdr (assoc "model" (cdr row) #'equal)))
+                                 (equal "default"
+                                        (cdr (assoc "effort" (cdr row) #'equal)))))
+                          rows)))
+      (should bare)
+      (should-not (string-match-p "Default"
+                                  (substring-no-properties (car bare)))))))
 
 (defconst emagent-test--set-spec-config-options
   '((( :id . "model") (:category . "model") (:type . "select")

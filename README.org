@@ -116,8 +116,13 @@ levels for the current model, emagent probes each model once at connect
 \(switching the idle session through the model list and restoring it) so
 every row shows exactly the effort levels that model supports.  Other
 agents use bracketed model ids and/or global =model_config= /
-=thought_level= rows.  Type part of a model name to narrow the list.
-Reconnect the session after upgrading so Cursor picks up the capability.
+=thought_level= rows.  A row's bracket tags show only what it turns on:
+off/false/default values are applied (and persisted) but hidden, so the
+bare row is the model at its plainest settings — e.g. =grok-4.5 [Low]=
+sets =effort=low, fast=false= while =grok-4.5 [Low] [Fast]= sets
+=fast=true=.  The echo area states the full applied spec after a switch.
+Type part of a model name to narrow the list.  Reconnect the session
+after upgrading so Cursor picks up the capability.
 
 =M-x emagent= reuses the project's existing session buffer instead of
 creating a second one; with an existing buffer the picker is limited to

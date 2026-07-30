@@ -879,22 +879,28 @@ over legacy `models'."
                          (emagent-acp--cartesian-product (cdr lists))))
                (car lists))))
 
-(defun emagent-acp--variant-off-display-p (display)
-  "Return non-nil when DISPLAY is an Off/false boolean parameter label."
-  (let ((text (downcase (string-trim (or display "")))))
-    (member text '("off" "false"))))
+(defun emagent-acp--variant-neutral-value-p (display value)
+  "Return non-nil when DISPLAY/VALUE is an off/false/default cell.
+
+Neutral cells stay in the composed product (their pair is applied and
+persisted) but are hidden from row labels: a row's brackets show only
+what it turns on, and the bare row is the model at its plainest
+settings."
+  (let ((text (downcase (string-trim (or display ""))))
+        (val (downcase (string-trim (or value "")))))
+    (or (member text '("off" "false" "default"))
+        (member val '("off" "false" "default")))))
 
 (defun emagent-acp--variant-row-label (model-value model-name sibling-cells)
   "Return a faced picker label for MODEL-VALUE, MODEL-NAME, and SIBLING-CELLS.
 
-SIBLING-CELLS are ((DISPLAY . _) ...) whose DISPLAY strings are shown in
-brackets after the model label for filterability.  Off/false boolean
-displays are omitted so rows match Cursor's flat list (no [Off])."
+SIBLING-CELLS are ((DISPLAY . _) ...) whose non-nil DISPLAY strings are
+shown in brackets after the model label for filterability.  Nil displays
+\(off/false/default cells) are hidden — see
+`emagent-acp--variant-neutral-value-p'."
   (let* ((base (emagent-model-choice-label-display model-value model-name))
-         (shown (cl-remove-if
-                 (lambda (cell)
-                   (emagent-acp--variant-off-display-p (car cell)))
-                 sibling-cells))
+         (shown (cl-remove-if (lambda (cell) (null (car cell)))
+                              sibling-cells))
          (extra (mapconcat (lambda (cell)
                              (format "[%s]" (car cell)))
                            shown
@@ -920,8 +926,10 @@ displays are omitted so rows match Cursor's flat list (no [Off])."
 (defun emagent-acp--compose-variant-rows (model-option sibling-options)
   "Return cartesian ((LABEL . SPEC) ...) for MODEL-OPTION × SIBLING-OPTIONS.
 
-Off/false boolean parameter values are omitted from the product so the
-picker matches Cursor (no [Off] rows).  When the product would exceed
+Off/false/default parameter values stay in the product — their pair is
+applied and persisted — but are hidden from the label, so the bare row
+means \"everything off/default\" and tags show only what a row turns
+on.  When the product would exceed
 `emagent-acp--model-variant-product-cap', fall back to model-only rows."
   (let* ((model-id (map-elt model-option :id))
          (model-cells
@@ -935,21 +943,21 @@ picker matches Cursor (no [Off] rows).  When the product would exceed
           (delq nil
                 (mapcar
                  (lambda (option)
-                   (let ((values
-                          (cl-remove-if
-                           (lambda (value)
-                             (emagent-acp--variant-off-display-p
-                              (or (map-elt value :name)
-                                  (map-elt value :value))))
-                           (map-elt option :options))))
+                   (let ((values (map-elt option :options)))
                      (when values
-                       (mapcar (lambda (value)
-                                 (list :config-id (map-elt option :id)
-                                       :value (map-elt value :value)
-                                       :name (map-elt value :name)
-                                       :display (or (map-elt value :name)
-                                                    (map-elt value :value))))
-                               values))))
+                       (mapcar
+                        (lambda (value)
+                          (let ((display (or (map-elt value :name)
+                                             (map-elt value :value))))
+                            (list :config-id (map-elt option :id)
+                                  :value (map-elt value :value)
+                                  :name (map-elt value :name)
+                                  :display
+                                  (unless
+                                      (emagent-acp--variant-neutral-value-p
+                                       display (map-elt value :value))
+                                    display))))
+                        values))))
                  sibling-options)))
          (product-size
           (cl-reduce (function *)
@@ -1502,19 +1510,33 @@ Arguments: STATE, SESSION-ID, SPEC, ON-SUCCESS, ON-FAILURE."
     (cl-labels
         ((step (remaining applied)
            (if (null remaining)
-               (progn
+               (let* ((applied (nreverse applied))
+                      (detail
+                       (mapconcat (lambda (pair)
+                                    (format "%s=%s" (car pair) (cdr pair)))
+                                  (cl-remove-if
+                                   (lambda (pair)
+                                     (equal (car pair) model-config-id))
+                                   applied)
+                                  ", ")))
                  (when (and persist model-value)
                    (emagent-acp--persist-model-id
-                    state model-value :spec (nreverse applied)))
+                    state model-value :spec applied))
                  (unless persist (emagent-acp--refresh-mode-line state))
                  (when model-value
+                   ;; State the full applied spec once: hidden picker cells
+                   ;; (fast=false, effort=default) are applied silently, so
+                   ;; this echo is where the user sees what a row set.
                    (emagent-acp--progress
                     state
-                    (format "model %s"
+                    (format "model %s%s"
                             (or (emagent-acp--config-option-value-name
                                  (emagent-acp--model-config-option state)
                                  model-value)
-                                model-value))))
+                                model-value)
+                            (if (string-empty-p detail)
+                                ""
+                              (format " (%s)" detail)))))
                  (when on-success (funcall on-success)))
              (pcase-let ((`(,config-id . ,value) (car remaining)))
                (let ((model-pair-p (equal config-id model-config-id)))

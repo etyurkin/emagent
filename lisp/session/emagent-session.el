@@ -1104,14 +1104,20 @@ spec."
 
 When the buffer has #+EMAGENT_MODEL_SPEC sibling pairs and MODEL is
 the saved session model (or omitted), append `[VALUE]' tags for those
-pairs so the variant is visible throughout the session."
+pairs so the variant is visible throughout the session.  Off/false/
+default values are hidden, matching the picker: tags show only what the
+variant turns on."
   (let* ((id (or model (emagent-session-model)))
          (base (emagent-model-normalize-id id))
          (pairs (and base
                      (or (null model)
                          (equal (emagent-model-canonical-id model)
                                 (emagent-session-model)))
-                     (emagent-session-model-spec-pairs)))
+                     (cl-remove-if
+                      (lambda (pair)
+                        (member (downcase (string-trim (or (cdr pair) "")))
+                                '("off" "false" "default")))
+                      (emagent-session-model-spec-pairs))))
          (extra (and pairs
                      (mapconcat (lambda (pair)
                                   (format "[%s]" (cdr pair)))
