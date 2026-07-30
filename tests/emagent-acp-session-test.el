@@ -1399,6 +1399,62 @@ the emagent gate can show what was edited instead of a bare arrow line."
     (should (= 2 (length rows)))
     (should (seq-every-p (lambda (row) (= 1 (length (cdr row)))) rows))))
 
+(ert-deftest emagent-acp-session-test-variant-choices-from-catalog ()
+  "Per-model catalog expands each model with its own parameter selects."
+  (let* ((catalog
+          (emagent-acp--normalize-model-catalog
+           '[((value . "grok-4.5")
+              (name . "Cursor Grok 4.5")
+              (configOptions
+               . [((id . "effort") (category . "thought_level") (type . "select")
+                   (options . [((value . "low") (name . "Low"))
+                               ((value . "high") (name . "High"))]))
+                  ((id . "fast") (category . "model_config") (type . "select")
+                   (options . [((value . "false") (name . "Off"))
+                               ((value . "true") (name . "Fast"))]))]))
+             ((value . "composer-2.5")
+              (name . "Composer 2.5")
+              (configOptions
+               . [((id . "fast") (category . "model_config") (type . "select")
+                   (options . [((value . "false") (name . "Off"))
+                               ((value . "true") (name . "Fast"))]))]))]))
+         (rows (emagent-acp--model-variant-choices-from-catalog catalog))
+         (labels (mapcar (lambda (row) (substring-no-properties (car row)))
+                         rows))
+         (grok (seq-filter (lambda (row)
+                             (equal "grok-4.5"
+                                    (cdr (assoc "model" (cdr row) #'equal))))
+                           rows))
+         (composer (seq-filter (lambda (row)
+                                 (equal "composer-2.5"
+                                        (cdr (assoc "model" (cdr row) #'equal))))
+                               rows)))
+    (should (= 6 (length rows)))
+    (should (= 4 (length grok)))
+    (should (= 2 (length composer)))
+    (should (seq-find (lambda (l) (string-match-p "Low" l)) labels))
+    (let* ((label (seq-find (lambda (l)
+                              (and (string-match-p "Grok" l)
+                                   (string-match-p "Low" l)
+                                   (string-match-p "Fast" l)))
+                            labels))
+           (spec (emagent-acp--choice-by-label label rows)))
+      (should (equal "grok-4.5" (cdr (assoc "model" spec #'equal))))
+      (should (equal "low" (cdr (assoc "effort" spec #'equal))))
+      (should (equal "true" (cdr (assoc "fast" spec #'equal)))))))
+
+(ert-deftest emagent-acp-session-test-variant-no-compose-when-disabled ()
+  (let* ((options
+          '((( :id . "model") (:category . "model") (:type . "select")
+             (:options . (((:value . "grok") (:name . "Grok"))
+                          ((:value . "sonnet") (:name . "Sonnet")))))
+            ((:id . "effort") (:category . "thought_level") (:type . "select")
+             (:options . (((:value . "low") (:name . "Low"))
+                          ((:value . "high") (:name . "High")))))))
+         (rows (emagent-acp--model-variant-choices-from-options options t)))
+    (should (= 2 (length rows)))
+    (should (seq-every-p (lambda (row) (= 1 (length (cdr row)))) rows))))
+
 ;;;; Filesystem handlers
 
 (ert-deftest emagent-acp-session-test-on-fs-read ()

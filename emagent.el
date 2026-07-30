@@ -204,9 +204,10 @@ When OMIT-PROVIDER-PREFIX is non-nil, return the model id only."
 Consumed once by `emagent-acp--configure-model' after session/new.")
 
 (defun emagent--probe-provider-models (provider cwd)
-  "Return session/new RESPONSE alist from PROVIDER at CWD, or nil.
+  "Return (RESPONSE . CATALOG) from PROVIDER at CWD, or nil.
 
-Callers extract model entries or variant choices from the response."
+RESPONSE is the session/new alist.  CATALOG is the normalized
+cursor/list_available_models list for Cursor, otherwise nil."
   (emagent-log "probing %s models…" (symbol-name provider))
   (let ((buffer (get-buffer-create " *emagent-probe*"))
         result)
@@ -223,14 +224,30 @@ Callers extract model entries or variant choices from the response."
                                    :protocol-version 1
                                    :client-info `((name . "emagent")
                                                   (title . "Emagent")
-                                                  (version . "1.0.2")))
+                                                  (version . "1.0.2"))
+                                   :read-text-file-capability t
+                                   :write-text-file-capability t)
                          :sync t)
-                        (emagent-acp-send-request
-                         :client client
-                         :request (emagent-acp-make-session-new-request
-                                   :cwd default-directory
-                                   :mcp-servers [])
-                         :sync t))
+                        (let* ((response
+                                (emagent-acp-send-request
+                                 :client client
+                                 :request (emagent-acp-make-session-new-request
+                                           :cwd default-directory
+                                           :mcp-servers [])
+                                 :sync t))
+                               (catalog
+                                (when (eq provider 'cursor)
+                                  (condition-case _cerr
+                                      (emagent-acp--normalize-model-catalog
+                                       (map-elt
+                                        (emagent-acp-send-request
+                                         :client client
+                                         :request
+                                         (emagent-acp-make-cursor-list-available-models-request)
+                                         :sync t)
+                                        'models))
+                                    (error nil)))))
+                          (cons response catalog)))
                     (emagent-acp-shutdown :client client)))
               (error
                (let ((msg (error-message-string err)))
@@ -251,12 +268,19 @@ SPEC is the apply-spec alist for the chosen variant row."
         (omit-prefix (= (length providers) 1))
         choices)
     (dolist (provider providers)
-      (when-let ((response (emagent--probe-provider-models provider cwd)))
-        (let* ((options
+      (when-let ((probed (emagent--probe-provider-models provider cwd)))
+        (let* ((response (car probed))
+               (catalog (cdr probed))
+               (options
                 (emagent-acp--normalize-config-options
                  (map-elt response 'configOptions)))
                (variant-rows
-                (or (emagent-acp--model-variant-choices-from-options options)
+                (or (and catalog
+                         (emagent-acp--model-variant-choices-from-catalog
+                          catalog))
+                    (emagent-acp--model-variant-choices-from-options
+                     options
+                     (eq provider 'cursor))
                     (mapcar
                      (lambda (entry)
                        (let ((id (map-elt entry :model-id))

@@ -108,9 +108,13 @@ Sent to the agent (may compress/reset the ACP session):
 | =/compact=, =/compress=, =/summarize= | Compress prior conversation |
 
 =/model= and =M-x emagent-set-model= offer a flat, filterable list of every
-advertised variant (Cursor bracket ids such as =[context=200k]= /
-=[fast=true]=, and composed =model_config= / =thought_level= rows when the
-agent exposes those).  Type part of a model name to narrow the list.
+advertised variant.  For Cursor, emagent advertises
+=_meta.parameterizedModelPicker= and expands each model with its own
+parameter selects from =cursor/list_available_models= (effort, fast,
+context, thinking, …).  Other agents still use bracketed model ids and/or
+global =model_config= / =thought_level= rows.  Type part of a model name to
+narrow the list.  Reconnect the session after upgrading so Cursor picks up
+the capability.
 =/model= inserts an Org link (=[[emagent://AGENT/MODEL][label]]=).  Emagent
 runs that turn on the chosen model, shows a ~** Thinking (model)~ heading,
 then restores the buffer model.  Delete the link to cancel.  On failure,

@@ -32,7 +32,11 @@
     (should (eq (alist-get 'writeTextFile
                            (alist-get 'fs (alist-get 'clientCapabilities
                                                      (alist-get :params req))))
-                :false))))
+                :false))
+    (should (eq (alist-get 'parameterizedModelPicker
+                           (alist-get '_meta (alist-get 'clientCapabilities
+                                                        (alist-get :params req))))
+                t))))
 
 (ert-deftest emagent-acp-test-session-new-request ()
   (let* ((cwd (expand-file-name "~/"))

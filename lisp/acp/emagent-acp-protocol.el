@@ -91,6 +91,8 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
   cb-tool-call cb-permission cb-status
   ;; After cursor/create_plan accept: follow-up Build turn
   plan-build-prompt plan-build-timer
+  ;; Cursor parameterized model catalog (cursor/list_available_models).
+  model-catalog
   ;; Session mode (ACP modes / current_mode_update); kept last for hot-reload.
   session-mode-id available-modes)
 
@@ -961,12 +963,14 @@ When the product would exceed
           (string-lessp (substring-no-properties (car a))
                         (substring-no-properties (car b))))))
 
-(defun emagent-acp--model-variant-choices-from-options (options)
+(defun emagent-acp--model-variant-choices-from-options (options &optional no-compose)
   "Build flat ((LABEL . SPEC) ...) from normalized CONFIG OPTIONS.
 
 SPEC is ((CONFIG-ID . VALUE) ...).  When model values already embed
 bracket annotations, list each model value once.  Otherwise expand the
-cartesian product with `model_config' and `thought_level' selects."
+cartesian product with `model_config' and `thought_level' selects,
+unless NO-COMPOSE is non-nil (Cursor session siblings are
+current-model-only)."
   (let* ((model-option
           (or (seq-find (lambda (option)
                           (equal "model" (map-elt option :category)))
@@ -981,31 +985,137 @@ cartesian product with `model_config' and `thought_level' selects."
       (emagent-acp--sort-variant-rows
        (emagent-acp--dedupe-variant-rows
         (if (or (emagent-acp--model-option-values-bracketed-p model-option)
-                (null siblings))
+                (null siblings)
+                no-compose)
             (emagent-acp--model-only-variant-rows model-option)
           (emagent-acp--compose-variant-rows model-option siblings)))))))
+
+(defun emagent-acp--normalize-model-catalog (models)
+  "Normalize cursor/list_available_models MODELS to typed alists.
+
+Each entry is ((:value . ID) (:name . NAME) (:config-options . OPTS))."
+  (mapcar
+   (lambda (entry)
+     `((:value . ,(or (map-elt entry 'value) (map-elt entry :value)))
+       (:name . ,(or (map-elt entry 'name) (map-elt entry :name)
+                     (map-elt entry 'value) (map-elt entry :value)))
+       (:config-options
+        . ,(emagent-acp--normalize-config-options
+            (or (map-elt entry 'configOptions)
+                (map-elt entry :config-options))))))
+   (append models nil)))
+
+(defun emagent-acp--model-variant-choices-from-catalog (catalog)
+  "Build flat ((LABEL . SPEC) ...) from per-model CATALOG entries.
+
+Each catalog entry contributes the cartesian product of that model with
+its own `model_config' / `thought_level' selects."
+  (let ((rows nil)
+        (total 0))
+    (dolist (entry catalog)
+      (let* ((model-option
+              `((:id . "model")
+                (:category . "model")
+                (:type . "select")
+                (:options . (((:value . ,(map-elt entry :value))
+                              (:name . ,(map-elt entry :name)))))))
+             (siblings
+              (emagent-acp--config-options-by-categories
+               (map-elt entry :config-options)
+               '("model_config" "thought_level")))
+             (product
+              (if siblings
+                  (cl-reduce
+                   #'*
+                   (mapcar (lambda (opt)
+                             (length (map-elt opt :options)))
+                           (cons model-option siblings))
+                   :initial-value 1)
+                1)))
+        (setq total (+ total product))
+        (setq rows
+              (nconc rows
+                     (if siblings
+                         (emagent-acp--compose-variant-rows
+                          model-option siblings)
+                       (emagent-acp--model-only-variant-rows
+                        model-option))))))
+    (if (> total emagent-acp--model-variant-product-cap)
+        (progn
+          (message
+           "emagent: model variant product %s exceeds cap %s; listing models only"
+           total emagent-acp--model-variant-product-cap)
+          (emagent-acp--sort-variant-rows
+           (emagent-acp--dedupe-variant-rows
+            (cl-mapcan
+             (lambda (entry)
+               (emagent-acp--model-only-variant-rows
+                `((:id . "model")
+                  (:category . "model")
+                  (:type . "select")
+                  (:options . (((:value . ,(map-elt entry :value))
+                                (:name . ,(map-elt entry :name))))))))
+             catalog))))
+      (emagent-acp--sort-variant-rows
+       (emagent-acp--dedupe-variant-rows rows)))))
+
+(cl-defun emagent-acp-make-cursor-list-available-models-request ()
+  "Build a Cursor `cursor/list_available_models' request."
+  `((:method . "cursor/list_available_models")
+    (:params . ,(make-hash-table :test 'equal))))
+
+(defun emagent-acp--ensure-model-catalog (state)
+  "Return Cursor per-model catalog for STATE, fetching when needed.
+
+Returns nil for non-Cursor providers or when the extension call fails."
+  (or (emagent-acp-state-model-catalog state)
+      (when (and state (eq (emagent-acp--provider-symbol state) 'cursor)
+                 (emagent-acp-state-client state))
+        (let ((catalog
+               (condition-case _err
+                   (emagent-acp--normalize-model-catalog
+                    (map-elt
+                     (emagent-acp-send-request
+                      :client (emagent-acp-state-client state)
+                      :request
+                      (emagent-acp-make-cursor-list-available-models-request)
+                      :buffer (emagent-acp--chat-buffer state)
+                      :sync t)
+                     'models))
+                 (error nil))))
+          (when catalog
+            (setf (emagent-acp-state-model-catalog state) catalog))
+          catalog))))
 
 (defun emagent-acp--model-variant-choices (state &optional models)
   "Return flat ((LABEL . SPEC) ...) for interactive model pickers.
 
-Prefer STATE's configOptions.  Fall back to MODELS / available model
-entries as single-pair SPECs keyed by the model config id when known."
-  (let ((from-options
-         (emagent-acp--model-variant-choices-from-options
-          (emagent-acp--config-options state))))
-    (if from-options
+Prefer Cursor's per-model catalog when available, then STATE's
+configOptions.  Fall back to MODELS / available model entries as
+single-pair SPECs keyed by the model config id when known."
+  (let* ((catalog (emagent-acp--ensure-model-catalog state))
+         (from-catalog
+          (and catalog
+               (emagent-acp--model-variant-choices-from-catalog catalog)))
+         (from-options
+          (unless from-catalog
+            (emagent-acp--model-variant-choices-from-options
+             (emagent-acp--config-options state)
+             ;; Cursor siblings are for the current model only.
+             (eq (emagent-acp--provider-symbol state) 'cursor)))))
+    (or from-catalog
         from-options
-      (let* ((model-option (emagent-acp--model-config-option state))
-             (config-id (or (and model-option (map-elt model-option :id))
-                            "model")))
-        (mapcar (lambda (entry)
-                  (let ((id (or (map-elt entry :model-id)
-                                (emagent-acp--model-entry-id entry)))
-                        (name (or (map-elt entry :name)
-                                  (emagent-acp--model-entry-name entry))))
-                    (cons (emagent-model-choice-label-display id name)
-                          (list (cons config-id id)))))
-                (emagent-acp--get-available-models state models))))))
+        (let* ((model-option (emagent-acp--model-config-option state))
+               (config-id (or (and model-option (map-elt model-option :id))
+                              "model")))
+          (mapcar (lambda (entry)
+                    (let ((id (or (map-elt entry :model-id)
+                                  (emagent-acp--model-entry-id entry)))
+                          (name (or (map-elt entry :name)
+                                    (emagent-acp--model-entry-name entry))))
+                      (cons (emagent-model-choice-label-display id name)
+                            (list (cons config-id id)))))
+                  (emagent-acp--get-available-models state models))))))
 
 (defun emagent-acp--choice-by-label (selection choices)
   "Return the SPEC (cdr) for SELECTION in CHOICES ((LABEL . SPEC)...)."
@@ -2442,14 +2552,18 @@ Arguments: EVENT."
 
 PROTOCOL-VERSION is required.  CLIENT-INFO is an optional alist with
 `name', `title', and `version' keys.
-READ-TEXT-FILE-CAPABILITY and WRITE-TEXT-FILE-CAPABILITY are booleans."
+READ-TEXT-FILE-CAPABILITY and WRITE-TEXT-FILE-CAPABILITY are booleans.
+
+Always advertises Cursor's `_meta.parameterizedModelPicker' so
+configOptions expose bare model ids plus per-model parameter selects."
   (unless protocol-version (error ":protocol-version is required"))
   `((:method . "initialize")
     (:params . (,@(when client-info `((clientInfo . ,client-info)))
                 (protocolVersion . ,protocol-version)
                 (clientCapabilities
                  . ((fs . ((readTextFile  . ,(if read-text-file-capability  t :false))
-                           (writeTextFile . ,(if write-text-file-capability t :false))))))))))
+                           (writeTextFile . ,(if write-text-file-capability t :false))))
+                    (_meta . ((parameterizedModelPicker . t)))))))))
 
 (cl-defun emagent-acp-make-authenticate-request (&key method-id method)
   "Build an \"authenticate\" request.
