@@ -958,7 +958,7 @@ Arguments: WITH, WRAP."
        emagent-shell-redirect))
 
 (defun emagent-shell--compound-command-p (command)
-  "Return non-nil when COMMAND uses pipes or other shell operators.
+  "Return non-nil when COMMAND has pipes or other shell operators.
 
 Quoted spans are ignored so `echo \"a|b\"' stays simple.  Compound
 commands must run as real shell — prefer-Emacs redirects would mangle
@@ -1805,9 +1805,9 @@ EXPECTED-TICK, when non-nil, overrides `emagent-tools--expected-file-tick'."
 When REPLACE-ALL is non-nil, replace every occurrence.  Otherwise OLD-STRING
 must appear exactly once.  Signal `user-error' when the match count is wrong."
   (unless (and (stringp old-string) (not (string-empty-p old-string)))
-    (user-error "old_string is required and must be non-empty"))
+    (user-error "Old_string is required and must be non-empty"))
   (unless (stringp new-string)
-    (user-error "new_string is required"))
+    (user-error "New_string is required"))
   (let ((count 0)
         (start 0)
         (len (length old-string)))
@@ -1817,10 +1817,10 @@ must appear exactly once.  Signal `user-error' when the match count is wrong."
             start (+ start (max 1 len))))
     (cond
      ((= count 0)
-      (user-error "old_string not found in file"))
+      (user-error "Old_string not found in file"))
      ((and (not replace-all) (> count 1))
       (user-error
-       "old_string matched %d times; pass replace_all=true or make it unique"
+       "Old_string matched %d times; pass replace_all=true or make it unique"
        count))
      (t
       (if replace-all

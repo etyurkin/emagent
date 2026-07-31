@@ -2054,6 +2054,29 @@ project directory rather than opening up unconfined access."
       (sleep-for 0.05)
       (should (eq completed t)))))
 
+
+(ert-deftest emagent-acp-session-test-watchdog-permission-extends-past-max ()
+  "Open permission dialogs keep extending past max (user wait, not wedge)."
+  (let* ((state (emagent-test--make-acp-state))
+         (completed nil)
+         (emagent-acp-watchdog-timeout 0.01)
+         (emagent-acp-watchdog-max-extensions 0))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-assistant-text state) "partial"
+          (emagent-acp-state-permission-busy state) t
+          (emagent-acp-state-prompt-watchdog-extensions state) 5)
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--complete-prompt)
+          (lambda (&rest _) (setq completed t)))
+         ((symbol-function 'emagent-acp--abort-prompt)
+          (lambda (&rest _) (setq completed 'aborted)))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (_s) nil)))
+      (emagent-acp--schedule-prompt-watchdog state)
+      (sleep-for 0.05)
+      (should-not completed)
+      (should (emagent-acp-state-prompt-watchdog-timer state))
+      (emagent-acp--clear-prompt-watchdog state))))
+
 (ert-deftest emagent-acp-session-test-retriable-prompt-error-p ()
   (should (emagent-acp--retriable-prompt-error-p
            "Error: RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh"))

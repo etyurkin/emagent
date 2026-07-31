@@ -2744,14 +2744,16 @@ request continues in the background but its result is ignored."
 
 WAITING is non-nil when ACP work is still outstanding.  Compress turns
 never extend once assistant text exists (the SUMMARY is enough to reset
-the session).  Other turns extend at most
+the session).  Open permission dialogs always extend (user wait, not an
+agent wedge).  Other waiting turns extend at most
 `emagent-acp-watchdog-max-extensions' times."
   (and waiting
        (not (and (emagent-acp-state-compress-pending state)
                  (let ((text (emagent-acp-state-assistant-text state)))
                    (and text (not (string-empty-p text))))))
-       (< (or (emagent-acp-state-prompt-watchdog-extensions state) 0)
-          (or emagent-acp-watchdog-max-extensions 0))))
+       (or (emagent-acp--permission-pending-p state)
+           (< (or (emagent-acp-state-prompt-watchdog-extensions state) 0)
+              (or emagent-acp-watchdog-max-extensions 0)))))
 
 (defun emagent-acp--schedule-prompt-watchdog (state)
   "Abort a prompt that stays busy without ACP progress.

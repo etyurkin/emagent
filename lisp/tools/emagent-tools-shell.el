@@ -1042,7 +1042,7 @@ When SHELL is non-nil, also suggest background execution."
       " output file later with fs op=read."))))
 
 (defun emagent-tools--compile-timeout-message (secs buf proc)
-  "Return a compile-timeout message; process left running in BUF.
+  "Return a compile-timeout message for SECS; process left running in BUF.
 PROC may be nil when the compilation buffer has no live process."
   (let ((pid (and proc (process-live-p proc) (process-id proc)))
         (name (if (buffer-live-p buf) (buffer-name buf) "*emagent-compile*")))
