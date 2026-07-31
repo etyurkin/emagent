@@ -56,7 +56,7 @@
   "Mutable per-buffer ACP session state.
 
 Replaces the former untyped hash table so field access is checked
-at byte-compile time.  Slots that are themselves maps (the usage
+at byte-compile time. Slots that are themselves maps (the usage
 and tool-call/tool-resolve tables, keyed by id) stay hash tables."
   ;; Connection
   client chat-buffer on-reveal provider mcp-http initialized
@@ -72,6 +72,7 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
   prompt-finalized prompt-finishing (prompt-generation 0)
   prompt-retry-gen
   finish-token finish-timer prompt-watchdog prompt-watchdog-timer
+  (prompt-watchdog-extensions 0)
   extra-context compress-pending quiet-prompt replaying-history
   continue-attempts deferred-complete-response
   current-tool current-tool-kind tool-call-since-last-chunk
@@ -479,6 +480,7 @@ layer (see `emagent-chat-set-status')."
                            (emagent-acp--connecting-p)
                            t)
           :prompt-finishing (and (emagent-acp-state-prompt-finishing state) t)
+          :compressing (and (emagent-acp-state-compress-pending state) t)
           :tool (emagent-acp-state-current-tool state)
           :tool-kind (emagent-acp-state-current-tool-kind state)
           :rss (emagent-acp-state-agent-rss state)
@@ -1930,8 +1932,18 @@ Interactive permission prompts still insert one dialog and return."
 The watchdog resets on each tool-call notification, so this measures idle
 time since the last tool call, not total prompt duration.  When ACP work is
 still outstanding (pending request, permission prompt, tool-resolve), the
-watchdog extends instead of closing the Response.  Increase if your agent
+watchdog extends instead of closing the Response, up to
+`emagent-acp-watchdog-max-extensions' times.  Increase if your agent
 regularly makes long chains of tool calls."
+  :type 'integer
+  :group 'emagent)
+
+(defcustom emagent-acp-watchdog-max-extensions 2
+  "How many times a stalled prompt may extend while ACP work is pending.
+
+After this many extensions the watchdog finalizes any partial assistant
+text (or aborts).  Compress turns never extend: they finalize on the
+first stall when SUMMARY text is already buffered."
   :type 'integer
   :group 'emagent)
 

@@ -21,6 +21,13 @@
   (should (string= "scheme" (emagent-struct--lang-for "foo.ss")))
   (should (string= "scheme" (emagent-struct--lang-for "foo.sld"))))
 
+(ert-deftest emagent-struct-test-clef-rejected ()
+  "Clef sources are not lisp-sitter languages; use fs instead."
+  (should (emagent-struct--clef-file-p "lib/foo.clef"))
+  (should-not (emagent-struct--lisp-file-p "lib/foo.clef"))
+  (let ((err (should-error (emagent-struct--lang-for "lib/foo.clef"))))
+    (should (string-match-p "fs op=read/write" (error-message-string err)))))
+
 (ert-deftest emagent-struct-test-lisp-file-p ()
   (should (emagent-struct--lisp-file-p "foo.el"))
   (should (emagent-struct--lisp-file-p "foo.lisp"))

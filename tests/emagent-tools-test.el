@@ -265,6 +265,38 @@ relative paths and does not cross directory boundaries on `*'."
          (emagent-tool-write-file file "(defun foo () 1)"))
       (delete-directory dir t))))
 
+(ert-deftest emagent-tools-test-apply-string-edit ()
+  (should (string= "hello world"
+                   (emagent-tools--apply-string-edit "hello there" "there" "world")))
+  (should (string= "aXaX"
+                   (emagent-tools--apply-string-edit "abab" "ab" "aX" t)))
+  (should-error (emagent-tools--apply-string-edit "abab" "ab" "aX"))
+  (should-error (emagent-tools--apply-string-edit "hello" "missing" "x")))
+
+(ert-deftest emagent-tools-test-edit-file ()
+  (let* ((dir (make-temp-file "emagent-tools-edit-" t))
+         (file "poc.qmd")
+         (resolved (expand-file-name file dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p nil)
+         (emagent-struct-require-for-lisp-files nil))
+    (unwind-protect
+        (progn
+          (write-region "alpha\nbeta\ngamma\n" nil resolved)
+          (emagent-tool-edit-file file "beta" "BETA")
+          (should (string= "alpha\nBETA\ngamma\n"
+                           (with-temp-buffer
+                             (insert-file-contents resolved)
+                             (buffer-string))))
+          (should-error (emagent-tool-edit-file file "missing" "x"))
+          (emagent-tool-edit-file file "alpha" "ALPHA")
+          (should (string= "ALPHA\nBETA\ngamma\n"
+                           (with-temp-buffer
+                             (insert-file-contents resolved)
+                             (buffer-string)))))
+      (delete-directory dir t))))
+
 (ert-deftest emagent-tools-test-eval-form-guard-blocked ()
   (should (string-match-p "Eval blocked (kill-emacs)"
                           (emagent-tools--eval-form-guard "(kill-emacs)"))))

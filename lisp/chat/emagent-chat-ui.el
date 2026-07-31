@@ -1274,6 +1274,7 @@ prompts stay small."
     (format
      (concat
       "Compress the conversation below into a short durable brief.\n"
+      "Do not use tools. Reply with only the SUMMARY and FACTS text.\n"
       "Format exactly:\n"
       "1) SUMMARY: 5-12 short bullets (decisions, paths, errors, open tasks)\n"
       "2) FACTS: durable bullets only (paths, decisions, TODOs) — no prose\n"

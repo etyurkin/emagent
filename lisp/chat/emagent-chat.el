@@ -70,7 +70,7 @@
              (description . ,description)
              (enum . ,(apply #'vector ops))))))
 
-(defconst emagent-mcp--fs-mutating-ops '("write")
+(defconst emagent-mcp--fs-mutating-ops '("write" "edit")
   "Fs ops that require expected_tick under ACP.")
 
 (defconst emagent-mcp--structural-ops
@@ -391,13 +391,21 @@ hash-tables) are JSON-encoded.  Other scalars use `format'."
 (defun emagent-mcp--fs (args)
   "Dispatch fs tool ARGS; return a value or continuation."
   (pcase (emagent-mcp--require-op
-          args '("read" "write" "undo" "delete" "delete_directory" "list" "find"))
+          args '("read" "write" "edit" "undo" "delete" "delete_directory" "list" "find"))
     ("write"
      (emagent-mcp-cont (reply)
        (emagent-tool-write-file-async
         (emagent-mcp--reply-wrap reply)
         (emagent-mcp--arg args "path")
         (emagent-mcp--arg args "content" ""))))
+    ("edit"
+     (emagent-mcp-cont (reply)
+       (emagent-tool-edit-file-async
+        (emagent-mcp--reply-wrap reply)
+        (emagent-mcp--arg args "path")
+        (emagent-mcp--arg args "old_string")
+        (emagent-mcp--arg args "new_string" "")
+        (emagent-mcp--bool args "replace_all"))))
     ("read" (emagent-tool-read-file (emagent-mcp--arg args "path")
                                     (emagent-mcp--arg args "line")
                                     (emagent-mcp--arg args "limit")
@@ -787,10 +795,16 @@ Handlers may return a value or an `emagent-mcp-cont' continuation."
   :properties
   (append
    (emagent-mcp--op-prop
-    '("read" "write" "undo" "delete" "delete_directory" "list" "find")
+    '("read" "write" "edit" "undo" "delete" "delete_directory" "list" "find")
     "Filesystem operation.")
    (emagent-mcp--path-prop)
    '(("content" . ((type . "string") (description . "Full file contents (write).")))
+     ("old_string" . ((type . "string")
+                      (description . "Exact text to replace (edit).")))
+     ("new_string" . ((type . "string")
+                      (description . "Replacement text (edit).")))
+     ("replace_all" . ((type . "boolean")
+                       (description . "Replace every old_string match (edit).")))
      ("line" . ((type . "integer") (description . "1-based start line (read).")))
      ("limit" . ((type . "integer") (description . "Max lines (read).")))
      ("steps" . ((type . "integer") (description . "Undo steps (default 1).")))
@@ -798,9 +812,10 @@ Handlers may return a value or an `emagent-mcp-cont' continuation."
      ("glob" . ((type . "string") (description . "Filename glob (find)."))))
    (emagent-mcp--expected-tick-prop))
   :required '("op")
-  "Emacs FS. op=read|write|undo|delete|delete_directory|list|find.
+  "Emacs FS. op=read|write|edit|undo|delete|delete_directory|list|find.
 
-Write needs expected_tick. Lisp files use structural."
+Write/edit need expected_tick from fs op=read. Prefer edit for targeted changes;
+write replaces the whole file. Lisp files use structural."
   (args)
   (emagent-mcp--fs args))
 
@@ -2859,7 +2874,14 @@ braces.  Best-effort; failures are logged."
                             (if (zerop code) "ok" "failed"))))))))))
 
 ;; Owned by `emagent-chat-mode-line'; read here without requiring it back.
-(defvar emagent-chat--status)
+(defvar-local emagent-chat--status nil
+  "Plist snapshot of ACP session status, pushed by the ACP layer via :cb-status.
+
+Keys: :busy :waiting-permission :ready :connecting :prompt-finishing
+:compressing :tool :tool-kind :rss :emacs-rss :model-id
+:ctx-usage (a (USED . SIZE) cons or nil) :ctx-unavailable.
+The mode line renders from this snapshot so the UI never calls up into the ACP
+runtime.")
 
 (defgroup emagent-chat nil
   "Emagent chat UI."
@@ -3232,6 +3254,9 @@ the mode line pulling session state back out of the ACP layer."
                       (emagent-chat--open-response-p)
                       (not (emagent-chat--stat :prompt-finishing)))
                  (propertize "emagent:stalled" (quote face) (quote warning)))
+                ((and busy (emagent-chat--stat :compressing))
+                 (concat (propertize "Compacting" (quote face) busy-face)
+                         spinner))
                 ((and busy tool (member kind (quote ("write" "execute"))))
                  (concat (propertize "Executing" (quote face) busy-face)
                          spinner))
