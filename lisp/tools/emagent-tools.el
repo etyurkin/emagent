@@ -106,6 +106,7 @@ Substitution guide:
 | Instead of              | Use                                       |
 |-------------------------+-------------------------------------------|
 | cat, head, tail         | fs op=read (optional line, limit)         |
+| Edit / StrReplace       | fs op=edit (old_string, new_string, tick) |
 | grep, rg, ag            | search                                    |
 | find -name GLOB         | fs op=find                                |
 | ls / tree               | fs op=list                                |
@@ -144,6 +145,9 @@ mvn/gradle/make/cargo/go/npm/yarn/pytest through compilation-mode
 - To revert an fs op=write mistake, call fs op=undo — never rewrite from memory.
 - Concurrent MCP edits: pass expected_tick from the latest fs op=read
   (or structural op=get) emagent-tick; stale_revision means re-read and retry.
+- Prefer fs op=edit for targeted non-Lisp edits (unique old_string → new_string).
+  Use fs op=write only when replacing the whole file. Do not switch to agent
+  Edit/Read mid-turn after an emagent fs op=read.
 - delete-file, write-file, shell-command, call-process are blocked inside eval;
   use fs/shell/structural (writes use Emacs unless you enable
   `emagent-acp-confirm-fs-writes').
@@ -162,9 +166,11 @@ See `emagent-prompts--prefer-emacs-prompt'.")
   "Return substitution-guide rows for Lisp file editing."
   (if (emagent-struct-available-p)
       "| Edit .el / .lisp / .cl / .scm | structural op=replace|insert (fs write refused) |
+| Edit .clef (Clef)         | fs op=read/write (not lisp-sitter)                  |
 | Structural file outline   | structural op=tree|outline|bounds                   |
 | Validate Lisp file        | structural op=check_file                            |"
     "| Edit .el files            | fs op=write + elisp op=check (small edits)          |
+| Edit .clef (Clef)         | fs op=read/write                                    |
 | Validate before save      | elisp op=check                                      |"))
 
 (defun emagent-prompts--prefer-emacs-elisp-pattern-rows ()
@@ -655,10 +661,20 @@ Agents must use structural MCP ops for .el, .lisp, .cl, and .scm files."
   :type 'boolean
   :group 'emagent-struct)
 
+(defun emagent-struct--clef-file-p (path)
+  "Return non-nil when PATH is a Clef source file (.clef)."
+  (and (stringp path) (string-match-p "\\.clef\\'" path)))
+
+(defun emagent-struct--reject-unsupported (path)
+  "Signal when PATH is not a lisp-sitter language (e.g. .clef)."
+  (when (emagent-struct--clef-file-p path)
+    (error ".clef is not a lisp-sitter language; use fs op=read/write")))
+
 ;; ── Language detection ────────────────────────────────────────────
 
 (defun emagent-struct--lang-for (path)
   "Return language id string for PATH based on extension."
+  (emagent-struct--reject-unsupported path)
   (cond
    ((string-match-p "\\.el\\'" path) "elisp")
    ((string-match-p "\\.lisp\\'" path) "commonlisp")
@@ -713,6 +729,8 @@ Signal an error when lisp-sitter exits non-zero."
 (defun emagent-struct--call-path (&rest args)
   "Run lisp-sitter ARGS against a file path; return trimmed stdout."
   (emagent-struct--ensure)
+  (dolist (arg args)
+    (when (stringp arg) (emagent-struct--reject-unsupported arg)))
   (with-temp-buffer
     (let ((exit (apply #'call-process emagent-struct-lisp-sitter-bin nil
                       (current-buffer) nil args)))
@@ -724,6 +742,8 @@ Signal an error when lisp-sitter exits non-zero."
 (defun emagent-struct--call-path-async (callback &rest args)
   "Run lisp-sitter ARGS against a file path; call CALLBACK with (output is-error)."
   (emagent-struct--ensure)
+  (dolist (arg args)
+    (when (stringp arg) (emagent-struct--reject-unsupported arg)))
   (apply #'emagent-tools--run-process-async
          (lambda (output is-error)
            (if is-error
@@ -936,6 +956,16 @@ Arguments: WITH, WRAP."
   (and (boundp 'emagent-acp-prefer-emacs)
        emagent-acp-prefer-emacs
        emagent-shell-redirect))
+
+(defun emagent-shell--compound-command-p (command)
+  "Return non-nil when COMMAND has pipes or other shell operators.
+
+Quoted spans are ignored so `echo \"a|b\"' stays simple.  Compound
+commands must run as real shell — prefer-Emacs redirects would mangle
+`grep x file | head' into a bogus path."
+  (let ((bare (emagent-shell--strip-quoted (or command ""))))
+    (or (string-match-p "[|;&<>`]" bare)
+        (string-match-p "\\$(" bare))))
 
 (defun emagent-shell--suggest-p ()
   "Return non-nil when shell suggestions are active."
@@ -1195,7 +1225,8 @@ Arguments: DIRECTORY, TIMEOUT."
   "Run COMMAND via an emagent tool when it matches a simple pattern.
 
 Arguments: DIRECTORY."
-  (when (emagent-shell--prefer-emacs-p)
+  (when (and (emagent-shell--prefer-emacs-p)
+             (not (emagent-shell--compound-command-p command)))
     (let* ((trimmed (string-trim command))
            (words (emagent-shell--words trimmed))
            (tool (pcase (car words)
@@ -1212,23 +1243,24 @@ Arguments: DIRECTORY."
   "Return a user-facing hint when COMMAND should use an emagent tool."
   (when (emagent-shell--suggest-p)
     (let ((cmd (string-trim command)))
-    (cond
-     ((string-match-p "\\`git[[:space:]]+status\\>" cmd) nil)
-     ((string-match-p "\\`git[[:space:]]+diff\\>" cmd) nil)
-     ((string-match-p "\\`git[[:space:]]+log\\>" cmd) nil)
-     ((string-match-p "\\<git\\>" cmd)
-      "Use emagent git op=status|diff|log instead of shell git.")
-     ((string-match-p "\\`\\(?:grep\\|rg\\|ag\\)\\>" cmd)
-      "Use emagent search instead of shell grep/rg/ag.")
-     ((string-match-p "\\`find\\>" cmd)
-      "Use emagent fs op=find or fs op=list instead of shell find.")
-     ((string-match-p "\\`\\(?:cat\\|head\\|tail\\)\\>" cmd)
-      "Use emagent fs op=read (optional line and limit) instead of cat/head/tail.")
-     ((string-match-p "\\`jq\\>" cmd)
-      "Use emagent eval with json-parse-string / json-read instead of jq.")
-     ((string-match-p "\\`open[[:space:]]" cmd)
-      "Use emagent eval with browse-url instead of open.")
-     (t nil)))))
+      (cond
+       ((emagent-shell--compound-command-p cmd) nil)
+       ((string-match-p "\\`git[[:space:]]+status\\>" cmd) nil)
+       ((string-match-p "\\`git[[:space:]]+diff\\>" cmd) nil)
+       ((string-match-p "\\`git[[:space:]]+log\\>" cmd) nil)
+       ((string-match-p "\\<git\\>" cmd)
+        "Use emagent git op=status|diff|log instead of shell git.")
+       ((string-match-p "\\`\\(?:grep\\|rg\\|ag\\)\\>" cmd)
+        "Use emagent search instead of shell grep/rg/ag.")
+       ((string-match-p "\\`find\\>" cmd)
+        "Use emagent fs op=find or fs op=list instead of shell find.")
+       ((string-match-p "\\`\\(?:cat\\|head\\|tail\\)\\>" cmd)
+        "Use emagent fs op=read (optional line and limit) instead of cat/head/tail.")
+       ((string-match-p "\\`jq\\>" cmd)
+        "Use emagent eval with json-parse-string / json-read instead of jq.")
+       ((string-match-p "\\`open[[:space:]]" cmd)
+        "Use emagent eval with browse-url instead of open.")
+       (t nil)))))
 
 (defun emagent-shell--redirect-git-async (words callback &optional timeout)
   "Internal helper for WORDS and CALLBACK and TIMEOUT."
@@ -1308,7 +1340,8 @@ Arguments: DIRECTORY."
   "Run COMMAND via an emagent tool when it matches; call CALLBACK with result.
 
 Arguments: DIRECTORY, TIMEOUT."
-  (if (not (emagent-shell--prefer-emacs-p))
+  (if (or (not (emagent-shell--prefer-emacs-p))
+          (emagent-shell--compound-command-p command))
       (funcall callback nil nil)
     (let* ((trimmed (string-trim command))
            (words (emagent-shell--words trimmed))
@@ -1765,6 +1798,59 @@ EXPECTED-TICK, when non-nil, overrides `emagent-tools--expected-file-tick'."
       (if emagent-tools--acp-session-p
           (emagent-tools--append-file-tick path result)
         result))))
+
+(defun emagent-tools--apply-string-edit (content old-string new-string &optional replace-all)
+  "Return CONTENT with OLD-STRING replaced by NEW-STRING.
+
+When REPLACE-ALL is non-nil, replace every occurrence.  Otherwise OLD-STRING
+must appear exactly once.  Signal `user-error' when the match count is wrong."
+  (unless (and (stringp old-string) (not (string-empty-p old-string)))
+    (user-error "Old_string is required and must be non-empty"))
+  (unless (stringp new-string)
+    (user-error "New_string is required"))
+  (let ((count 0)
+        (start 0)
+        (len (length old-string)))
+    (while (and (< start (length content))
+                (setq start (string-search old-string content start)))
+      (setq count (1+ count)
+            start (+ start (max 1 len))))
+    (cond
+     ((= count 0)
+      (user-error "Old_string not found in file"))
+     ((and (not replace-all) (> count 1))
+      (user-error
+       "Old_string matched %d times; pass replace_all=true or make it unique"
+       count))
+     (t
+      (if replace-all
+          (string-replace old-string new-string content)
+        (let ((at (string-search old-string content)))
+          (concat (substring content 0 at)
+                  new-string
+                  (substring content (+ at len)))))))))
+
+(cl-defun emagent-tool-edit-file-async (callback path old-string new-string
+                                                 &optional replace-all)
+  "Replace OLD-STRING with NEW-STRING in PATH; call CALLBACK with result.
+
+Same guards as `emagent-tool-write-file-async' (Lisp structural refuse,
+protected paths, tick CAS via write).  REPLACE-ALL replaces every match."
+  (condition-case err
+      (let* ((old (emagent-tools--read-elisp-file-content path))
+             (new (emagent-tools--apply-string-edit
+                   old old-string new-string replace-all)))
+        (emagent-tool-write-file-async callback path new))
+    (error (funcall callback (error-message-string err) t))))
+
+(defun emagent-tool-edit-file (path old-string new-string &optional replace-all)
+  "Replace OLD-STRING with NEW-STRING in PATH (sync).
+
+Arguments: REPLACE-ALL."
+  (let* ((old (emagent-tools--read-elisp-file-content path))
+         (new (emagent-tools--apply-string-edit
+               old old-string new-string replace-all)))
+    (emagent-tool-write-file path new)))
 
 (defun emagent-tools--structural-sync-path (file)
   "Sync FILE buffer content to disk; return absolute path.

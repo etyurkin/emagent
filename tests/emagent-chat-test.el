@@ -72,8 +72,22 @@
   (should-not (emagent-chat--compress-command-p "/plan")))
 
 (ert-deftest emagent-chat-test-compress-prompt-text ()
-  (should (string-match-p "<conversation>" (emagent-chat--compress-prompt-text "hello")))
-  (should (string-match-p "hello" (emagent-chat--compress-prompt-text "hello"))))
+  (let ((prompt (emagent-chat--compress-prompt-text "hello")))
+    (should (string-match-p "<conversation>" prompt))
+    (should (string-match-p "hello" prompt))
+    (should (string-match-p "Do not use tools" prompt))))
+
+(ert-deftest emagent-chat-test-mode-line-compacting ()
+  "Busy + :compressing shows Compacting instead of Thinking."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (pop-to-buffer buffer)
+     (with-current-buffer buffer
+       (emagent-chat-set-status '(:busy t :compressing t))
+       (should (string-match-p "^Compacting"
+                               (car (emagent-chat--mode-line-strings))))
+       (should-not (string-match-p "Thinking"
+                                   (car (emagent-chat--mode-line-strings))))))))
 
 (ert-deftest emagent-chat-test-dispatch-compress-empty-fails ()
   "A /compress with no prior conversation fails the response, not dispatch."

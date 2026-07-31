@@ -52,6 +52,25 @@
                             (emagent-shell--suggest-alternative "git commit -m x")))
     (should-not (emagent-shell--suggest-alternative "git status"))))
 
+(ert-deftest emagent-shell-test-compound-command-p ()
+  (should (emagent-shell--compound-command-p "grep x Makefile | head"))
+  (should (emagent-shell--compound-command-p "make test && echo ok"))
+  (should (emagent-shell--compound-command-p "cmd1 || cmd2"))
+  (should (emagent-shell--compound-command-p "echo hi; ls"))
+  (should (emagent-shell--compound-command-p "echo $(date)"))
+  (should-not (emagent-shell--compound-command-p "grep x Makefile"))
+  (should-not (emagent-shell--compound-command-p "echo \"a|b\"")))
+
+(ert-deftest emagent-shell-test-compound-skips-suggest-and-redirect ()
+  "Pipelines must not be redirected or refused as simple grep/cat."
+  (let ((emagent-acp-prefer-emacs t)
+        (emagent-shell-redirect t)
+        (emagent-shell-suggest t))
+    (should-not (emagent-shell--suggest-alternative "grep x Makefile | head"))
+    (should-not (emagent-shell--try-redirect "grep x Makefile | head" default-directory))
+    (should-not (emagent-shell--try-redirect "cat foo | wc -l" default-directory))
+    (should (string-match-p "search" (emagent-shell--suggest-alternative "rg foo")))))
+
 ;;;; Network policy
 
 (ert-deftest emagent-shell-test-read-only-network-p ()
@@ -118,6 +137,39 @@ The bug caused Wrong type argument: listp in url-http-chunked-encoding-after-cha
       (concat "HTTP/1.1 200 OK\n\n" (make-string 200 ?x))
     (let ((result (emagent-tool-fetch-url "http://example.com" 10)))
       (should (string-match-p "truncated" result)))))
+
+(ert-deftest emagent-shell-test-compile-timeout-detaches ()
+  "Compile timeout leaves the process running and names the buffer."
+  (let* ((emagent-tools-subprocess-timeout 0.05)
+         (emagent-tools-subprocess-timeout-max 1800)
+         (got nil)
+         (got-err nil)
+         (killed nil)
+         (fake-proc (start-process "emagent-compile-test" nil "sleep" "30")))
+    (unwind-protect
+        (emagent-test--with-mocks
+            (((symbol-function 'compilation-start)
+              (lambda (_cmd &rest _)
+                (get-buffer-create "*emagent-compile*")))
+             ((symbol-function 'get-buffer-process)
+              (lambda (_buf) fake-proc))
+             ((symbol-function 'delete-process)
+              (lambda (_p) (setq killed t)))
+             ((symbol-function 'emagent-tools--cont-register-cancel) #'ignore)
+             ((symbol-function 'ansi-color-compilation-filter) #'ignore)
+             ((symbol-function 'emagent-tools--clamp-timeout) #'identity))
+          (emagent-tool-compile-async
+           (lambda (text is-error)
+             (setq got text got-err is-error))
+           "make ansi CHAPTER=printer")
+          (sleep-for 0.2)
+          (should got-err)
+          (should (string-match-p "\\*emagent-compile\\*" got))
+          (should (string-match-p "left running" got))
+          (should-not killed)
+          (should (process-live-p fake-proc)))
+      (when (process-live-p fake-proc)
+        (delete-process fake-proc)))))
 
 (provide 'emagent-shell-test)
 

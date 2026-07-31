@@ -997,7 +997,7 @@ Agent tools may override this per call up to
   :type 'integer
   :group 'emagent-tools)
 
-(defcustom emagent-tools-subprocess-timeout-max 300
+(defcustom emagent-tools-subprocess-timeout-max 1800
   "Maximum seconds an agent may request as a per-call subprocess timeout."
   :type 'integer
   :group 'emagent-tools)
@@ -1040,6 +1040,21 @@ When SHELL is non-nil, also suggest background execution."
       " For genuinely long-running work, use background execution"
       " (append ' > /tmp/out.txt 2>&1 & echo \"PID: $!\"') and read the"
       " output file later with fs op=read."))))
+
+(defun emagent-tools--compile-timeout-message (secs buf proc)
+  "Return a compile-timeout message for SECS; process left running in BUF.
+PROC may be nil when the compilation buffer has no live process."
+  (let ((pid (and proc (process-live-p proc) (process-id proc)))
+        (name (if (buffer-live-p buf) (buffer-name buf) "*emagent-compile*")))
+    (format
+     (concat
+      "Timed out after %ds waiting for compile output (limit %ds). "
+      "Build left running in %s%s. "
+      "Poll with list_processes or read that buffer; "
+      "retry with a larger `timeout` (up to %ds) if you need to wait.")
+     secs emagent-tools-subprocess-timeout-max name
+     (if pid (format " (pid %d)" pid) "")
+     emagent-tools-subprocess-timeout-max)))
 
 (defun emagent-tools--run-async-sync (async-fn &rest args)
   "Run ASYNC-FN with ARGS and a result callback; block until it finishes.
@@ -1624,11 +1639,11 @@ Arguments: DIRECTORY."
          (proc nil)
          (buf nil)
          (finish
-          (lambda (text is-error)
+          (lambda (text is-error &optional kill-proc)
             (unless done
               (setq done t)
               (when timer (cancel-timer timer))
-              (when (and proc (process-live-p proc))
+              (when (and kill-proc proc (process-live-p proc))
                 (delete-process proc))
               (funcall callback text is-error)))))
     (condition-case err
@@ -1654,11 +1669,12 @@ Arguments: DIRECTORY."
                   (run-with-timer
                    timeout-secs nil
                    (lambda ()
-                     (when (process-live-p proc)
-                       (delete-process proc))
+                     ;; Leave the build running; only stop waiting on MCP.
                      (funcall finish
-                              (emagent-tools--timeout-message timeout-secs t)
-                              t))))
+                              (emagent-tools--compile-timeout-message
+                               timeout-secs buf proc)
+                              t
+                              nil))))
             (set-process-sentinel
              proc
              (lambda (p _event)
@@ -1672,15 +1688,16 @@ Arguments: DIRECTORY."
                    (when (> (length text) limit)
                      (setq text (concat (substring text 0 limit)
                                          "\n… (output truncated)")))
-                   (funcall finish text is-error))))))
+                   (funcall finish text is-error t))))))
           (unless proc
             (with-current-buffer buf
               (let ((text (buffer-substring-no-properties
                            (point-min) (point-max))))
                 (funcall finish
                          (emagent-tools-compact-compile text command nil)
-                         nil)))))
-      (error (funcall finish (error-message-string err) t)))))
+                         nil
+                         t)))))
+      (error (funcall finish (error-message-string err) t t)))))
 
 (defun emagent-tool-compile (command &optional directory)
   "Run COMMAND via `compilation-mode' and return its output as text.

@@ -1100,17 +1100,20 @@ Arguments: STATE."
            (defer (emagent-acp--provider-defer-tool-call-p state merged))
            (show (and label (not (string-empty-p label)) (not defer)
                         (emagent-acp--tool-call-displayable-p state merged))))
-      (emagent-acp--capture-schedule-wakeup state merged) (emagent-acp--explore-note-tool-kind (or kind (map-elt merged 'kind)))
-      (when defer
-        (puthash id merged pending-table)
-        (emagent-acp--provider-enqueue-tool-resolve state id))
-      (when show
-        (emagent-acp--emit-tool-call-display state id kind merged label status)
-        (when id (remhash id pending-table)))
-      (when (emagent-acp-state-permission-queue state)
-        (unless (fboundp 'emagent-acp--drain-permission-queue)
-          (require 'emagent-acp))
-        (emagent-acp--drain-permission-queue state)))))
+      (emagent-acp--capture-schedule-wakeup state merged)
+      (unless (emagent-acp-state-compress-pending state)
+        (emagent-acp--explore-note-tool-kind
+         (or kind (map-elt merged 'kind)))
+        (when defer
+          (puthash id merged pending-table)
+          (emagent-acp--provider-enqueue-tool-resolve state id))
+        (when show
+          (emagent-acp--emit-tool-call-display state id kind merged label status)
+          (when id (remhash id pending-table)))
+        (when (emagent-acp-state-permission-queue state)
+          (unless (fboundp 'emagent-acp--drain-permission-queue)
+            (require 'emagent-acp))
+          (emagent-acp--drain-permission-queue state))))))
 
 (defun emagent-acp--permission-question-line (emagent-acp-request)
   "Return the command or path to show on the permission ? line.
@@ -1221,6 +1224,9 @@ unchanged."
                (emagent-acp-send-response :client (emagent-acp-state-client state) :response response))
              (when on-complete (funcall on-complete)))))
       (cond
+       ((emagent-acp-state-compress-pending state)
+        (emagent-log "permission cancelled during compress: %s" question)
+        (funcall respond :deny))
        (switch-mode
         (unless (fboundp 'emagent-acp--prepare-interactive-context)
           (require 'emagent-acp))
@@ -2599,7 +2605,9 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
   (emagent-acp--reset-permission-gate state)
   (emagent-acp--cancel-prompt-render state)
   (emagent-acp--clear-thought-buffer state)
-  (emagent-acp--schedule-prompt-watchdog state)
+  (progn
+    (emagent-acp--clear-prompt-watchdog state)
+    (emagent-acp--schedule-prompt-watchdog state))
   (unless (emagent-acp-state-quiet-prompt state)
     (when (fboundp 'emagent-chat--send-pending-end)
       (when-let ((buf (emagent-acp--chat-buffer state)))
@@ -2728,7 +2736,24 @@ request continues in the background but its result is ignored."
   (when-let ((timer (emagent-acp-state-prompt-watchdog-timer state)))
     (cancel-timer timer))
   (setf (emagent-acp-state-prompt-watchdog state) nil)
-  (setf (emagent-acp-state-prompt-watchdog-timer state) nil))
+  (setf (emagent-acp-state-prompt-watchdog-timer state) nil)
+  (setf (emagent-acp-state-prompt-watchdog-extensions state) 0))
+
+(defun emagent-acp--watchdog-should-extend-p (state waiting)
+  "Return non-nil when STATE's stall should extend rather than finalize.
+
+WAITING is non-nil when ACP work is still outstanding.  Compress turns
+never extend once assistant text exists (the SUMMARY is enough to reset
+the session).  Open permission dialogs always extend (user wait, not an
+agent wedge).  Other waiting turns extend at most
+`emagent-acp-watchdog-max-extensions' times."
+  (and waiting
+       (not (and (emagent-acp-state-compress-pending state)
+                 (let ((text (emagent-acp-state-assistant-text state)))
+                   (and text (not (string-empty-p text))))))
+       (or (emagent-acp--permission-pending-p state)
+           (< (or (emagent-acp-state-prompt-watchdog-extensions state) 0)
+              (or emagent-acp-watchdog-max-extensions 0)))))
 
 (defun emagent-acp--schedule-prompt-watchdog (state)
   "Abort a prompt that stays busy without ACP progress.
@@ -2738,8 +2763,11 @@ call and permission answer, and without the cancel each call would leak a live
 timer (token-guarded no-ops that still pin STATE for the whole timeout).
 
 When ACP work is still outstanding (pending RPC, permission prompt, or
-tool-resolve), extend the watchdog instead of finalizing: otherwise the UI
-closes the Response while the agent keeps working and logging."
+tool-resolve), extend the watchdog instead of finalizing — up to
+`emagent-acp-watchdog-max-extensions' times — so the UI does not close the
+Response while the agent keeps working.  Compress turns with buffered
+SUMMARY text finalize on the first stall even if session/prompt is still
+pending (Claude ACP can wedge without ever returning)."
   (when-let ((old (emagent-acp-state-prompt-watchdog-timer state)))
     (cancel-timer old))
   (let* ((token (cl-gensym "emagent-prompt-watchdog"))
@@ -2761,12 +2789,20 @@ closes the Response while the agent keeps working and logging."
                          (emagent-log "emagent: pending ACP request count: %d"
                                       (length pending)))
                        (cond
-                        (waiting
-                         (emagent-log "emagent: prompt still waiting on agent work; extending watchdog")
+                        ((emagent-acp--watchdog-should-extend-p state waiting)
+                         (setf (emagent-acp-state-prompt-watchdog-extensions state)
+                               (1+ (or (emagent-acp-state-prompt-watchdog-extensions state) 0)))
+                         (emagent-log
+                          "emagent: prompt still waiting on agent work; extending watchdog (%d/%d)"
+                          (emagent-acp-state-prompt-watchdog-extensions state)
+                          emagent-acp-watchdog-max-extensions)
                          (emagent-acp--schedule-prompt-watchdog state))
                         ((and (emagent-acp-state-assistant-text state)
                               (not (string-empty-p
                                     (emagent-acp-state-assistant-text state))))
+                         (when waiting
+                           (emagent-log
+                            "emagent: pending ACP work abandoned after stall; finalizing partial"))
                          (emagent-log "emagent: prompt stalled; finalizing partial response")
                          (emagent-acp--complete-prompt state nil))
                         (t
@@ -2775,6 +2811,8 @@ closes the Response while the agent keeps working and logging."
                           "prompt stalled — reconnect with M-x emagent-mode or kill and reopen the buffer")))))))))
     (setf (emagent-acp-state-prompt-watchdog state) token)
     (setf (emagent-acp-state-prompt-watchdog-timer state) timer)))
+
+
 
 (defun emagent-acp--stream-to-buffer-p (state)
   "Return non-nil when agent chunks may update the chat buffer live.
