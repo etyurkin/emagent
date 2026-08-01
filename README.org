@@ -33,17 +33,12 @@ only for binaries Emacs itself must find (=cursor-agent=, =claude-agent-acp=).
 
 * Install
 
-Not on MELPA yet ([[https://github.com/melpa/melpa/pull/10081][melpa/melpa#10081]]).
-Until then, install from source:
-
 #+BEGIN_SRC emacs-lisp
 (use-package emagent
   :ensure (:host github :repo "etyurkin/emagent" :depth 1
            :files (:defaults ("lisp" . ("lisp/*/*.el"))))
   :commands (emagent emagent-mode))
 #+END_SRC
-
-Once the recipe lands: =:ensure t= or =M-x package-install RET emagent RET=.
 
 Emagent probes for =cursor-agent= and =claude-agent-acp=, asks only when both
 are present, and defaults to =emagent-default-provider= (='cursor=).  For a local
