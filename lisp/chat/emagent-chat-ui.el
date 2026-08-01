@@ -2414,6 +2414,12 @@ SPEC may be nil when the link has no query (model-only override)."
                    (> (length spec) 1)
                    spec))))))
 
+(defun emagent-chat--text-turn-model-info (text)
+  "Return (MODEL-ID . SPEC) from the first model link in TEXT."
+  (with-temp-buffer
+    (insert text)
+    (emagent-chat--region-turn-model-info (point-min) (point-max))))
+
 (defun emagent-chat--strip-model-links (text)
   "Remove `/model' override links from outgoing TEXT.
 The marker is client UI — the slash command is documented as never sent

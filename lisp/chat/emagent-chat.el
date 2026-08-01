@@ -3564,28 +3564,46 @@ Caller must ensure the session is idle and history is non-empty."
     (emagent-chat--ensure-follow-window)
     (emagent-chat--dispatch-compress)))
 
+(defun emagent-chat--expand-macros (text)
+  "Expand Org `{{{macro}}}' in TEXT using templates from the session buffer.
+
+Return the expanded string.  Signal an error when a macro is undefined."
+  (require 'org-macro)
+  (org-macro-initialize-templates)
+  (let ((templates org-macro-templates))
+    (with-temp-buffer
+      (org-mode)
+      (setq-local org-macro-templates templates)
+      (insert text)
+      (goto-char (point-min))
+      (org-macro-replace-all templates)
+      (buffer-substring-no-properties (point-min) (point-max)))))
+
 (defun emagent-chat-send ()
   "Send the `* user>' prompt at point to the agent (C-c C-c).
 
 Point must be on the prompt's heading line or in its body lines.  The
-prompt is sent as-is (heading prefix stripped); nothing in the buffer
-is rewritten, so text properties like the `/model' stamp survive.
-Sending a previous prompt replaces its old response."
+prompt is sent as-is (heading prefix stripped, Org `{{{macros}}}'
+expanded); nothing in the buffer is rewritten, so text properties like
+the `/model' stamp survive.  Sending a previous prompt replaces its old
+response."
   (interactive)
   (let ((bounds (emagent-chat--send-bounds)))
     (unless bounds
       (user-error "Not on a user prompt"))
     (let* ((raw (string-trim (buffer-substring-no-properties
                               (car bounds) (cdr bounds))))
+           (stripped (string-trim (emagent-chat--strip-user-heading raw)))
+           (expanded (emagent-chat--expand-macros stripped))
            ;; The `/model' link overrides the buffer model for this turn; it
-           ;; is client UI, stripped from what the agent receives.  With no
-           ;; link, keep whatever override is sticky (a prior failure may
-           ;; have chosen to keep one).
-           (input (emagent-chat--strip-model-links
-                   (string-trim (emagent-chat--strip-user-heading raw))))
-           (override (emagent-chat--region-turn-model (car bounds) (cdr bounds)))
-           (link-spec (emagent-chat--region-turn-apply-spec
-                       (car bounds) (cdr bounds))))
+           ;; is client UI, stripped from what the agent receives.  Scan the
+           ;; expanded text so `{{{macro}}}' bodies that expand to a link
+           ;; still switch model.  With no link, keep whatever override is
+           ;; sticky (a prior failure may have chosen to keep one).
+           (input (emagent-chat--strip-model-links expanded))
+           (model-info (emagent-chat--text-turn-model-info expanded))
+           (override (car model-info))
+           (link-spec (cdr model-info)))
       (when (string-empty-p input)
         (user-error "Prompt is empty"))
       ;; Client slash commands never go to the agent.

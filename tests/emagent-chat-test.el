@@ -1321,6 +1321,34 @@ Org closes early and the trailing prose is still converted."
     ;; Trailing prose after the real terminator is still transformed.
     (should (string-match-p "\\[\\[http://x\\]\\[docs\\]\\]" out))))
 
+(ert-deftest emagent-chat-test-expand-macros ()
+  "Org `{{{macros}}}' expand on send using `#+MACRO:' from the session buffer."
+  (with-temp-buffer
+    (insert "#+MACRO: greet Hello $1\n")
+    (delay-mode-hooks (emagent-mode))
+    (should (equal "Hello world"
+                   (emagent-chat--expand-macros "{{{greet(world)}}}")))
+    (should (equal "plain text"
+                   (emagent-chat--expand-macros "plain text")))))
+
+(ert-deftest emagent-chat-test-expand-macros-undefined ()
+  "An undefined `{{{macro}}}' aborts expansion."
+  (with-temp-buffer
+    (insert "#+MACRO: greet Hello $1\n")
+    (delay-mode-hooks (emagent-mode))
+    (should-error (emagent-chat--expand-macros "{{{no-such-macro}}}"))))
+
+(ert-deftest emagent-chat-test-expand-macros-model-link ()
+  "A macro that expands to a model link is scanned and stripped like a literal link."
+  (with-temp-buffer
+    (insert "#+MACRO: stamp [[emagent://claude/claude-haiku-4-5][haiku]]\n")
+    (delay-mode-hooks (emagent-mode))
+    (let ((expanded (emagent-chat--expand-macros "{{{stamp}}} please")))
+      (should (equal "claude-haiku-4-5"
+                     (car (emagent-chat--text-turn-model-info expanded))))
+      (should (equal "please"
+                     (emagent-chat--strip-model-links expanded))))))
+
 (ert-deftest emagent-chat-test-turn-model-region-scan ()
   "The `/model' link in the prompt is read back by the region scanner."
   (with-temp-buffer
@@ -1449,11 +1477,94 @@ no custom fontification), even on org heading lines (prompt and Thinking)."
           emagent-chat--turn-model-base "sonnet")
     (let (restored)
       (cl-letf (((symbol-function 'emagent-acp-set-model-transient)
-                 (lambda (m _cb) (setq restored m))))
+                 (lambda (m _cb &optional _spec _fail) (setq restored m))))
         (emagent-acp--restore-turn-model))
       (should (equal "sonnet" restored))
       (should-not emagent-chat--turn-model)
       (should-not emagent-chat--turn-model-base))))
+
+(ert-deftest emagent-chat-test-set-model-transient-skips-done-on-failure ()
+  "A failed transient switch must not call ON-DONE (would send on the wrong model)."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (let* ((state (emagent-test--make-acp-state))
+           (done nil)
+           (failed nil)
+           (on-fail nil))
+      (setq emagent-acp--session state)
+      (cl-letf (((symbol-function 'emagent-acp--session) (lambda () state))
+                ((symbol-function 'emagent-acp--config-option-set-model-id)
+                 (lambda (&rest args)
+                   (setq on-fail (plist-get args :on-failure))
+                   (when on-fail (funcall on-fail)))))
+        (emagent-acp-set-model-transient
+         "nope" (lambda () (setq done t)) nil (lambda () (setq failed t))))
+      (should failed)
+      (should-not done))))
+
+(ert-deftest emagent-chat-test-turn-model-unknown-aborts-send ()
+  "An unavailable per-turn model aborts the send instead of using the session model."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (let* ((state (emagent-test--make-acp-state))
+           (sent nil)
+           (failed nil))
+      (setq emagent-acp--session state
+            emagent-chat--turn-model "composer-2.5-fast"
+            emagent-chat--send-token (cons t nil))
+      (setf (emagent-acp-state-config-options state)
+            '((( :id . "model") (:category . "model")
+               (:current-value . "grok-4.5")
+               (:options . (((:value . "grok-4.5") (:name . "Grok"))
+                            ((:value . "composer-2.5") (:name . "Composer")))))))
+      (cl-letf (((symbol-function 'emagent-acp-ensure-connected)
+                 (lambda (&rest args)
+                   (funcall (plist-get args :on-ready))))
+                ((symbol-function 'emagent-acp--session) (lambda () state))
+                ((symbol-function 'emagent-acp--send-prompt-safe)
+                 (lambda (&rest _) (setq sent t)))
+                ((symbol-function 'emagent-chat-fail-assistant)
+                 (lambda (msg) (setq failed msg)))
+                ((symbol-function 'emagent-chat--send-active-p)
+                 (lambda (_token) t)))
+        (emagent-acp-send "hello"))
+      (should-not sent)
+      (should (string-match-p "composer-2.5-fast" failed))
+      (should (string-match-p "aborted" failed))
+      (should-not emagent-chat--turn-model))))
+
+(ert-deftest emagent-chat-test-turn-model-switch-failure-aborts-send ()
+  "ACP switch failure aborts the send; ON-DONE must not fire."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (let* ((state (emagent-test--make-acp-state))
+           (sent nil)
+           (failed nil))
+      (setq emagent-acp--session state
+            emagent-chat--turn-model "composer-2.5"
+            emagent-chat--send-token (cons t nil))
+      (setf (emagent-acp-state-config-options state)
+            '((( :id . "model") (:category . "model")
+               (:current-value . "grok-4.5")
+               (:options . (((:value . "grok-4.5") (:name . "Grok"))
+                            ((:value . "composer-2.5") (:name . "Composer")))))))
+      (cl-letf (((symbol-function 'emagent-acp-ensure-connected)
+                 (lambda (&rest args)
+                   (funcall (plist-get args :on-ready))))
+                ((symbol-function 'emagent-acp--session) (lambda () state))
+                ((symbol-function 'emagent-acp-set-model-transient)
+                 (lambda (_model _done &optional _spec on-failure)
+                   (when on-failure (funcall on-failure))))
+                ((symbol-function 'emagent-acp--send-prompt-safe)
+                 (lambda (&rest _) (setq sent t)))
+                ((symbol-function 'emagent-chat-fail-assistant)
+                 (lambda (msg) (setq failed msg)))
+                ((symbol-function 'emagent-chat--send-active-p)
+                 (lambda (_token) t)))
+        (emagent-acp-send "hello"))
+      (should-not sent)
+      (should (string-match-p "Could not switch" failed))
+      (should-not emagent-chat--turn-model))))
 
 (ert-deftest emagent-chat-test-turn-model-fatal-failure-restores ()
   "Permanent prompt failures restore the buffer model without a keep dialog."
@@ -1465,7 +1576,7 @@ no custom fontification), even on org heading lines (prompt and Thinking)."
       (cl-letf (((symbol-function 'emagent-tools--buttons-prompt)
                  (lambda (&rest _) (setq prompted t)))
                 ((symbol-function 'emagent-acp-set-model-transient)
-                 (lambda (_ _cb) nil)))
+                 (lambda (_ _cb &optional _spec _fail) nil)))
         (emagent-acp--turn-model-on-failure
          "prompt failed: Internal error: Prompt is too long"))
       (should-not prompted)
