@@ -221,6 +221,11 @@ and re-prompts on expiry.  Your own prompt supersedes a pending wakeup;
 =ScheduleWakeup= =stop= cancels.  Disable with
 =emagent-acp-honor-schedule-wakeup=.
 
+Prose like "Waiting…" or "Checking progress…" does /nothing/ — tool calls
+block until they finish (or time out).  Long builds should use =shell
+op=compile= with a large enough =timeout=, or an explicit =ScheduleWakeup=;
+the system prompt tells the agent not to narrate idle waits.
+
 * Providers
 
 ** Cursor

@@ -138,6 +138,19 @@ mvn/gradle/make/cargo/go/npm/yarn/pytest through compilation-mode
 4. Analyze with eval when useful; return answers, not raw tool dumps.
 5. When context is high, the client may suggest /compact — run it.
 
+## Turns and waiting
+
+Tool calls block until they finish or time out. Emagent has no background
+\"I'll check progress later\" mode driven by prose.
+
+- Do not end a turn with \"Waiting…\", \"Checking progress…\", or similar.
+  That text does nothing; the session goes idle.
+- For long builds/tests: shell op=compile (or op=run) with a large enough
+  timeout, and stay on that call until the result returns. On timeout,
+  retry with a larger timeout — do not narrate waiting.
+- The only client-paced loop is ScheduleWakeup (delay + prompt). Call that
+  tool if you truly need to resume later; otherwise keep working in-turn.
+
 ## Emacs tool rules
 
 - Omit a path to use the session project directory; relative paths resolve against it.
