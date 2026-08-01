@@ -101,8 +101,9 @@ sees the prompt.  Pick =AGENT/MODEL= from =/model TAB= — ids vary by
 provider.  If the model is unavailable or the switch fails, the send
 aborts (it does not fall through to the session model).
 
-Macros do /not/ rewrite free text: typing the word =commit= alone does
-nothing; you must invoke ={{{commit}}}= (or paste a model link yourself).
+Macros do /not/ rewrite free text.  Typing an ordinary word does
+nothing unless you defined a macro with that name and invoke it as
+={{{name}}}= (or paste a model link yourself).
 
 *** Example: cheap model for a chore
 
