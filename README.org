@@ -86,6 +86,15 @@ New prompt inserts a fresh stub if needed.
 =default-directory= (or =~/=).  Do *not* edit =#+EMAGENT_PROJECT= by hand —
 use =emagent-set-project-directory= so session files move with it.
 
+** Chat macros
+
+Define reusable prompt snippets with Org =#+MACRO:= in the session preamble
+(before the first =* user>= heading, or in an Org setup file).  On send,
+={{{name}}}= and ={{{name(args)}}}= expand into the macro body; the buffer
+text is left unchanged.  Undefined macros abort the send.  A macro body may
+include a per-turn =[[emagent://…]]= model link (same marker =/model=
+inserts).
+
 ** Slash commands
 
 Type =/= then =TAB=.  Client commands never reach the agent:

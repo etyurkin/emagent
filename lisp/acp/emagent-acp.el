@@ -3869,6 +3869,22 @@ COMPRESS is forwarded to `emagent-acp-send-prompt'."
          (when (fboundp 'emagent-chat-fail-assistant)
            (emagent-chat-fail-assistant msg)))))))
 
+(defun emagent-acp--abort-turn-model-send (buffer message)
+  "Abort BUFFER's in-flight send after a failed per-turn model switch.
+Clear override state and surface MESSAGE via `emagent-chat-fail-assistant'
+so the prompt is not sent on the session model by accident."
+  (with-current-buffer buffer
+    (setq emagent-chat--turn-model nil
+          emagent-chat--turn-model-base nil
+          emagent-chat--turn-apply-spec nil
+          emagent-chat--turn-config-base nil
+          emagent-chat--explore-sticky nil)
+    (if (fboundp 'emagent-chat-fail-assistant)
+        (emagent-chat-fail-assistant message)
+      (when (fboundp 'emagent-chat--send-pending-end)
+        (emagent-chat--send-pending-end))
+      (message "%s" message))))
+
 (defun emagent-acp-send (user-text &optional compress)
   "Ensure connection and send USER-TEXT from the current buffer.
 
@@ -3876,6 +3892,8 @@ When a per-turn model override (`emagent-chat--turn-model', set by `/model') is
 active and differs from the session model, switch to it transiently first, then
 send; the buffer model is restored when the turn ends (see
 `emagent-chat-finish-assistant' / `emagent-chat-fail-assistant').
+If the switch fails or the override id is unknown, abort the send — never
+fall through to the session model.
 
 COMPRESS is forwarded to `emagent-acp-send-prompt': set by
 `emagent-chat--dispatch-compress' when USER-TEXT is already a compression
@@ -3900,41 +3918,60 @@ summary prompt rather than ordinary chat input."
                   (turn-model (or turn-model explore))
                   (target (and turn-model state
                                (emagent-acp--match-model-id turn-model state nil)))
+                  (target-ok
+                   (and target state
+                        (emagent-acp--model-available-p target state nil)))
                   (spec
-                   (and turn-spec state target
+                   (and turn-spec state target-ok
                         (equal (emagent-acp--spec-model-value turn-spec state)
                                target)
                         turn-spec))
                   (need-switch
-                   (or (and target current (not (string= target current)))
-                       (and spec (> (length spec) 1)))))
-             (when (and explore target)
+                   (or (and target-ok current (not (string= target current)))
+                       (and spec (> (length spec) 1))))
+                  (still-label (or current "session model")))
+             (when (and explore target-ok)
                (setq emagent-chat--turn-model target
                      emagent-chat--explore-sticky t
                      emagent-chat--turn-apply-spec nil))
-             (if need-switch
-                 (progn
-                   (unless emagent-chat--turn-model-base
-                     (setq emagent-chat--turn-model-base current))
-                   (unless emagent-chat--turn-config-base
-                     (setq emagent-chat--turn-config-base
-                           (and state spec
-                                (emagent-acp--snapshot-config-values
-                                 state spec))))
-                   (when (fboundp 'emagent-acp--progress)
-                     (emagent-acp--progress
-                      state
-                      (format "switching model to %s for this turn…"
-                              (if (fboundp 'emagent-acp--model-display-name)
-                                  (emagent-acp--model-display-name state nil target)
-                                target))))
-                   (emagent-acp-set-model-transient
-                    target
-                    (lambda ()
-                      (when (emagent-chat--send-active-p token)
-                        (emagent-acp--send-prompt-safe buf user-text compress)))
-                    spec))
-               (emagent-acp--send-prompt-safe buf user-text compress)))))))))
+             (cond
+              ;; Override requested but not a real advertised model — abort.
+              ((and turn-model (not target-ok))
+               (emagent-acp--abort-turn-model-send
+                buf
+                (format
+                 "Per-turn model `%s' is not available; send aborted (still on %s). Use /model TAB to pick a valid model."
+                 turn-model still-label)))
+              (need-switch
+               (unless emagent-chat--turn-model-base
+                 (setq emagent-chat--turn-model-base current))
+               (unless emagent-chat--turn-config-base
+                 (setq emagent-chat--turn-config-base
+                       (and state spec
+                            (emagent-acp--snapshot-config-values
+                             state spec))))
+               (when (fboundp 'emagent-acp--progress)
+                 (emagent-acp--progress
+                  state
+                  (format "switching model to %s for this turn…"
+                          (if (fboundp 'emagent-acp--model-display-name)
+                              (emagent-acp--model-display-name state nil target)
+                            target))))
+               (emagent-acp-set-model-transient
+                target
+                (lambda ()
+                  (when (emagent-chat--send-active-p token)
+                    (emagent-acp--send-prompt-safe buf user-text compress)))
+                spec
+                (lambda ()
+                  (when (emagent-chat--send-active-p token)
+                    (emagent-acp--abort-turn-model-send
+                     buf
+                     (format
+                      "Could not switch to `%s' for this turn; send aborted (still on %s)."
+                      target still-label))))))
+              (t
+               (emagent-acp--send-prompt-safe buf user-text compress))))))))))
 
 (defun emagent-acp--wire-chat-buffer ()
   "Install buffer teardown for the current emagent chat buffer.
@@ -4044,11 +4081,12 @@ Choices:
   (when-let ((state (emagent-acp--session)))
     (emagent-acp--current-model-id state nil)))
 
-(defun emagent-acp-set-model-transient (model-id on-done &optional spec)
+(defun emagent-acp-set-model-transient (model-id on-done &optional spec on-failure)
   "Switch this buffer's ACP session model to MODEL-ID without persisting it.
 The buffer model (`emagent-session-model') is left unchanged, so this is a
-per-turn override.  ON-DONE is called once the switch resolves (success or
-failure) so the caller can proceed to send the prompt.
+per-turn override.  ON-DONE runs only after a successful switch.  Optional
+ON-FAILURE runs when the switch fails — callers that send a prompt afterward
+must abort there instead of falling through to the session model.
 
 Optional SPEC is ((CONFIG-ID . VALUE) ...) applied instead of MODEL-ID alone
 when non-nil (composed model_config / thought_level rows)."
@@ -4061,15 +4099,20 @@ when non-nil (composed model_config / thought_level rows)."
              :spec spec
              :persist nil
              :on-success on-done
-             :on-failure (lambda (&rest _) (when on-done (funcall on-done))))
+             :on-failure (lambda (&rest _)
+                           (when on-failure (funcall on-failure))))
           (emagent-acp--config-option-set-model-id
            :state state
            :session-id (emagent-acp-state-session-id state)
            :model-id model-id
            :persist nil
            :on-success on-done
-           :on-failure (lambda (&rest _) (when on-done (funcall on-done)))))
-      (when on-done (funcall on-done)))))
+           :on-failure (lambda (&rest _)
+                         (when on-failure (funcall on-failure)))))
+      ;; No session yet — cannot honor a transient switch.
+      (if on-failure
+          (funcall on-failure)
+        (when on-done (funcall on-done))))))
 
 (defun emagent-set-model ()
   "Set the ACP model for the current emagent session.
