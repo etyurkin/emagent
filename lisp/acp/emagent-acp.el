@@ -2915,6 +2915,8 @@ the final text is stable."
                   (when-let ((cb (emagent-acp-state-cb-fail state)))
                     (funcall cb "Compression produced no summary; conversation left intact"))))
             (with-current-buffer buffer
+              (when (fboundp 'emagent-chat--arm-compact-hint-cooldown)
+                (emagent-chat--arm-compact-hint-cooldown))
               (when-let ((cb (emagent-acp-state-cb-finish state)))
                 (funcall cb
                          (format "*Context compacted.* Agent session reset; the summary below is its only memory of the prior conversation.\n\n%s"
@@ -2922,9 +2924,7 @@ the final text is stable."
             (emagent-log "compressed session (%d chars)" (length summary))
             (with-current-buffer buffer
               (when (fboundp 'emagent-session-notes-merge-from-summary)
-                (emagent-session-notes-merge-from-summary raw))
-              (when (fboundp 'emagent-chat--reset-compact-hint-cooldown)
-                (emagent-chat--reset-compact-hint-cooldown)))
+                (emagent-session-notes-merge-from-summary raw)))
             (unless (fboundp 'emagent-acp--new-session)
               (require 'emagent-acp))
             (emagent-acp--new-session

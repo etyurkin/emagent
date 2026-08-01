@@ -189,6 +189,29 @@
          (emagent-chat--maybe-insert-compact-hint)
          (should-not (string-match-p "consider.*/compact" (buffer-string))))))))
 
+(ert-deftest emagent-chat-test-compact-hint-suppressed-after-arm ()
+  "Arming cooldown after /compact must not re-suggest compact under the result."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (with-current-buffer buffer
+       (setq emagent-acp--session (emagent-test--make-acp-state nil buffer))
+       (let ((usage (emagent-acp-state-usage emagent-acp--session))
+             (emagent-acp-compact-hint-threshold 80)
+             (emagent-acp-compact-hint-cooldown 600))
+         (map-put! usage :context-used 90000)
+         (map-put! usage :context-size 100000)
+         (emagent-chat--reset-compact-hint-cooldown)
+         (goto-char (point-max))
+         (insert (emagent-chat--user-heading-prefix) "/compact\n")
+         (emagent-chat--begin-response (point))
+         (emagent-chat--ensure-response-headline)
+         (goto-char (cdr (emagent-chat--response-body-bounds)))
+         (insert "*Context compacted.* Agent session reset.\n")
+         ;; Compress finish arms cooldown before the response closes.
+         (emagent-chat--arm-compact-hint-cooldown)
+         (emagent-chat--maybe-insert-compact-hint)
+         (should-not (string-match-p "consider.*/compact" (buffer-string))))))))
+
 (ert-deftest emagent-chat-test-compress-history-strips-thinking ()
   "Compress history keeps Response bodies and drops Thinking/tool lines."
   (let* ((raw (string-join

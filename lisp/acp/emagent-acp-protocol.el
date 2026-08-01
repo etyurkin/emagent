@@ -1730,7 +1730,7 @@ automatically."
   "Minimum seconds between /compact hints in one chat buffer.
 
 Prevents repeating the hint on every response while the user ignores it.
-Reset when the user runs /compact, /compress, or /summarize."
+Restarted when the user runs /compact, /compress, or /summarize."
   :type 'integer
   :group 'emagent)
 

@@ -1622,6 +1622,15 @@ a hard low cap (which looked static) or uncapped blow-ups."
   "Allow the next high-context turn to show a /compact hint again."
   (setq emagent-chat--last-compact-hint nil))
 
+(defun emagent-chat--arm-compact-hint-cooldown ()
+  "Start the /compact hint cooldown after a successful compress.
+
+Keeps the compact-result turn from immediately re-suggesting /compact
+while the transcript proxy or stale usage still looks high."
+  (setq emagent-chat--last-compact-hint (current-time))
+  (when (fboundp 'emagent-tools-age-clear-bytes-hint)
+    (emagent-tools-age-clear-bytes-hint)))
+
 (defun emagent-chat--maybe-insert-compact-hint ()
   "Append a /compact suggestion under the open Response when context is high.
 

@@ -3654,8 +3654,6 @@ Summarizes the prior conversation and forwards the summary to
 `emagent-acp-send' with the compress flag, so ACP resets the session with
 it once the turn finishes (see `emagent-acp-send-prompt').  With no prior
 conversation, fails the just-opened response instead of dispatching."
-  (when (fboundp 'emagent-chat--reset-compact-hint-cooldown)
-    (emagent-chat--reset-compact-hint-cooldown))
   (let ((history (emagent-chat--conversation-history-text)))
     (if (string-empty-p history)
         (emagent-chat-fail-assistant "No conversation to compress")
