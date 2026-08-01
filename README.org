@@ -89,11 +89,46 @@ use =emagent-set-project-directory= so session files move with it.
 ** Chat macros
 
 Define reusable prompt snippets with Org =#+MACRO:= in the session preamble
-(before the first =* user>= heading, or in an Org setup file).  On send,
-={{{name}}}= and ={{{name(args)}}}= expand into the macro body; the buffer
-text is left unchanged.  Undefined macros abort the send.  A macro body may
-include a per-turn =[[emagent://…]]= model link (same marker =/model=
-inserts).
+(before the first =* user>= heading, or in an Org setup file so every
+session inherits them).  On send, ={{{name}}}= and ={{{name(args)}}}=
+expand into the macro body; the buffer text is left unchanged.  Undefined
+macros abort the send.
+
+A macro body may include a per-turn =[[emagent://AGENT/MODEL][label]]=
+model link (same marker =/model= inserts).  Emagent scans the /expanded/
+text, switches for that turn only, then strips the link before the agent
+sees the prompt.  Pick =AGENT/MODEL= from =/model TAB= — ids vary by
+provider.  If the model is unavailable or the switch fails, the send
+aborts (it does not fall through to the session model).
+
+Macros do /not/ rewrite free text: typing the word =commit= alone does
+nothing; you must invoke ={{{commit}}}= (or paste a model link yourself).
+
+*** Example: cheap model for a chore
+
+Org =#+MACRO:= bodies are a single line (use =$1=, =$2=, … for args).
+Put definitions in the preamble or a shared Org setup file:
+
+#+begin_example
+#+MACRO: haiku [[emagent://claude/claude-haiku-4-5][haiku]]
+#+MACRO: commit [[emagent://claude/claude-haiku-4-5][haiku]] Commit the current work. Follow the repo commit rules; do not push.
+#+MACRO: commit1 [[emagent://claude/claude-haiku-4-5][haiku]] Commit with subject hint: $1. Follow the repo commit rules; do not push.
+#+end_example
+
+Then send a prompt that invokes the macro (extra lines after ={{{…}}}= are fine — only the macro token expands):
+
+#+begin_example
+{{{haiku}}} summarize the last diff in three bullets
+#+end_example
+
+#+begin_example
+{{{commit}}}
+only the staged changes on this branch
+#+end_example
+
+#+begin_example
+{{{commit1(Fix compile retry on detached builds)}}}
+#+end_example
 
 ** Slash commands
 
