@@ -841,8 +841,8 @@ Handlers may return a value or an `emagent-mcp-cont' continuation."
   :required '("op")
   "Emacs FS. op=read|write|edit|undo|delete|delete_directory|list|find.
 
-Write/edit/undo need expected_tick from fs op=read. Prefer edit for targeted changes;
-write replaces the whole file. Lisp files use structural."
+Write/edit/undo need expected_tick from fs op=read. Prefer edit for
+targeted changes; write replaces the whole file. Lisp files use structural."
   (args)
   (emagent-mcp--fs args))
 
