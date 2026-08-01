@@ -51,8 +51,18 @@
       value)))
 
 (defun emagent-mcp--bool (args key)
-  "Return non-nil when KEY in ARGS is JSON true."
-  (eq (emagent-mcp--arg args key) t))
+  "Return non-nil when KEY in ARGS is a true JSON boolean.
+
+Accepts JSON true and the strings \"true\"/\"yes\" (some agents
+mis-type boolean fields).  JSON false, :false, nil, and other values
+are false."
+  (let ((value (emagent-mcp--arg args key)))
+    (cond
+     ((eq value t) t)
+     ((and (stringp value)
+           (member (downcase value) '("true" "yes")))
+      t)
+     (t nil))))
 
 (defun emagent-mcp--path-prop ()
   "JSON schema property for a session-relative file path."
@@ -70,7 +80,7 @@
              (description . ,description)
              (enum . ,(apply #'vector ops))))))
 
-(defconst emagent-mcp--fs-mutating-ops '("write" "edit")
+(defconst emagent-mcp--fs-mutating-ops '("write" "edit" "undo")
   "Fs ops that require expected_tick under ACP.")
 
 (defconst emagent-mcp--structural-ops
@@ -131,6 +141,23 @@ instead; emagent then writes whatever port it gets into the agent config."
   (expand-file-name "~/.cursor/mcp.json")
   "Path to the global cursor-agent MCP config emagent manages for Cursor."
   :type 'file
+  :group 'emagent-mcp)
+
+(defcustom emagent-mcp-external-token "external"
+  "Durable MCP path token for clients outside an emagent ACP chat.
+
+Cursor/Claude CLI read ~/.cursor/mcp.json whose emagent URL interpolates
+${env:EMAGENT_SESSION_TOKEN}.  When that env var is unset, clients send the
+literal placeholder (or an empty segment).  Those requests are routed here
+so tools still work against a live Emacs without a registered chat session."
+  :type 'string
+  :group 'emagent-mcp)
+
+(defcustom emagent-mcp-external-root nil
+  "Project root for `emagent-mcp-external-token' sessions.
+
+Nil means: first live emagent chat project, else `default-directory'."
+  :type '(choice (const :tag "Auto" nil) (directory :tag "Root"))
   :group 'emagent-mcp)
 
 (defconst emagent-mcp-server-name "emagent"
@@ -814,8 +841,8 @@ Handlers may return a value or an `emagent-mcp-cont' continuation."
   :required '("op")
   "Emacs FS. op=read|write|edit|undo|delete|delete_directory|list|find.
 
-Write/edit need expected_tick from fs op=read. Prefer edit for targeted changes;
-write replaces the whole file. Lisp files use structural."
+Write/edit/undo need expected_tick from fs op=read. Prefer edit for
+targeted changes; write replaces the whole file. Lisp files use structural."
   (args)
   (emagent-mcp--fs args))
 
@@ -1179,7 +1206,8 @@ If the handler returns a continuation, it must complete synchronously
 
 CALLBACK is called as (CALLBACK RESULT IS-ERROR).  Handlers return a
 normal value or an `emagent-mcp-cont' continuation; when a continuation
-is returned, CALLBACK is invoked later via its reply function."
+is returned, CALLBACK is invoked later via its reply function.
+Async replies restore the session root/tick bindings captured here."
   (let ((entry (emagent-mcp--tool-entry name)))
     (cond
      ((null entry)
@@ -1189,10 +1217,11 @@ is returned, CALLBACK is invoked later via its reply function."
                (format "Tool %s is not available (install lisp-sitter)" name)
                t))
      (t
-      (let* ((root (plist-get session :root))
+      (let* ((root (or (plist-get session :root)
+                       emagent-tools--project-directory
+                       default-directory))
              (buffer (plist-get session :buffer))
-             (emagent-tools--project-directory
-              (or root emagent-tools--project-directory))
+             (emagent-tools--project-directory root)
              (emagent-tools--root-boundary root)
              (emagent-tools--session-allowed-tools
               (emagent-mcp--session-allowed-tools buffer))
@@ -1207,18 +1236,21 @@ is returned, CALLBACK is invoked later via its reply function."
                   (plist-get session :prefer-emacs)
                 (and (boundp 'emagent-acp-prefer-emacs)
                      emagent-acp-prefer-emacs)))
+             (ctx (emagent-tools--capture-session-context))
              (handler (nth 4 entry))
              (cont-cell nil)
              (reply
-              (lambda (result &optional is-error)
-                (when (or (null cont-cell)
-                          (not (emagent-mcp-cont-cancelled-p cont-cell)))
-                  (when cont-cell
-                    (run-hook-with-args 'emagent-mcp-cont-reply-functions
-                                        cont-cell result is-error))
-                  (funcall callback
-                           (emagent-mcp--string-result result)
-                           is-error)))))
+              (emagent-tools--wrap-session-callback
+               ctx
+               (lambda (result &optional is-error)
+                 (when (or (null cont-cell)
+                           (not (emagent-mcp-cont-cancelled-p cont-cell)))
+                   (when cont-cell
+                     (run-hook-with-args 'emagent-mcp-cont-reply-functions
+                                         cont-cell result is-error))
+                   (funcall callback
+                            (emagent-mcp--string-result result)
+                            is-error))))))
         (emagent-mcp--maybe-guard-file-tick name args)
         (condition-case err
             (let ((result (funcall handler args)))
@@ -1266,7 +1298,63 @@ A nil ID is serialized as JSON null (not an empty object)."
 (defun emagent-mcp--path-token (path)
   "Extract the session token from request PATH like /mcp/TOKEN."
   (when (and path (string-match "/mcp/\\([^/?#]+\\)" path))
-    (match-string 1 path)))
+    (require 'url-util)
+    (url-unhex-string (match-string 1 path))))
+
+(defun emagent-mcp--unresolved-env-token-p (token)
+  "Return non-nil when TOKEN is an unset EMAGENT_SESSION_TOKEN placeholder."
+  (and (stringp token)
+       (or (string-empty-p (string-trim token))
+           ;; Literal ${env:...} or any client mangling that still names the var.
+           (string-match-p "EMAGENT_SESSION_TOKEN" token))))
+
+(defun emagent-mcp--external-root ()
+  "Return the project root for the durable external MCP session."
+  (or (and emagent-mcp-external-root
+           (expand-file-name emagent-mcp-external-root))
+      (cl-loop for buf in (buffer-list)
+               for root = (with-current-buffer buf
+                            (and (bound-and-true-p emagent-mode)
+                                 (or (and (boundp 'emagent-chat-project-directory)
+                                          emagent-chat-project-directory)
+                                     (and (fboundp 'emagent-chat--session-directory)
+                                          (ignore-errors
+                                            (emagent-chat--session-directory))))))
+               when (and root (file-directory-p root))
+               return (expand-file-name root))
+      (expand-file-name default-directory)))
+
+(defun emagent-mcp--install-external-session ()
+  "Register or refresh the durable external MCP session entry."
+  (let ((root (emagent-mcp--external-root))
+        (token emagent-mcp-external-token))
+    (puthash token
+             (list :root root
+                   :cwd root
+                   :buffer nil
+                   :prefer-emacs t
+                   :acp nil)
+             emagent-mcp--sessions)
+    token))
+
+(defun emagent-mcp-ensure-external-session ()
+  "Ensure the MCP server and durable external session are available.
+
+Return the external session token."
+  (emagent-mcp-ensure-server)
+  emagent-mcp-external-token)
+
+(defun emagent-mcp--resolve-session-token (token)
+  "Map request TOKEN to a registered session token.
+
+Unresolved ${env:EMAGENT_SESSION_TOKEN} placeholders and missing tokens
+\(used by Cursor/Claude CLI when no emagent chat set the env var) route to
+the durable external session."
+  (cond
+   ((or (null token)
+        (emagent-mcp--unresolved-env-token-p token))
+    (emagent-mcp-ensure-external-session))
+   (t token)))
 
 (defun emagent-mcp--parse-headers (lines)
   "Parse HTTP header LINES into a lowercased-key alist."
@@ -1327,6 +1415,7 @@ Arguments: ID, PARAMS, TOKEN."
      (let* ((name (and (hash-table-p params) (gethash "name" params)))
             (args (or (and (hash-table-p params) (gethash "arguments" params))
                       (make-hash-table :test 'equal)))
+            (token (emagent-mcp--resolve-session-token token))
             (session (and token (gethash token emagent-mcp--sessions)))
             (respond (lambda (result is-error)
                        (emagent-mcp--respond-json
@@ -1501,6 +1590,8 @@ the filter itself never blocks on JSON-RPC handling."
                  :sentinel #'emagent-mcp--sentinel)))
       (setq emagent-mcp--server proc
             emagent-mcp--port (process-contact proc :service))))
+  ;; Keep a guest session so Cursor/Claude CLI work without an ACP chat.
+  (emagent-mcp--install-external-session)
   emagent-mcp--port)
 
 (defun emagent-mcp-maybe-shutdown ()
@@ -1536,7 +1627,7 @@ Arguments: PREFER-EMACS."
 
 (defun emagent-mcp-deregister-session (token)
   "Deregister session TOKEN and stop the server if it was the last one."
-  (when token
+  (when (and token (not (equal token emagent-mcp-external-token)))
     (emagent-mcp-cancel-session-tools token)
     (remhash token emagent-mcp--sessions))
   (emagent-mcp-maybe-shutdown))

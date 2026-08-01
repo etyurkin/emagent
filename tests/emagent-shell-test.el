@@ -9,8 +9,14 @@
 
 (ert-deftest emagent-shell-test-git-no-verify-p ()
   (should (emagent-shell--git-no-verify-p "git commit --no-verify -m x"))
+  (should (emagent-shell--git-no-verify-p
+           "git commit '--no-verify' -m x"))
+  (should (emagent-shell--git-no-verify-p
+           "git commit \"--no-verify\" -m x"))
   (should-not (emagent-shell--git-no-verify-p
-               "git commit -m \"--no-verify inside quotes\"")))
+               "git commit -m \"--no-verify inside quotes\""))
+  (should-not (emagent-shell--git-no-verify-p
+               "git commit -m '--no-verify inside quotes'")))
 
 (ert-deftest emagent-shell-test-git-push-p ()
   (should (emagent-shell--git-push-p "git push origin main"))
@@ -59,7 +65,11 @@
   (should (emagent-shell--compound-command-p "echo hi; ls"))
   (should (emagent-shell--compound-command-p "echo $(date)"))
   (should-not (emagent-shell--compound-command-p "grep x Makefile"))
-  (should-not (emagent-shell--compound-command-p "echo \"a|b\"")))
+  (should-not (emagent-shell--compound-command-p "echo \"a|b\""))
+  (should-not (emagent-shell--compound-command-p
+               "echo \"don't | touch\""))
+  (should-not (emagent-shell--compound-command-p
+               "echo 'a|b'")))
 
 (ert-deftest emagent-shell-test-compound-skips-suggest-and-redirect ()
   "Pipelines must not be redirected or refused as simple grep/cat."
@@ -164,12 +174,22 @@ The bug caused Wrong type argument: listp in url-http-chunked-encoding-after-cha
            "make ansi CHAPTER=printer")
           (sleep-for 0.2)
           (should got-err)
-          (should (string-match-p "\\*emagent-compile\\*" got))
+          (should (string-match-p "\\*emagent-compile" got))
           (should (string-match-p "left running" got))
+          (should (string-match-p "do not relaunch" got))
           (should-not killed)
           (should (process-live-p fake-proc)))
       (when (process-live-p fake-proc)
         (delete-process fake-proc)))))
+
+
+(ert-deftest emagent-shell-test-compile-buffer-names-unique ()
+  "Each compile call gets a distinct buffer name."
+  (let ((emagent-tools--compile-buffer-seq 0))
+    (should (string= "*emagent-compile*<1>"
+                     (emagent-tools--compile-buffer-name "make")))
+    (should (string= "*emagent-compile*<2>"
+                     (emagent-tools--compile-buffer-name "make")))))
 
 (provide 'emagent-shell-test)
 

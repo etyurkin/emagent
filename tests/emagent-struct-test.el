@@ -26,7 +26,7 @@
   (should (emagent-struct--clef-file-p "lib/foo.clef"))
   (should-not (emagent-struct--lisp-file-p "lib/foo.clef"))
   (let ((err (should-error (emagent-struct--lang-for "lib/foo.clef"))))
-    (should (string-match-p "fs op=read/write" (error-message-string err)))))
+    (should (string-match-p "fs op=read/write/edit" (error-message-string err)))))
 
 (ert-deftest emagent-struct-test-lisp-file-p ()
   (should (emagent-struct--lisp-file-p "foo.el"))
