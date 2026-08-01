@@ -114,11 +114,12 @@ setting up or mutating the session so the mode line reflects it."
 
 (defun emagent-test--tools-call-sync (id params token)
   "Run tools/call synchronously for tests; return a JSON-RPC response string."
-  (let ((resp nil)
-        (name (and (hash-table-p params) (gethash "name" params)))
-        (args (or (and (hash-table-p params) (gethash "arguments" params))
-                  (make-hash-table :test 'equal)))
-        (session (and token (gethash token emagent-mcp--sessions))))
+  (let* ((resp nil)
+         (name (and (hash-table-p params) (gethash "name" params)))
+         (args (or (and (hash-table-p params) (gethash "arguments" params))
+                   (make-hash-table :test 'equal)))
+         (token (emagent-mcp--resolve-session-token token))
+         (session (and token (gethash token emagent-mcp--sessions))))
     (cond
      ((null token)
       (setq resp (emagent-mcp--rpc-result

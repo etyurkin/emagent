@@ -48,8 +48,27 @@ Falls back to a whitespace split when COMMAND cannot be shell-parsed."
     (error (split-string (string-trim command) "[[:space:]]+" t))))
 
 (defun emagent-policy-match--strip-quoted (command)
-  "Remove single- and double-quoted spans from COMMAND."
-  (replace-regexp-in-string "[\"'][^\"']*[\"']" "" command))
+  "Remove single- and double-quoted spans from COMMAND.
+
+Shell rules: single quotes are literal until the closer; backslash
+escapes apply outside quotes and inside double quotes."
+  (let (out quote escape)
+    (dolist (c (append command nil))
+      (cond
+       (escape
+        (unless quote (push c out))
+        (setq escape nil))
+       ((and (eq c ?\\) (not (eq quote ?\')))
+        (if quote
+            (setq escape t)
+          (push c out)
+          (setq escape t)))
+       (quote
+        (when (eq c quote) (setq quote nil)))
+       ((memq c '(?\" ?\'))
+        (setq quote c))
+       (t (push c out))))
+    (apply #'string (nreverse out))))
 
 (defun emagent-policy-match--split-commands (command)
   "Split COMMAND into segments at top-level `;' `|' `&' and newlines.
@@ -941,6 +960,8 @@ Returns nil when all docstrings are within the limit."
 
 (defvar emagent-tools--root-boundary)
 
+(defvar-local emagent-tools--buffer-project-directory nil)
+
 (defconst emagent-tools--icloud-dir
   (expand-file-name "~/Library/Mobile Documents/"))
 
@@ -980,7 +1001,10 @@ A relative PATH is resolved against the session project directory (not the
 process `default-directory'), and an omitted PATH yields that directory.
 Signal an error when the result escapes `emagent-tools--root-boundary' or lands
 in a protected macOS tree (iCloud or another app's container)."
-  (let* ((base (or emagent-tools--project-directory default-directory))
+  (let* ((base (or emagent-tools--project-directory
+                   (and (boundp 'emagent-tools--buffer-project-directory)
+                        emagent-tools--buffer-project-directory)
+                   default-directory))
          (resolved (expand-file-name (or path base) base)))
     (unless (emagent-tools--within-boundary-p resolved)
       (user-error "Path %s is outside the session root %s"
@@ -1471,24 +1495,32 @@ Arguments: CALLBACK, ARGS."
   (let* ((args (and args (string-trim args)))
          (bare (or (null args) (string-empty-p args)))
          (refresh (and args (string-match-p "\\brefresh=1\\b" args)))
+         (ctx (and (fboundp 'emagent-tools--capture-session-context)
+                   (emagent-tools--capture-session-context)))
          (git-args
           (cond
            (bare '("diff" "--stat"))
            (t (cons "diff" (split-string-shell-command args))))))
     (apply #'emagent-tools--run-git-async
            (lambda (output is-error)
-             (let* ((clean (string-trim (or output "")))
-                    (body
-                     (if bare
-                         (concat
-                          (emagent-tools-compact-git-diff clean)
-                          (if (string-empty-p clean)
-                              ""
-                            "\n\n[Pass a path to git op=diff for full hunks.]"))
-                       (emagent-tools-compact-git-diff clean)))
-                    (noted (emagent-tools-age-note
-                            "git-diff" nil (or args "") body refresh)))
-               (funcall callback noted is-error)))
+             (let ((finish
+                    (lambda ()
+                      (let* ((clean (string-trim (or output "")))
+                             (body
+                              (if bare
+                                  (concat
+                                   (emagent-tools-compact-git-diff clean)
+                                   (if (string-empty-p clean)
+                                       ""
+                                     "\n\n[Pass a path to git op=diff for full hunks.]"))
+                                (emagent-tools-compact-git-diff clean)))
+                             (noted (emagent-tools-age-note
+                                     "git-diff" nil (or args "")
+                                     body refresh)))
+                        (funcall callback noted is-error)))))
+               (if ctx
+                   (emagent-tools--with-session-context ctx finish)
+                 (funcall finish))))
            git-args)))
 
 (defun emagent-tool-git-diff (&optional args)
@@ -1525,11 +1557,12 @@ Arguments: CALLBACK, ARGS."
 
 (defun emagent-tool-undo-file (path &optional steps)
   "Save PATH after undoing edits.
-STEPS is the undo depth.  Use to revert `emagent-tool-write-file' changes."
+STEPS is the undo depth.  Use to revert `emagent-tool-write-file' changes.
+Under ACP, append emagent-tick so the next mutate need not re-read."
   (let* ((resolved (emagent-tools--root-directory path))
-      (steps (max 1 (or steps 1)))
-      (buffer (emagent-tools--file-buffer path))
-      (done 0))
+         (steps (max 1 (or steps 1)))
+         (buffer (emagent-tools--file-buffer path))
+         (done 0))
     (unless buffer
       (user-error "No buffer for %s" resolved))
     (with-current-buffer buffer
@@ -1541,13 +1574,16 @@ STEPS is the undo depth.  Use to revert `emagent-tool-write-file' changes."
             ;; for every step after the first — otherwise repeated calls
             ;; oscillate (undo then redo) instead of undoing further.
             (condition-case _
-              (let ((last-command (if (> i 0) 'undo last-command)))
-                (undo)
-                (setq done (1+ done)))
+                (let ((last-command (if (> i 0) 'undo last-command)))
+                  (undo)
+                  (setq done (1+ done)))
               (user-error (throw 'exhausted nil)))))
         (when (buffer-file-name)
           (basic-save-buffer))))
-    (format "Undid %d change(s) in %s" done resolved)))
+    (let ((msg (format "Undid %d change(s) in %s" done resolved)))
+      (if emagent-tools--acp-session-p
+          (emagent-tools--append-file-tick path msg)
+        msg))))
 
 (defun emagent-tool-delete-file (path)
   "Delete PATH after user confirmation."

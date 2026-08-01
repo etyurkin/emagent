@@ -6,7 +6,7 @@
 (require 'emagent-tools-age)
 
 (ert-deftest emagent-tools-age-test-stub-on-repeat ()
-  (emagent-tools-age-reset)
+  (emagent-tools-age-reset 'all)
   (let* ((emagent-tools-age t)
          (emagent-tools-age-min-bytes 10)
          (payload (make-string 100 ?x))
@@ -17,7 +17,7 @@
     (should (string-match-p "refresh=1" second))))
 
 (ert-deftest emagent-tools-age-test-refresh-bypasses-stub ()
-  (emagent-tools-age-reset)
+  (emagent-tools-age-reset 'all)
   (let* ((emagent-tools-age t)
          (emagent-tools-age-min-bytes 10)
          (payload (make-string 100 ?y))
@@ -26,7 +26,7 @@
     (should (string= again payload))))
 
 (ert-deftest emagent-tools-age-test-bytes-hint ()
-  (emagent-tools-age-reset)
+  (emagent-tools-age-reset 'all)
   (let ((emagent-tools-age-bytes-threshold 50)
         (emagent-tools-age-min-bytes 1000))
     (emagent-tools-age-note "fs-read" "/tmp/c" "" (make-string 60 ?z))
@@ -35,7 +35,7 @@
     (should-not (emagent-tools-age-bytes-hint-p))))
 
 (ert-deftest emagent-tools-age-test-tick-cache ()
-  (emagent-tools-age-reset)
+  (emagent-tools-age-reset 'all)
   (let ((emagent-tools-age-tick-cache t))
     (should (string= "body"
                      (emagent-tools-age-tick-note "/tmp/t" "line=nil" "abc" "body")))

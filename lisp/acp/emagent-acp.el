@@ -1857,6 +1857,8 @@ See the commentary for the verdict shape."
   (and (memq (car-safe verdict) '(:deny :confirm)) (cdr verdict)))
 
 (defvar emagent-tools--root-boundary)
+(defvar emagent-tools-age--session-key)
+(defvar emagent-usage--session-key)
 
 (defvar emagent-tools--project-directory)
 
@@ -3249,11 +3251,16 @@ work, but do not invent a synthetic `* user>' line in the transcript."
 (defun emagent-acp--thought-chunk (state text)
   "Accumulate thought TEXT for display and optional logging.
 
-Arguments: STATE."
-  (unless (string-empty-p text)
+Arguments: STATE.
+
+Drops late thoughts after compress finalize (busy cleared), matching
+agent_message_chunk handling so SUMMARY rendering is not disturbed."
+  (unless (or (string-empty-p text)
+              (and (emagent-acp-state-compress-pending state)
+                   (not (emagent-acp-state-busy state))))
     (emagent-acp--detect-external-refusal-in-text state text)
     (setf (emagent-acp-state-thought-text state)
-              (concat (or (emagent-acp-state-thought-text state) "") text))
+          (concat (or (emagent-acp-state-thought-text state) "") text))
     (when-let ((mode emagent-acp-thought-progress))
       (when (emagent-acp-state-prompt-finishing state)
         (emagent-acp--schedule-prompt-render state))
@@ -3647,10 +3654,10 @@ Arguments: STATE, ON-READY."
   (setf (emagent-acp-state-ready state) t)
   (emagent-acp--persist-session-id state session-id)
   (emagent-acp--hydrate-session-permissions state session-id)
-  (emagent-tools-set-project-directory (emagent-acp--session-cwd state))
   (emagent-acp--progress state (if resumed "resumed" "connected"))
   (when-let ((buffer (emagent-acp--chat-buffer state)))
     (with-current-buffer buffer
+      (emagent-tools-set-project-directory (emagent-acp--session-cwd state))
       (pcase emagent-chat-provider
         ('cursor (emagent-chat-seed-cursor-slash-commands))
         ('claude
@@ -3664,10 +3671,26 @@ Arguments: STATE, ON-READY."
   
   "Internal helper for STATE and ON-READY and COMPRESSED-CONTEXT."
   (when (fboundp 'emagent-tools-age-reset)
-    (emagent-tools-age-reset))
+    (let* ((chat (emagent-acp--chat-buffer state))
+           (emagent-tools-age--session-key
+            (or (and (buffer-live-p chat)
+                     (buffer-local-value 'emagent-mcp--token chat))
+                (and (buffer-live-p chat)
+                     (format "buf:%s" (buffer-name chat)))
+                'global)))
+      (emagent-tools-age-reset)))
   (when (fboundp 'emagent-usage-tax-reset)
-    (emagent-usage-tax-reset))
-  (setq emagent-chat--explore-sticky nil)
+    (let* ((chat (emagent-acp--chat-buffer state))
+           (emagent-usage--session-key
+            (or (and (buffer-live-p chat)
+                     (buffer-local-value 'emagent-mcp--token chat))
+                (and (buffer-live-p chat)
+                     (format "buf:%s" (buffer-name chat)))
+                'global)))
+      (emagent-usage-tax-reset)))
+  (when-let ((chat (emagent-acp--chat-buffer state)))
+    (with-current-buffer chat
+      (setq emagent-chat--explore-sticky nil)))
   (emagent-acp--progress state "creating session…")
   (emagent-acp--send-request
    :state state

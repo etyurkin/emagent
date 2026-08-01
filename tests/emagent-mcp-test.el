@@ -16,6 +16,31 @@
     (should (string-match-p "\\`[0-9a-f]\\{24\\}\\'" t1))
     (should (not (string= t1 t2)))))
 
+(ert-deftest emagent-mcp-test-unresolved-env-token-p ()
+  (should (emagent-mcp--unresolved-env-token-p
+           "${env:EMAGENT_SESSION_TOKEN}"))
+  (should (emagent-mcp--unresolved-env-token-p ""))
+  (should (emagent-mcp--unresolved-env-token-p "  "))
+  (should-not (emagent-mcp--unresolved-env-token-p "abcdef0123456789abcdef01"))
+  (should-not (emagent-mcp--unresolved-env-token-p emagent-mcp-external-token)))
+
+(ert-deftest emagent-mcp-test-resolve-session-token-external ()
+  (let ((emagent-mcp-external-root "/tmp")
+        (emagent-mcp--sessions (make-hash-table :test 'equal)))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-mcp-ensure-server)
+          (lambda ()
+            (emagent-mcp--install-external-session)
+            8771)))
+      (should (equal (emagent-mcp--resolve-session-token
+                      "${env:EMAGENT_SESSION_TOKEN}")
+                     emagent-mcp-external-token))
+      (should (gethash emagent-mcp-external-token emagent-mcp--sessions))
+      (should (equal (plist-get (gethash emagent-mcp-external-token
+                                         emagent-mcp--sessions)
+                                :root)
+                     (expand-file-name "/tmp"))))))
+
 (ert-deftest emagent-mcp-test-buffer-token ()
   (with-temp-buffer
     (should (string= (emagent-mcp-buffer-token) (emagent-mcp-buffer-token)))

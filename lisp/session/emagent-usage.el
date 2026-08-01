@@ -229,7 +229,22 @@ output-tokens, cache-read-tokens, cache-creation-tokens, cost-usd."
               (map-elt event 'cost-usd))
       (emagent-usage-record event))))
 
-(defvar emagent-usage--tax
+(defvar emagent-usage--tax-by-session (make-hash-table :test 'equal)
+  "Map session id to system-tax counter tables for concurrent chats.")
+
+(defvar emagent-usage--baseline-by-session (make-hash-table :test 'equal)
+  "Map session id to usage baseline alists.")
+
+(defvar emagent-usage--session-key nil
+  "Dynamic session id for tax lookups; mirrors age session keys.")
+
+(defvar emagent-mcp--token)
+(defvar emagent-mcp--current-session-token)
+(defvar emagent-tools--chat-buffer)
+(defvar emagent-tools-age--session-key)
+
+(defun emagent-usage--empty-tax ()
+  "Return a fresh zeroed tax counter table."
   (let ((h (make-hash-table :test 'eq)))
     (puthash 'system 0 h)
     (puthash 'context 0 h)
@@ -238,8 +253,79 @@ output-tokens, cache-read-tokens, cache-creation-tokens, cost-usd."
     (puthash 'user 0 h)
     (puthash 'images 0 h)
     (puthash 'mcp-bytes 0 h)
-    h)
-  "Session system-tax counters (chars, except images count and mcp-bytes).")
+    h))
+
+(defun emagent-usage--session-id ()
+  "Return the tax-ledger key for the active ACP/MCP session."
+  (or emagent-usage--session-key
+      (and (boundp 'emagent-tools-age--session-key)
+           emagent-tools-age--session-key)
+      (and (boundp 'emagent-mcp--current-session-token)
+           emagent-mcp--current-session-token)
+      (and (boundp 'emagent-mcp--token)
+           (local-variable-p 'emagent-mcp--token (current-buffer))
+           (buffer-local-value 'emagent-mcp--token (current-buffer)))
+      (and (boundp 'emagent-tools--chat-buffer)
+           emagent-tools--chat-buffer
+           (buffer-live-p emagent-tools--chat-buffer)
+           (or (buffer-local-value 'emagent-mcp--token
+                                   emagent-tools--chat-buffer)
+               (format "buf:%s"
+                       (buffer-name emagent-tools--chat-buffer))))
+      'global))
+
+(defun emagent-usage--tax-table ()
+  "Return the tax counter table for `emagent-usage--session-id'."
+  (let ((id (emagent-usage--session-id)))
+    (or (gethash id emagent-usage--tax-by-session)
+        (let ((h (emagent-usage--empty-tax)))
+          (puthash id h emagent-usage--tax-by-session)
+          h))))
+
+(defun emagent-usage-tax-reset (&optional session-id)
+  "Reset system-tax counters for SESSION-ID or the active session.
+
+When SESSION-ID is the symbol `all', clear every session (tests)."
+  (cond
+   ((eq session-id 'all)
+    (clrhash emagent-usage--tax-by-session)
+    (clrhash emagent-usage--baseline-by-session))
+   (t
+    (let ((id (or session-id (emagent-usage--session-id))))
+      (remhash id emagent-usage--tax-by-session)
+      (remhash id emagent-usage--baseline-by-session)))))
+
+(defun emagent-usage-tax-add (kind n)
+  "Add N to tax counter KIND (symbol) for the active session."
+  (when (and (symbolp kind) (numberp n) (> n 0))
+    (let ((tax (emagent-usage--tax-table)))
+      (puthash kind (+ (or (gethash kind tax) 0) n) tax))))
+
+(defun emagent-usage-tax-get (kind)
+  "Return tax counter KIND for the active session."
+  (or (gethash kind (emagent-usage--tax-table)) 0))
+
+(defun emagent-usage-baseline-alist ()
+  "Return the current usage baseline alist, or nil."
+  (gethash (emagent-usage--session-id) emagent-usage--baseline-by-session))
+
+(defun emagent-usage-baseline-set ()
+  "Snapshot current tax counters as the before/after baseline."
+  (let ((baseline
+         (mapcar (lambda (k) (cons k (emagent-usage-tax-get k)))
+                 '(context notes compressed user images mcp-bytes system))))
+    (puthash (emagent-usage--session-id) baseline
+             emagent-usage--baseline-by-session)
+    baseline))
+
+(defun emagent-usage-baseline-clear ()
+  "Clear the before/after usage baseline for the active session."
+  (remhash (emagent-usage--session-id) emagent-usage--baseline-by-session))
+
+(defun emagent-usage--tax-delta (kind)
+  "Return current minus baseline for KIND (0 baseline when unset)."
+  (- (emagent-usage-tax-get kind)
+     (or (alist-get kind (emagent-usage-baseline-alist)) 0)))
 
 (defcustom emagent-usage-budget-context 1500
   "Max chars of Emacs context injected per prompt (0 = unlimited)."
@@ -256,25 +342,6 @@ output-tokens, cache-read-tokens, cache-creation-tokens, cost-usd."
   :type 'integer
   :group 'emagent-usage)
 
-(defvar emagent-usage--baseline nil
-  "Alist of tax counters snapped by `emagent-usage-baseline-set', or nil.")
-
-(defun emagent-usage-tax-reset ()
-  "Reset session system-tax counters and clear any usage baseline."
-  (maphash (lambda (k _v) (puthash k 0 emagent-usage--tax))
-           emagent-usage--tax)
-  (setq emagent-usage--baseline nil))
-
-(defun emagent-usage-tax-add (kind n)
-  "Add N to tax counter KIND (symbol)."
-  (when (and (symbolp kind) (numberp n) (> n 0))
-    (puthash kind (+ (or (gethash kind emagent-usage--tax) 0) n)
-             emagent-usage--tax)))
-
-(defun emagent-usage-tax-get (kind)
-  "Return tax counter KIND."
-  (or (gethash kind emagent-usage--tax) 0))
-
 (defun emagent-usage--cap-string (text budget kind)
   "Return TEXT capped to BUDGET chars, accounting KIND in the tax meter."
   (let* ((text (or text ""))
@@ -285,30 +352,9 @@ output-tokens, cache-read-tokens, cache-creation-tokens, cost-usd."
     (emagent-usage-tax-add kind (length out))
     out))
 
-
-(defun emagent-usage-baseline-alist ()
-  "Return the current usage baseline alist, or nil."
-  emagent-usage--baseline)
-
-(defun emagent-usage-baseline-set ()
-  "Snapshot current tax counters as the before/after baseline."
-  (setq emagent-usage--baseline
-        (mapcar (lambda (k) (cons k (emagent-usage-tax-get k)))
-                '(context notes compressed user images mcp-bytes system)))
-  emagent-usage--baseline)
-
-(defun emagent-usage-baseline-clear ()
-  "Clear the before/after usage baseline."
-  (setq emagent-usage--baseline nil))
-
-(defun emagent-usage--tax-delta (kind)
-  "Return current minus baseline for KIND (0 baseline when unset)."
-  (- (emagent-usage-tax-get kind)
-     (or (alist-get kind emagent-usage--baseline) 0)))
-
 (defun emagent-usage-tax-delta-string ()
   "Return tax delta since baseline, or nil when no baseline is set."
-  (when emagent-usage--baseline
+  (when (emagent-usage-baseline-alist)
     (format
      (concat "since baseline: ctx=%s notes=%s compressed=%s user=%s "
              "images=%s mcp=%s system=%s")

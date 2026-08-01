@@ -1891,6 +1891,16 @@ project directory rather than opening up unconfined access."
     (should (string= "SUMMARY only"
                      (emagent-acp-state-assistant-text state)))))
 
+(ert-deftest emagent-acp-session-test-late-thoughts-ignored-after-compress-finalize ()
+  "After compress finalize (busy cleared), late thought chunks are dropped."
+  (let ((state (emagent-test--make-acp-state)))
+    (setf (emagent-acp-state-compress-pending state) t
+          (emagent-acp-state-busy state) nil
+          (emagent-acp-state-thought-text state) "thinking")
+    (emagent-acp--thought-chunk state " LATE")
+    (should (string= "thinking"
+                     (emagent-acp-state-thought-text state)))))
+
 (ert-deftest emagent-acp-session-test-interrupt-cancels-compress ()
   "Interrupt during compress must not compact a stop stub as SUMMARY."
   (let* ((state (emagent-test--make-acp-state))
