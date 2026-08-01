@@ -236,6 +236,22 @@ relative paths and does not cross directory boundaries on `*'."
       (fmakunbound 'emagent-tools-eval-test)
       (delete-directory dir t))))
 
+(ert-deftest emagent-tools-test-structural-eval-skips-side-effects ()
+  "Post-write eval only reloads definition heads, not delete-file/make-process."
+  (let ((ran nil))
+    (cl-letf (((symbol-function 'delete-file)
+               (lambda (&rest _) (setq ran t))))
+      (emagent-tools--structural-eval-after-edit
+       "(delete-file \"/tmp/should-not-run\")")
+      (should-not ran)
+      (emagent-tools--structural-eval-after-edit
+       "(progn (delete-file \"/tmp/should-not-run\"))")
+      (should-not ran))
+    (emagent-tools--structural-eval-after-edit
+     "(defun emagent-tools-eval-side-test () 1)")
+    (should (fboundp 'emagent-tools-eval-side-test))
+    (fmakunbound 'emagent-tools-eval-side-test)))
+
 (ert-deftest emagent-tools-test-structural-elisp-eval-blocked ()
   :tags '(lisp-sitter)
   (skip-unless (emagent-struct-available-p))
@@ -263,6 +279,38 @@ relative paths and does not cross directory boundaries on `*'."
     (unwind-protect
         (should-error
          (emagent-tool-write-file file "(defun foo () 1)"))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-apply-string-edit ()
+  (should (string= "hello world"
+                   (emagent-tools--apply-string-edit "hello there" "there" "world")))
+  (should (string= "aXaX"
+                   (emagent-tools--apply-string-edit "abab" "ab" "aX" t)))
+  (should-error (emagent-tools--apply-string-edit "abab" "ab" "aX"))
+  (should-error (emagent-tools--apply-string-edit "hello" "missing" "x")))
+
+(ert-deftest emagent-tools-test-edit-file ()
+  (let* ((dir (make-temp-file "emagent-tools-edit-" t))
+         (file "poc.qmd")
+         (resolved (expand-file-name file dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p nil)
+         (emagent-struct-require-for-lisp-files nil))
+    (unwind-protect
+        (progn
+          (write-region "alpha\nbeta\ngamma\n" nil resolved)
+          (emagent-tool-edit-file file "beta" "BETA")
+          (should (string= "alpha\nBETA\ngamma\n"
+                           (with-temp-buffer
+                             (insert-file-contents resolved)
+                             (buffer-string))))
+          (should-error (emagent-tool-edit-file file "missing" "x"))
+          (emagent-tool-edit-file file "alpha" "ALPHA")
+          (should (string= "ALPHA\nBETA\ngamma\n"
+                           (with-temp-buffer
+                             (insert-file-contents resolved)
+                             (buffer-string)))))
       (delete-directory dir t))))
 
 (ert-deftest emagent-tools-test-eval-form-guard-blocked ()
@@ -354,6 +402,183 @@ relative paths and does not cross directory boundaries on `*'."
             (should (string-match-p "\\`emagent-tick: " out))
             (should (string-match-p "---\nhello\n\\'" out))))
       (delete-directory dir t))))
+
+
+(ert-deftest emagent-tools-test-mcp-undo-includes-tick ()
+  (let* ((dir (make-temp-file "emagent-tick-undo-" t))
+         (file (expand-file-name "note.txt" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p t)
+         (emagent-tools-show-written-buffer nil))
+    (unwind-protect
+        (progn
+          (write-region "v1\n" nil file nil 'silent)
+          (let* ((tick (emagent-tools--file-tick file))
+                 (emagent-tools--expected-file-tick tick))
+            (emagent-tools--write-file-content file "v2\n")
+            (let ((out (emagent-tool-undo-file file)))
+              (should (string-match-p "Undid 1 change" out))
+              (should (string-match-p "emagent-tick: " out))
+              (should (string= "v1\n"
+                               (with-temp-buffer
+                                 (insert-file-contents file)
+                                 (buffer-string)))))))
+      (delete-directory dir t))))
+
+
+(ert-deftest emagent-tools-test-reconcile-reverts-clean-external ()
+  "Unmodified buffer picks up external disk edits on read."
+  (let* ((dir (make-temp-file "emagent-reconcile-" t))
+         (file (expand-file-name "note.txt" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir))
+    (unwind-protect
+        (progn
+          (write-region "v1\n" nil file nil 'silent)
+          (find-file-noselect file)
+          (write-region "v2\n" nil file nil 'silent)
+          (should (string= "v2\n" (emagent-tools--read-file-content file)))
+          (with-current-buffer (find-buffer-visiting file)
+            (should (string= "v2\n" (buffer-string)))
+            (should (verify-visited-file-modtime))))
+      (ignore-errors (kill-buffer (find-buffer-visiting file)))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-mcp-write-stale-on-external-disk ()
+  "ACP write with pre-external tick fails after disk changes under buffer."
+  (let* ((dir (make-temp-file "emagent-ext-tick-" t))
+         (file (expand-file-name "note.txt" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p t)
+         (emagent-tools-show-written-buffer nil))
+    (unwind-protect
+        (progn
+          (write-region "v1\n" nil file nil 'silent)
+          (find-file-noselect file)
+          (let ((tick (emagent-tools--file-tick file)))
+            (write-region "v2\n" nil file nil 'silent)
+            (let ((emagent-tools--expected-file-tick tick))
+              (should-error
+               (emagent-tools--write-file-content file "v3\n")
+               :type 'user-error))))
+      (ignore-errors (kill-buffer (find-buffer-visiting file)))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-sync-errors-dirty-plus-external ()
+  "Structural sync must not flush a dirty buffer over a newer disk file."
+  (let* ((dir (make-temp-file "emagent-dirty-ext-" t))
+         (file (expand-file-name "note.txt" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir))
+    (unwind-protect
+        (progn
+          (write-region "v1\n" nil file nil 'silent)
+          (with-current-buffer (find-file-noselect file)
+            (insert "dirty")
+            (set-buffer-modified-p t)
+            (write-region "external\n" nil file nil 'silent)
+            (should-error (emagent-tools--structural-sync-path file)
+                          :type 'user-error)
+            (should (string-match-p "dirty" (buffer-string)))
+            (should (string=
+                     "external\n"
+                     (with-temp-buffer
+                       (insert-file-contents file)
+                       (buffer-string))))))
+      (ignore-errors (kill-buffer (find-buffer-visiting file)))
+      (delete-directory dir t))))
+
+
+(ert-deftest emagent-tools-test-session-context-survives-unbind ()
+  "Captured session root is restored in wrapped async callbacks."
+  (let* ((dir-a (make-temp-file "emagent-ctx-a-" t))
+         (dir-b (make-temp-file "emagent-ctx-b-" t))
+         (rel "note.txt")
+         (seen nil)
+         (ctx nil))
+    (unwind-protect
+        (progn
+          (write-region "AAA\n" nil (expand-file-name rel dir-a) nil 'silent)
+          (write-region "BBB\n" nil (expand-file-name rel dir-b) nil 'silent)
+          (let ((emagent-tools--project-directory dir-a)
+                (emagent-tools--root-boundary dir-a)
+                (emagent-tools--acp-session-p t))
+            (setq ctx (emagent-tools--capture-session-context)))
+          (setq default-directory dir-b)
+          (let ((emagent-tools--project-directory dir-b)
+                (emagent-tools--root-boundary dir-b))
+            (funcall (emagent-tools--wrap-session-callback
+                      ctx
+                      (lambda (_r _e)
+                        (setq seen (emagent-tools--read-file-content rel))))
+                     "ok" nil))
+          (should (string= "AAA\n" seen)))
+      (delete-directory dir-a t)
+      (delete-directory dir-b t))))
+
+(ert-deftest emagent-tools-test-age-sessions-isolated ()
+  "Age ledger reset for one session leaves another intact."
+  (emagent-tools-age-reset 'all)
+  (let ((emagent-tools-age t)
+        (emagent-tools-age-min-bytes 10)
+        (payload (make-string 100 ?q)))
+    (let ((emagent-tools-age--session-key "tok-a"))
+      (emagent-tools-age-note "fs-read" "/tmp/a" "" payload)
+      (should (string-match-p "\\[aged:"
+                              (emagent-tools-age-note "fs-read" "/tmp/a" "" payload))))
+    (let ((emagent-tools-age--session-key "tok-b"))
+      (should (string= payload
+                       (emagent-tools-age-note "fs-read" "/tmp/a" "" payload))))
+    (let ((emagent-tools-age--session-key "tok-a"))
+      (emagent-tools-age-reset)
+      (should (string= payload
+                       (emagent-tools-age-note "fs-read" "/tmp/a" "" payload))))
+    (let ((emagent-tools-age--session-key "tok-b"))
+      (should (string-match-p "\\[aged:"
+                              (emagent-tools-age-note "fs-read" "/tmp/a" "" payload))))))
+
+
+(ert-deftest emagent-tools-test-age-ui-uses-buffer-token ()
+  "Mode-line age reads follow the chat buffer MCP token."
+  (emagent-tools-age-reset 'all)
+  (let ((emagent-tools-age t)
+        (emagent-tools-age-min-bytes 10)
+        (payload (make-string 80 ?z)))
+    (with-temp-buffer
+      (setq-local emagent-mcp--token "tok-ui")
+      (let ((emagent-tools-age--session-key "tok-ui"))
+        (emagent-tools-age-note "fs-read" "/tmp/x" "" payload))
+      (should (= (string-bytes payload) (emagent-tools-age-bytes)))
+      (let ((emagent-tools-age--session-key "other"))
+        (should (= 0 (emagent-tools-age-bytes))))
+      ;; No dynamic key: fall back to buffer-local token
+      (should (= (string-bytes payload) (emagent-tools-age-bytes))))))
+
+(ert-deftest emagent-tools-test-buffer-project-directory ()
+  "Per-buffer project survives a later global setq from another chat."
+  (let* ((dir-a (make-temp-file "emagent-proj-a-" t))
+         (dir-b (make-temp-file "emagent-proj-b-" t))
+         (buf (generate-new-buffer " *emagent-proj*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local emagent-mcp--token "tok-a")
+          (emagent-tools-set-project-directory dir-a)
+          (should (string= (file-truename dir-a)
+                           (file-truename emagent-tools--buffer-project-directory)))
+          (let ((emagent-tools--project-directory nil))
+            (should (string-prefix-p
+                     (file-truename dir-a)
+                     (file-truename (emagent-tools--root-directory nil)))))
+          (setq emagent-tools--project-directory dir-b)
+          (let ((emagent-tools--project-directory nil))
+            (should (string-prefix-p
+                     (file-truename dir-a)
+                     (file-truename (emagent-tools--root-directory nil))))))
+      (kill-buffer buf)
+      (delete-directory dir-a t)
+      (delete-directory dir-b t))))
 
 
 (provide 'emagent-tools-test)

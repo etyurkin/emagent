@@ -106,6 +106,7 @@ Substitution guide:
 | Instead of              | Use                                       |
 |-------------------------+-------------------------------------------|
 | cat, head, tail         | fs op=read (optional line, limit)         |
+| Edit / StrReplace       | fs op=edit (old_string, new_string, tick) |
 | grep, rg, ag            | search                                    |
 | find -name GLOB         | fs op=find                                |
 | ls / tree               | fs op=list                                |
@@ -141,9 +142,12 @@ mvn/gradle/make/cargo/go/npm/yarn/pytest through compilation-mode
 
 - Omit a path to use the session project directory; relative paths resolve against it.
 - File tools are confined to the session root.
-- To revert an fs op=write mistake, call fs op=undo — never rewrite from memory.
+- To revert an fs write/edit, call fs op=undo with expected_tick — never rewrite from memory.
 - Concurrent MCP edits: pass expected_tick from the latest fs op=read
   (or structural op=get) emagent-tick; stale_revision means re-read and retry.
+- Prefer fs op=edit for targeted non-Lisp edits (unique old_string → new_string).
+  Use fs op=write only when replacing the whole file. Do not switch to agent
+  Edit/Read mid-turn after an emagent fs op=read.
 - delete-file, write-file, shell-command, call-process are blocked inside eval;
   use fs/shell/structural (writes use Emacs unless you enable
   `emagent-acp-confirm-fs-writes').
@@ -162,9 +166,11 @@ See `emagent-prompts--prefer-emacs-prompt'.")
   "Return substitution-guide rows for Lisp file editing."
   (if (emagent-struct-available-p)
       "| Edit .el / .lisp / .cl / .scm | structural op=replace|insert (fs write refused) |
+| Edit .clef (Clef)         | fs op=read/write/edit (not lisp-sitter)             |
 | Structural file outline   | structural op=tree|outline|bounds                   |
 | Validate Lisp file        | structural op=check_file                            |"
     "| Edit .el files            | fs op=write + elisp op=check (small edits)          |
+| Edit .clef (Clef)         | fs op=read/write/edit                             |
 | Validate before save      | elisp op=check                                      |"))
 
 (defun emagent-prompts--prefer-emacs-elisp-pattern-rows ()
@@ -655,10 +661,45 @@ Agents must use structural MCP ops for .el, .lisp, .cl, and .scm files."
   :type 'boolean
   :group 'emagent-struct)
 
+(defconst emagent-tools--structural-eval-heads
+  '(defun cl-defun defmacro cl-defmacro defsubst cl-defsubst
+    defvar defvar-local defconst defcustom)
+  "Top-level heads safe to eval after a structural write.
+
+Only definition forms are reloaded into the live Emacs; bare progns and
+side-effect forms are never eval'd from structural edit results.")
+
+(defun emagent-tools--structural-eval-after-edit (form-str)
+  "Eval FORM-STR after a structural write when it is a definition form.
+
+Honors `emagent-struct-eval-after-structural-edit'.  Only heads in
+`emagent-tools--structural-eval-heads' run; other top-level forms are
+skipped so approving a structural MCP edit cannot execute `delete-file',
+`make-process', or similar."
+  (when (and emagent-struct-eval-after-structural-edit
+             (stringp form-str)
+             (not (string-empty-p (string-trim form-str))))
+    (condition-case nil
+        (let* ((form (read form-str))
+               (head (and (consp form) (car form))))
+          (when (memq head emagent-tools--structural-eval-heads)
+            (eval form)))
+      (error nil))))
+
+(defun emagent-struct--clef-file-p (path)
+  "Return non-nil when PATH is a Clef source file (.clef)."
+  (and (stringp path) (string-match-p "\\.clef\\'" path)))
+
+(defun emagent-struct--reject-unsupported (path)
+  "Signal when PATH is not a lisp-sitter language (e.g. .clef)."
+  (when (emagent-struct--clef-file-p path)
+    (error ".clef is not a lisp-sitter language; use fs op=read/write/edit")))
+
 ;; ── Language detection ────────────────────────────────────────────
 
 (defun emagent-struct--lang-for (path)
   "Return language id string for PATH based on extension."
+  (emagent-struct--reject-unsupported path)
   (cond
    ((string-match-p "\\.el\\'" path) "elisp")
    ((string-match-p "\\.lisp\\'" path) "commonlisp")
@@ -713,6 +754,8 @@ Signal an error when lisp-sitter exits non-zero."
 (defun emagent-struct--call-path (&rest args)
   "Run lisp-sitter ARGS against a file path; return trimmed stdout."
   (emagent-struct--ensure)
+  (dolist (arg args)
+    (when (stringp arg) (emagent-struct--reject-unsupported arg)))
   (with-temp-buffer
     (let ((exit (apply #'call-process emagent-struct-lisp-sitter-bin nil
                       (current-buffer) nil args)))
@@ -724,6 +767,8 @@ Signal an error when lisp-sitter exits non-zero."
 (defun emagent-struct--call-path-async (callback &rest args)
   "Run lisp-sitter ARGS against a file path; call CALLBACK with (output is-error)."
   (emagent-struct--ensure)
+  (dolist (arg args)
+    (when (stringp arg) (emagent-struct--reject-unsupported arg)))
   (apply #'emagent-tools--run-process-async
          (lambda (output is-error)
            (if is-error
@@ -907,6 +952,18 @@ Arguments: WITH, WRAP."
 
 (defvar emagent-acp-prefer-emacs)
 
+(defvar emagent-tools--chat-buffer)
+(defvar emagent-tools--session-allowed-tools)
+(defvar emagent-tools-allow-all-function)
+(defvar emagent-tools-age--session-key)
+(defvar emagent-mcp--current-session-token)
+(defvar emagent-tools--project-directory)
+(defvar emagent-tools--root-boundary)
+(defvar emagent-tools--acp-session-p)
+(defvar emagent-tools--expected-file-tick)
+
+(defvar emagent-usage--session-key)
+
 (defgroup emagent-shell nil
   "Shell command routing for emagent."
   :group 'emagent)
@@ -937,6 +994,16 @@ Arguments: WITH, WRAP."
        emagent-acp-prefer-emacs
        emagent-shell-redirect))
 
+(defun emagent-shell--compound-command-p (command)
+  "Return non-nil when COMMAND has pipes or other shell operators.
+
+Quoted spans are ignored so `echo \"a|b\"' stays simple.  Compound
+commands must run as real shell — prefer-Emacs redirects would mangle
+`grep x file | head' into a bogus path."
+  (let ((bare (emagent-shell--strip-quoted (or command ""))))
+    (or (string-match-p "[|;&<>`]" bare)
+        (string-match-p "\\$(" bare))))
+
 (defun emagent-shell--suggest-p ()
   "Return non-nil when shell suggestions are active."
   (and (boundp 'emagent-acp-prefer-emacs)
@@ -944,13 +1011,27 @@ Arguments: WITH, WRAP."
        emagent-shell-suggest))
 
 (defun emagent-shell--strip-quoted (command)
-  "Remove single- and double-quoted spans from COMMAND."
-  (replace-regexp-in-string "[\"'][^\"']*[\"']" "" command))
+  "Remove single- and double-quoted spans from COMMAND.
+
+Delegates to `emagent-policy-match--strip-quoted' so shell routing and
+policy share the same quoting rules (apostrophes inside doubles, etc.)."
+  (emagent-policy-match--strip-quoted command))
 
 (defun emagent-shell--git-no-verify-p (command)
-  "Return non-nil when COMMAND is git with --no-verify."
-  (and (string-match-p "\\<git\\>" command)
-       (string-match-p "--no-verify" (emagent-shell--strip-quoted command))))
+  "Return non-nil when COMMAND is git with a --no-verify argv.
+
+Unquoted flags are matched after stripping quoted spans so a commit
+message like `-m \"--no-verify inside\"' is not a false positive.
+A flag that is itself a quoted argv (`'--no-verify' or \"--no-verify\")
+is still detected on the raw command."
+  (and (stringp command)
+       (string-match-p "\\<git\\>" command)
+       (or (string-match-p
+            "\\(?:\\`\\|[[:space:]]\\)--no-verify\\(?:\\'\\|[[:space:]]\\)"
+            (emagent-shell--strip-quoted command))
+           (string-match-p
+            "\\(?:\\`\\|[[:space:]]\\)['\"]--no-verify['\"]\\(?:\\'\\|[[:space:]]\\)"
+            command))))
 
 (defun emagent-shell--git-push-p (command)
   "Return non-nil when COMMAND is a git push."
@@ -1195,7 +1276,8 @@ Arguments: DIRECTORY, TIMEOUT."
   "Run COMMAND via an emagent tool when it matches a simple pattern.
 
 Arguments: DIRECTORY."
-  (when (emagent-shell--prefer-emacs-p)
+  (when (and (emagent-shell--prefer-emacs-p)
+             (not (emagent-shell--compound-command-p command)))
     (let* ((trimmed (string-trim command))
            (words (emagent-shell--words trimmed))
            (tool (pcase (car words)
@@ -1212,23 +1294,24 @@ Arguments: DIRECTORY."
   "Return a user-facing hint when COMMAND should use an emagent tool."
   (when (emagent-shell--suggest-p)
     (let ((cmd (string-trim command)))
-    (cond
-     ((string-match-p "\\`git[[:space:]]+status\\>" cmd) nil)
-     ((string-match-p "\\`git[[:space:]]+diff\\>" cmd) nil)
-     ((string-match-p "\\`git[[:space:]]+log\\>" cmd) nil)
-     ((string-match-p "\\<git\\>" cmd)
-      "Use emagent git op=status|diff|log instead of shell git.")
-     ((string-match-p "\\`\\(?:grep\\|rg\\|ag\\)\\>" cmd)
-      "Use emagent search instead of shell grep/rg/ag.")
-     ((string-match-p "\\`find\\>" cmd)
-      "Use emagent fs op=find or fs op=list instead of shell find.")
-     ((string-match-p "\\`\\(?:cat\\|head\\|tail\\)\\>" cmd)
-      "Use emagent fs op=read (optional line and limit) instead of cat/head/tail.")
-     ((string-match-p "\\`jq\\>" cmd)
-      "Use emagent eval with json-parse-string / json-read instead of jq.")
-     ((string-match-p "\\`open[[:space:]]" cmd)
-      "Use emagent eval with browse-url instead of open.")
-     (t nil)))))
+      (cond
+       ((emagent-shell--compound-command-p cmd) nil)
+       ((string-match-p "\\`git[[:space:]]+status\\>" cmd) nil)
+       ((string-match-p "\\`git[[:space:]]+diff\\>" cmd) nil)
+       ((string-match-p "\\`git[[:space:]]+log\\>" cmd) nil)
+       ((string-match-p "\\<git\\>" cmd)
+        "Use emagent git op=status|diff|log instead of shell git.")
+       ((string-match-p "\\`\\(?:grep\\|rg\\|ag\\)\\>" cmd)
+        "Use emagent search instead of shell grep/rg/ag.")
+       ((string-match-p "\\`find\\>" cmd)
+        "Use emagent fs op=find or fs op=list instead of shell find.")
+       ((string-match-p "\\`\\(?:cat\\|head\\|tail\\)\\>" cmd)
+        "Use emagent fs op=read (optional line and limit) instead of cat/head/tail.")
+       ((string-match-p "\\`jq\\>" cmd)
+        "Use emagent eval with json-parse-string / json-read instead of jq.")
+       ((string-match-p "\\`open[[:space:]]" cmd)
+        "Use emagent eval with browse-url instead of open.")
+       (t nil)))))
 
 (defun emagent-shell--redirect-git-async (words callback &optional timeout)
   "Internal helper for WORDS and CALLBACK and TIMEOUT."
@@ -1308,7 +1391,8 @@ Arguments: DIRECTORY."
   "Run COMMAND via an emagent tool when it matches; call CALLBACK with result.
 
 Arguments: DIRECTORY, TIMEOUT."
-  (if (not (emagent-shell--prefer-emacs-p))
+  (if (or (not (emagent-shell--prefer-emacs-p))
+          (emagent-shell--compound-command-p command))
       (funcall callback nil nil)
     (let* ((trimmed (string-trim command))
            (words (emagent-shell--words trimmed))
@@ -1447,7 +1531,11 @@ Arguments: DIRECTORY."
 (defun emagent-tools--read-file-content (path &optional line limit)
   "Read PATH through Emacs, including unsaved buffer contents.
 
+Reconciles an unmodified visiting buffer that drifted from disk before
+reading, so external edits are visible to tools and tick CAS.
+
 Arguments: LINE, LIMIT."
+  (emagent-tools--reconcile-visited-file path)
   (let* ((resolved (emagent-tools--root-directory path))
          (buffer (find-buffer-visiting resolved)))
     (if buffer
@@ -1584,13 +1672,86 @@ same tick, while any concurrent edit invalidates it.  Missing files use
    ((numberp tick) (format "%s" tick))
    (t (format "%s" tick))))
 
+(defun emagent-tools--capture-session-context ()
+  "Return a plist of the active emagent tool session bindings.
+
+Captured so async process sentinels can restore root confinement and
+ACP tick/age state after the MCP `let' that started the tool has ended."
+  (list :project emagent-tools--project-directory
+        :root emagent-tools--root-boundary
+        :acp emagent-tools--acp-session-p
+        :tick emagent-tools--expected-file-tick
+        :chat emagent-tools--chat-buffer
+        :age-key (or (and (boundp 'emagent-mcp--current-session-token)
+                          emagent-mcp--current-session-token)
+                     (and emagent-tools--chat-buffer
+                          (buffer-live-p emagent-tools--chat-buffer)
+                          (format "buf:%s"
+                                  (buffer-name emagent-tools--chat-buffer)))
+                     'global)
+        :prefer-emacs (and (boundp 'emagent-acp-prefer-emacs)
+                           emagent-acp-prefer-emacs)
+        :allowed (and (boundp 'emagent-tools--session-allowed-tools)
+                      emagent-tools--session-allowed-tools)
+        :allow-all (and (boundp 'emagent-tools-allow-all-function)
+                        emagent-tools-allow-all-function)))
+
+(defun emagent-tools--with-session-context (ctx thunk)
+  "Call THUNK with tool session bindings restored from CTX.
+
+CTX is a plist from `emagent-tools--capture-session-context'."
+  (let ((emagent-tools--project-directory (plist-get ctx :project))
+        (emagent-tools--root-boundary (plist-get ctx :root))
+        (emagent-tools--acp-session-p (plist-get ctx :acp))
+        (emagent-tools--expected-file-tick (plist-get ctx :tick))
+        (emagent-tools--chat-buffer (plist-get ctx :chat))
+        (emagent-tools-age--session-key (plist-get ctx :age-key))
+        (emagent-usage--session-key (plist-get ctx :age-key))
+        (emagent-acp-prefer-emacs (plist-get ctx :prefer-emacs))
+        (emagent-tools--session-allowed-tools (plist-get ctx :allowed))
+        (emagent-tools-allow-all-function (plist-get ctx :allow-all)))
+    (funcall thunk)))
+
+(defun emagent-tools--wrap-session-callback (ctx callback)
+  "Return CALLBACK wrapped to restore CTX before each invocation.
+
+CALLBACK is called as (CALLBACK RESULT &optional IS-ERROR)."
+  (lambda (result &optional is-error)
+    (emagent-tools--with-session-context
+     ctx
+     (lambda ()
+       (funcall callback result is-error)))))
+
+(defun emagent-tools--reconcile-visited-file (path &optional require-clean)
+  "Align PATH's visiting buffer with disk before read/tick/mutate.
+
+Unmodified buffers whose file changed on disk are reverted so content
+and emagent-tick match disk.  When REQUIRE-CLEAN is non-nil, a modified
+buffer with a disk change signals `stale_revision' instead of clobbering."
+  (let* ((resolved (emagent-tools--root-directory path))
+         (buffer (find-buffer-visiting resolved)))
+    (when buffer
+      (with-current-buffer buffer
+        (unless (verify-visited-file-modtime)
+          (cond
+           ((and require-clean (buffer-modified-p))
+            (user-error
+             (concat "stale_revision: path=%s changed on disk while "
+                     "buffer has unsaved edits; re-read and retry")
+             resolved))
+           ((not (buffer-modified-p))
+            (revert-buffer t t t))))))
+    resolved))
+
 (defun emagent-tools--guard-file-tick (path expected-tick)
   "Signal when EXPECTED-TICK does not match PATH's current revision.
 
 When `emagent-tools--acp-session-p' is set, EXPECTED-TICK is required.
-Otherwise a nil EXPECTED-TICK skips the check (non-MCP callers)."
+Otherwise a nil EXPECTED-TICK skips the check (non-MCP callers).
+Also reconciles a visiting buffer that drifted from disk."
   (when (and emagent-tools--acp-session-p
              (not emagent-tools--skip-file-tick-guard))
+    (emagent-tools--reconcile-visited-file path t)
     (let* ((expected (emagent-tools--normalize-file-tick expected-tick))
            (current (emagent-tools--file-tick path))
            (resolved (emagent-tools--root-directory path)))
@@ -1720,7 +1881,8 @@ EXPECTED-TICK, when non-nil, overrides `emagent-tools--expected-file-tick'."
          (emagent-tools--root-directory path)))
     (error (funcall callback (error-message-string err) t)
            (cl-return-from emagent-tool-write-file-async)))
-  (let* ((resolved (emagent-tools--root-directory path))
+  (let* ((ctx (emagent-tools--capture-session-context))
+         (resolved (emagent-tools--root-directory path))
          (label (file-name-nondirectory resolved))
          (old (emagent-tools--read-elisp-file-content path))
          (acp emagent-tools--acp-session-p))
@@ -1731,17 +1893,19 @@ EXPECTED-TICK, when non-nil, overrides `emagent-tools--expected-file-tick'."
                         resolved))
           (emagent-tools--write-file-content path content)
           (emagent-tools--unified-diff-async
-           (lambda (diff is-error)
-             (if is-error
-                 (funcall callback diff t)
-               (let ((result (if (string-empty-p diff)
-                                 (format "Wrote %s (no changes)" resolved)
-                               diff)))
-                 (funcall callback
-                          (if acp
-                              (emagent-tools--append-file-tick path result)
-                            result)
-                          nil))))
+           (emagent-tools--wrap-session-callback
+            ctx
+            (lambda (diff is-error)
+              (if is-error
+                  (funcall callback diff t)
+                (let ((result (if (string-empty-p diff)
+                                  (format "Wrote %s (no changes)" resolved)
+                                diff)))
+                  (funcall callback
+                           (if acp
+                               (emagent-tools--append-file-tick path result)
+                             result)
+                           nil)))))
            old content label))
       (error (funcall callback (error-message-string err) t)))))
 
@@ -1766,13 +1930,73 @@ EXPECTED-TICK, when non-nil, overrides `emagent-tools--expected-file-tick'."
           (emagent-tools--append-file-tick path result)
         result))))
 
+(defun emagent-tools--apply-string-edit (content old-string new-string &optional replace-all)
+  "Return CONTENT with OLD-STRING replaced by NEW-STRING.
+
+When REPLACE-ALL is non-nil, replace every occurrence.  Otherwise OLD-STRING
+must appear exactly once.  Signal `user-error' when the match count is wrong."
+  (unless (and (stringp old-string) (not (string-empty-p old-string)))
+    (user-error "Old_string is required and must be non-empty"))
+  (unless (stringp new-string)
+    (user-error "New_string is required"))
+  (let ((count 0)
+        (start 0)
+        (len (length old-string)))
+    (while (and (< start (length content))
+                (setq start (string-search old-string content start)))
+      (setq count (1+ count)
+            start (+ start (max 1 len))))
+    (cond
+     ((= count 0)
+      (user-error "Old_string not found in file"))
+     ((and (not replace-all) (> count 1))
+      (user-error
+       "Old_string matched %d times; pass replace_all=true or make it unique"
+       count))
+     (t
+      (if replace-all
+          (string-replace old-string new-string content)
+        (let ((at (string-search old-string content)))
+          (concat (substring content 0 at)
+                  new-string
+                  (substring content (+ at len)))))))))
+
+(cl-defun emagent-tool-edit-file-async (callback path old-string new-string
+                                                 &optional replace-all)
+  "Replace OLD-STRING with NEW-STRING in PATH; call CALLBACK with result.
+
+Same guards as `emagent-tool-write-file-async' (Lisp structural refuse,
+protected paths, tick CAS via write).  REPLACE-ALL replaces every match."
+  (condition-case err
+      (let* ((old (emagent-tools--read-elisp-file-content path))
+             (new (emagent-tools--apply-string-edit
+                   old old-string new-string replace-all)))
+        (emagent-tool-write-file-async callback path new))
+    (error (funcall callback (error-message-string err) t))))
+
+(defun emagent-tool-edit-file (path old-string new-string &optional replace-all)
+  "Replace OLD-STRING with NEW-STRING in PATH (sync).
+
+Arguments: REPLACE-ALL."
+  (let* ((old (emagent-tools--read-elisp-file-content path))
+         (new (emagent-tools--apply-string-edit
+               old old-string new-string replace-all)))
+    (emagent-tool-write-file path new)))
+
 (defun emagent-tools--structural-sync-path (file)
-  "Sync FILE buffer content to disk; return absolute path.
-Skips tick CAS: a no-op sync must not require expected_tick."
-  (let ((emagent-tools--skip-file-tick-guard t)
-        (content (emagent-tools--read-structural-file-content file)))
-    (emagent-tools--write-file-content file content)
-    (emagent-tools--root-directory file)))
+  "Sync FILE buffer to disk when the visiting buffer is modified.
+
+Reconcile disk drift first.  Flushing a modified buffer skips tick CAS:
+the visiting buffer is the editor source of truth, and MCP writes
+already update that buffer in place."
+  (emagent-tools--reconcile-visited-file file t)
+  (let* ((resolved (emagent-tools--root-directory file))
+         (buffer (find-buffer-visiting resolved)))
+    (when (and buffer (buffer-modified-p buffer))
+      (let ((emagent-tools--skip-file-tick-guard t)
+            (content (emagent-tools--read-structural-file-content file)))
+        (emagent-tools--write-file-content file content)))
+    resolved))
 
 (defun emagent-tools--structural-apply-file-result (file result)
   "Write RESULT to FILE when it is updated content, not a status line."
@@ -1841,12 +2065,14 @@ When `emagent-tools--acp-session-p' is set, append emagent-tick for writes."
 (defun emagent-tool-structural-format (file &optional write)
   "Re-indent FILE with lisp-sitter.
 
+When WRITE is non-nil, save via the normal write path so ACP tick CAS
+and the visiting buffer stay in sync (never `fmt --write' on disk).
+
 Arguments: WRITE."
   (let ((path (emagent-tools--structural-sync-path file)))
     (if write
-        (progn
-          (emagent-struct-format-file path t)
-          (format "Wrote %s" path))
+        (emagent-tools--structural-apply-file-result
+         file (emagent-struct-format-file path nil))
       (emagent-struct-format-file path nil))))
 
 (defun emagent-tool-structural-rename (file old new &optional refs no-refs)
@@ -1952,8 +2178,7 @@ Arguments: AT, WRAP."
          (updated (emagent-struct-replace content file symbol new-body))
          (result (progn
                    (emagent-tools--write-file-content file updated)
-                   (when emagent-struct-eval-after-structural-edit
-                     (ignore-errors (eval (read new-body))))
+                   (emagent-tools--structural-eval-after-edit new-body)
                    (format "Wrote %s" (expand-file-name file)))))
     (if emagent-tools--acp-session-p
         (emagent-tools--append-file-tick file result)
@@ -1967,8 +2192,7 @@ Arguments: AT, WRAP."
          (updated (emagent-struct-insert content file after-symbol node))
          (result (progn
                    (emagent-tools--write-file-content file updated)
-                   (when emagent-struct-eval-after-structural-edit
-                     (ignore-errors (eval (read node))))
+                   (emagent-tools--structural-eval-after-edit node)
                    (format "Wrote %s" (expand-file-name file)))))
     (if emagent-tools--acp-session-p
         (emagent-tools--append-file-tick file result)
@@ -1976,20 +2200,19 @@ Arguments: AT, WRAP."
 
 (defun emagent-tools--structural-apply-async (callback file args)
   "Run lisp-sitter ARGS on synced FILE; write result and call CALLBACK."
-  (let ((expected emagent-tools--expected-file-tick)
-        (acp emagent-tools--acp-session-p))
+  (let ((ctx (emagent-tools--capture-session-context)))
     (apply #'emagent-struct--call-path-async
-           (lambda (result is-error)
-             (if is-error
-                 (funcall callback result t)
-               (condition-case err
-                   (let ((emagent-tools--expected-file-tick expected)
-                         (emagent-tools--acp-session-p acp))
-                     (funcall callback
-                              (emagent-tools--structural-apply-file-result
-                               file result)
-                              nil))
-                 (error (funcall callback (error-message-string err) t)))))
+           (emagent-tools--wrap-session-callback
+            ctx
+            (lambda (result is-error)
+              (if is-error
+                  (funcall callback result t)
+                (condition-case err
+                    (funcall callback
+                             (emagent-tools--structural-apply-file-result
+                              file result)
+                             nil)
+                  (error (funcall callback (error-message-string err) t))))))
            args)))
 
 (defun emagent-tool-check-structural-file-async (callback file)
@@ -2049,14 +2272,17 @@ Arguments: CALLBACK, DEPTH."
 
 Arguments: CALLBACK."
   (let ((content (emagent-tools--read-structural-file-content file))
+        (ctx (emagent-tools--capture-session-context))
         (acp emagent-tools--acp-session-p))
     (apply #'emagent-struct--call-async
-           (lambda (result is-error)
-             (if (or is-error (not acp))
-                 (funcall callback result is-error)
-               (funcall callback
-                        (emagent-tools--append-file-tick file result)
-                        nil)))
+           (emagent-tools--wrap-session-callback
+            ctx
+            (lambda (result is-error)
+              (if (or is-error (not acp))
+                  (funcall callback result is-error)
+                (funcall callback
+                         (emagent-tools--append-file-tick file result)
+                         nil))))
            content "get" "-" symbol
            "--lang" (emagent-struct--lang-for file))))
 
@@ -2084,18 +2310,16 @@ Arguments: CALLBACK."
 (defun emagent-tool-structural-format-async (callback file &optional write)
   "Re-indent FILE with lisp-sitter asynchronously.
 
+When WRITE is non-nil, format to stdout then write through
+`emagent-tools--structural-apply-async' so emagent-tick and the
+visiting buffer update like other structural mutates.
+
 Arguments: CALLBACK, WRITE."
-  (let* ((path (emagent-tools--structural-sync-path file))
-         (args (list "fmt" path)))
-    (when write (setq args (append args '("--write"))))
+  (let ((path (emagent-tools--structural-sync-path file)))
     (if write
-        (apply #'emagent-struct--call-path-async
-               (lambda (result is-error)
-                 (if is-error
-                     (funcall callback result t)
-                   (funcall callback (format "Wrote %s" path) nil)))
-               args)
-      (apply #'emagent-struct--call-path-async callback args))))
+        (emagent-tools--structural-apply-async
+         callback file (list "fmt" path))
+      (emagent-struct--call-path-async callback "fmt" path))))
 
 (defun emagent-tool-structural-rename-async (callback file old new &optional refs no-refs)
   "Rename top-level form OLD to NEW in FILE asynchronously.
@@ -2225,26 +2449,30 @@ Arguments: CALLBACK."
            (cl-return-from emagent-tool-structural-replace-async)))
   (let* ((content (emagent-tools--read-structural-file-content file))
          (lang (emagent-struct--lang-for file))
-         (expected emagent-tools--expected-file-tick)
+         (ctx (emagent-tools--capture-session-context))
          (acp emagent-tools--acp-session-p))
     (apply #'emagent-struct--call-async
-           (lambda (updated is-error)
-             (if is-error
-                 (funcall callback updated t)
-               (condition-case err
-                   (let ((emagent-tools--expected-file-tick expected)
-                         (emagent-tools--acp-session-p acp))
-                     (emagent-tools--write-file-content file updated)
-                     (when emagent-struct-eval-after-structural-edit
-                       (ignore-errors (eval (read new-body))))
-                     (let ((result (format "Wrote %s" (expand-file-name file))))
-                       (funcall callback
-                                (if acp
-                                    (emagent-tools--append-file-tick file result)
-                                  result)
-                                nil)))
-                 (error (funcall callback (error-message-string err) t)))))
-           content "replace" "-" symbol "--body" new-body "--lang" lang)))
+           (emagent-tools--wrap-session-callback
+            ctx
+            (lambda (updated is-error)
+              (if is-error
+                  (funcall callback updated t)
+                (condition-case err
+                    (progn
+                      (emagent-tools--write-file-content file updated)
+                      (emagent-tools--structural-eval-after-edit new-body)
+                      (let ((result (format "Wrote %s"
+                                            (expand-file-name file))))
+                        (funcall callback
+                                 (if acp
+                                     (emagent-tools--append-file-tick
+                                      file result)
+                                   result)
+                                 nil)))
+                  (error (funcall callback
+                                  (error-message-string err) t))))))
+           content "replace" "-" symbol "--body" new-body
+           "--lang" lang)))
 
 (cl-defun emagent-tool-structural-insert-async (callback file after-symbol node)
   "Insert complete top-level NODE after AFTER-SYMBOL in FILE asynchronously.
@@ -2257,26 +2485,30 @@ Arguments: CALLBACK."
            (cl-return-from emagent-tool-structural-insert-async)))
   (let* ((content (emagent-tools--read-structural-file-content file))
          (lang (emagent-struct--lang-for file))
-         (expected emagent-tools--expected-file-tick)
+         (ctx (emagent-tools--capture-session-context))
          (acp emagent-tools--acp-session-p))
     (apply #'emagent-struct--call-async
-           (lambda (updated is-error)
-             (if is-error
-                 (funcall callback updated t)
-               (condition-case err
-                   (let ((emagent-tools--expected-file-tick expected)
-                         (emagent-tools--acp-session-p acp))
-                     (emagent-tools--write-file-content file updated)
-                     (when emagent-struct-eval-after-structural-edit
-                       (ignore-errors (eval (read node))))
-                     (let ((result (format "Wrote %s" (expand-file-name file))))
-                       (funcall callback
-                                (if acp
-                                    (emagent-tools--append-file-tick file result)
-                                  result)
-                                nil)))
-                 (error (funcall callback (error-message-string err) t)))))
-           content "insert" "-" after-symbol "--node" node "--lang" lang)))
+           (emagent-tools--wrap-session-callback
+            ctx
+            (lambda (updated is-error)
+              (if is-error
+                  (funcall callback updated t)
+                (condition-case err
+                    (progn
+                      (emagent-tools--write-file-content file updated)
+                      (emagent-tools--structural-eval-after-edit node)
+                      (let ((result (format "Wrote %s"
+                                            (expand-file-name file))))
+                        (funcall callback
+                                 (if acp
+                                     (emagent-tools--append-file-tick
+                                      file result)
+                                   result)
+                                 nil)))
+                  (error (funcall callback
+                                  (error-message-string err) t))))))
+           content "insert" "-" after-symbol "--node" node
+           "--lang" lang)))
 
 (defcustom emagent-allowed-tools '(emagent-tool-fetch-url)
   "Symbols naming tools that may run without confirmation."
@@ -2592,10 +2824,19 @@ Bound per session by the emagent MCP dispatcher so a tool call cannot reach
 outside the session's project root.  Nil disables the check (the historical
 behaviour for non-MCP call sites).")
 
+(defvar-local emagent-tools--buffer-project-directory nil
+  "Per-chat project directory; preferred when the dynamic binding is nil.")
+
 (defun emagent-tools-set-project-directory (directory)
-  "Set project DIRECTORY used by emagent-tool-* when PATH is omitted."
-  (setq emagent-tools--project-directory
-        (and directory (expand-file-name directory))))
+  "Set project DIRECTORY used by emagent-tool-* when PATH is omitted.
+
+Updates the process-wide default and, when called from a chat buffer,
+the buffer-local project so concurrent chats do not clobber each other."
+  (let ((dir (and directory (expand-file-name directory))))
+    (setq emagent-tools--project-directory dir)
+    (when (local-variable-p 'emagent-mcp--token (current-buffer))
+      (setq-local emagent-tools--buffer-project-directory dir))
+    dir))
 
 (defun emagent-tool-project-directory ()
   "Return the emagent session project directory as a string."

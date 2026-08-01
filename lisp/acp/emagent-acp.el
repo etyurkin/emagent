@@ -1059,7 +1059,8 @@ detail from the Thinking arrow line."
 The agent ends its turn after calling ScheduleWakeup and expects the
 client to send the wakeup prompt after the delay.  Only recorded here;
 the timer is armed when the turn completes (`emagent-acp--arm-wakeup'),
-and a `stop' call cancels a pending wakeup immediately."
+and a `stop' call cancels a pending wakeup immediately.
+Compress turns ignore schedule requests (stop still cancels)."
   (when (and emagent-acp-honor-schedule-wakeup
              (emagent-acp--wakeup-tool-p (map-elt update 'title)))
     (when-let* ((raw (map-elt update 'rawInput))
@@ -1074,6 +1075,8 @@ and a `stop' call cancels a pending wakeup immediately."
          ((and stop (not (memq stop '(:false :json-false))))
           (emagent-acp--cancel-wakeup state)
           (emagent-log "wakeup: loop stopped by agent"))
+         ((emagent-acp-state-compress-pending state)
+          (emagent-log "wakeup: ignored during compress"))
          ((and (numberp delay) (> delay 0))
           (setf (emagent-acp-state-wakeup-request state)
                 (list :delay (max 10 (min (round delay) 3600))
@@ -1100,17 +1103,20 @@ Arguments: STATE."
            (defer (emagent-acp--provider-defer-tool-call-p state merged))
            (show (and label (not (string-empty-p label)) (not defer)
                         (emagent-acp--tool-call-displayable-p state merged))))
-      (emagent-acp--capture-schedule-wakeup state merged) (emagent-acp--explore-note-tool-kind (or kind (map-elt merged 'kind)))
-      (when defer
-        (puthash id merged pending-table)
-        (emagent-acp--provider-enqueue-tool-resolve state id))
-      (when show
-        (emagent-acp--emit-tool-call-display state id kind merged label status)
-        (when id (remhash id pending-table)))
-      (when (emagent-acp-state-permission-queue state)
-        (unless (fboundp 'emagent-acp--drain-permission-queue)
-          (require 'emagent-acp))
-        (emagent-acp--drain-permission-queue state)))))
+      (emagent-acp--capture-schedule-wakeup state merged)
+      (unless (emagent-acp-state-compress-pending state)
+        (emagent-acp--explore-note-tool-kind
+         (or kind (map-elt merged 'kind)))
+        (when defer
+          (puthash id merged pending-table)
+          (emagent-acp--provider-enqueue-tool-resolve state id))
+        (when show
+          (emagent-acp--emit-tool-call-display state id kind merged label status)
+          (when id (remhash id pending-table)))
+        (when (emagent-acp-state-permission-queue state)
+          (unless (fboundp 'emagent-acp--drain-permission-queue)
+            (require 'emagent-acp))
+          (emagent-acp--drain-permission-queue state))))))
 
 (defun emagent-acp--permission-question-line (emagent-acp-request)
   "Return the command or path to show on the permission ? line.
@@ -1221,6 +1227,9 @@ unchanged."
                (emagent-acp-send-response :client (emagent-acp-state-client state) :response response))
              (when on-complete (funcall on-complete)))))
       (cond
+       ((emagent-acp-state-compress-pending state)
+        (emagent-log "permission cancelled during compress: %s" question)
+        (funcall respond :deny))
        (switch-mode
         (unless (fboundp 'emagent-acp--prepare-interactive-context)
           (require 'emagent-acp))
@@ -1848,6 +1857,8 @@ See the commentary for the verdict shape."
   (and (memq (car-safe verdict) '(:deny :confirm)) (cdr verdict)))
 
 (defvar emagent-tools--root-boundary)
+(defvar emagent-tools-age--session-key)
+(defvar emagent-usage--session-key)
 
 (defvar emagent-tools--project-directory)
 
@@ -2599,7 +2610,9 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
   (emagent-acp--reset-permission-gate state)
   (emagent-acp--cancel-prompt-render state)
   (emagent-acp--clear-thought-buffer state)
-  (emagent-acp--schedule-prompt-watchdog state)
+  (progn
+    (emagent-acp--clear-prompt-watchdog state)
+    (emagent-acp--schedule-prompt-watchdog state))
   (unless (emagent-acp-state-quiet-prompt state)
     (when (fboundp 'emagent-chat--send-pending-end)
       (when-let ((buf (emagent-acp--chat-buffer state)))
@@ -2656,7 +2669,8 @@ here it is always the final text to dispatch."
 
 When STOP-NOTICE is non-nil, append it to any partial assistant text
 before closing the response block.  Returns non-nil when a prompt was
-finalized."
+finalized.  A compress turn is cancelled instead of compacted: the
+stop notice must not become the session SUMMARY."
   (let ((state emagent-acp--session))
     (unless (and state
                  (or (emagent-acp-state-busy state)
@@ -2668,12 +2682,20 @@ finalized."
     (emagent-acp--cancel-wakeup state)
     (emagent-acp--cancel-plan-build state)
     (emagent-acp--flush-thought-buffer state)
-    (when (and stop-notice (not (string-empty-p stop-notice)))
-      (let* ((text (or (emagent-acp-state-assistant-text state) ""))
-             (full (if (string-empty-p text)
-                       stop-notice
-                     (concat text "\n\n" stop-notice))))
-        (setf (emagent-acp-state-assistant-text state) full)))
+    (let ((was-compress (emagent-acp-state-compress-pending state)))
+      (when was-compress
+        (setf (emagent-acp-state-compress-pending state) nil)
+        (setf (emagent-acp-state-assistant-text state) "")
+        (setf (emagent-acp-state-thought-text state) "")
+        (emagent-log "compression cancelled by interrupt/stop"))
+      (when (and stop-notice (not (string-empty-p stop-notice)))
+        (if was-compress
+            (setf (emagent-acp-state-assistant-text state) stop-notice)
+          (let* ((text (or (emagent-acp-state-assistant-text state) ""))
+                 (full (if (string-empty-p text)
+                           stop-notice
+                         (concat text "\n\n" stop-notice))))
+            (setf (emagent-acp-state-assistant-text state) full)))))
     (setf (emagent-acp-state-prompt-generation state) (1+ (or (emagent-acp-state-prompt-generation state) 0)))
     (when-let ((client (emagent-acp-state-client state))
                (session-id (emagent-acp-state-session-id state)))
@@ -2728,7 +2750,24 @@ request continues in the background but its result is ignored."
   (when-let ((timer (emagent-acp-state-prompt-watchdog-timer state)))
     (cancel-timer timer))
   (setf (emagent-acp-state-prompt-watchdog state) nil)
-  (setf (emagent-acp-state-prompt-watchdog-timer state) nil))
+  (setf (emagent-acp-state-prompt-watchdog-timer state) nil)
+  (setf (emagent-acp-state-prompt-watchdog-extensions state) 0))
+
+(defun emagent-acp--watchdog-should-extend-p (state waiting)
+  "Return non-nil when STATE's stall should extend rather than finalize.
+
+WAITING is non-nil when ACP work is still outstanding.  Compress turns
+never extend once assistant text exists (the SUMMARY is enough to reset
+the session).  Open permission dialogs always extend (user wait, not an
+agent wedge).  Other waiting turns extend at most
+`emagent-acp-watchdog-max-extensions' times."
+  (and waiting
+       (not (and (emagent-acp-state-compress-pending state)
+                 (let ((text (emagent-acp-state-assistant-text state)))
+                   (and text (not (string-empty-p text))))))
+       (or (emagent-acp--permission-pending-p state)
+           (< (or (emagent-acp-state-prompt-watchdog-extensions state) 0)
+              (or emagent-acp-watchdog-max-extensions 0)))))
 
 (defun emagent-acp--schedule-prompt-watchdog (state)
   "Abort a prompt that stays busy without ACP progress.
@@ -2738,8 +2777,11 @@ call and permission answer, and without the cancel each call would leak a live
 timer (token-guarded no-ops that still pin STATE for the whole timeout).
 
 When ACP work is still outstanding (pending RPC, permission prompt, or
-tool-resolve), extend the watchdog instead of finalizing: otherwise the UI
-closes the Response while the agent keeps working and logging."
+tool-resolve), extend the watchdog instead of finalizing — up to
+`emagent-acp-watchdog-max-extensions' times — so the UI does not close the
+Response while the agent keeps working.  Compress turns with buffered
+SUMMARY text finalize on the first stall even if session/prompt is still
+pending (Claude ACP can wedge without ever returning)."
   (when-let ((old (emagent-acp-state-prompt-watchdog-timer state)))
     (cancel-timer old))
   (let* ((token (cl-gensym "emagent-prompt-watchdog"))
@@ -2761,12 +2803,20 @@ closes the Response while the agent keeps working and logging."
                          (emagent-log "emagent: pending ACP request count: %d"
                                       (length pending)))
                        (cond
-                        (waiting
-                         (emagent-log "emagent: prompt still waiting on agent work; extending watchdog")
+                        ((emagent-acp--watchdog-should-extend-p state waiting)
+                         (setf (emagent-acp-state-prompt-watchdog-extensions state)
+                               (1+ (or (emagent-acp-state-prompt-watchdog-extensions state) 0)))
+                         (emagent-log
+                          "emagent: prompt still waiting on agent work; extending watchdog (%d/%d)"
+                          (emagent-acp-state-prompt-watchdog-extensions state)
+                          emagent-acp-watchdog-max-extensions)
                          (emagent-acp--schedule-prompt-watchdog state))
                         ((and (emagent-acp-state-assistant-text state)
                               (not (string-empty-p
                                     (emagent-acp-state-assistant-text state))))
+                         (when waiting
+                           (emagent-log
+                            "emagent: pending ACP work abandoned after stall; finalizing partial"))
                          (emagent-log "emagent: prompt stalled; finalizing partial response")
                          (emagent-acp--complete-prompt state nil))
                         (t
@@ -2775,6 +2825,8 @@ closes the Response while the agent keeps working and logging."
                           "prompt stalled — reconnect with M-x emagent-mode or kill and reopen the buffer")))))))))
     (setf (emagent-acp-state-prompt-watchdog state) token)
     (setf (emagent-acp-state-prompt-watchdog-timer state) timer)))
+
+
 
 (defun emagent-acp--stream-to-buffer-p (state)
   "Return non-nil when agent chunks may update the chat buffer live.
@@ -3068,8 +3120,12 @@ pending ScheduleWakeup is cancelled by `emagent-acp--maybe-auto-compact'."
   "Start the ScheduleWakeup timer for STATE after this turn completes.
 Called when the turn completes: the agent has ended its reply and now
 waits to be re-invoked.  The wakeup prompt is sent as a regular user
-turn so the transcript records what re-started the agent."
+turn so the transcript records what re-started the agent.
+Compress turns drop any captured request instead of arming."
+  (when (emagent-acp-state-compress-pending state)
+    (emagent-acp--cancel-wakeup state))
   (when-let ((request (and emagent-acp-honor-schedule-wakeup
+                           (not (emagent-acp-state-compress-pending state))
                            (emagent-acp-state-wakeup-request state))))
     (emagent-acp--cancel-wakeup state)
     (let ((delay (plist-get request :delay))
@@ -3195,11 +3251,16 @@ work, but do not invent a synthetic `* user>' line in the transcript."
 (defun emagent-acp--thought-chunk (state text)
   "Accumulate thought TEXT for display and optional logging.
 
-Arguments: STATE."
-  (unless (string-empty-p text)
+Arguments: STATE.
+
+Drops late thoughts after compress finalize (busy cleared), matching
+agent_message_chunk handling so SUMMARY rendering is not disturbed."
+  (unless (or (string-empty-p text)
+              (and (emagent-acp-state-compress-pending state)
+                   (not (emagent-acp-state-busy state))))
     (emagent-acp--detect-external-refusal-in-text state text)
     (setf (emagent-acp-state-thought-text state)
-              (concat (or (emagent-acp-state-thought-text state) "") text))
+          (concat (or (emagent-acp-state-thought-text state) "") text))
     (when-let ((mode emagent-acp-thought-progress))
       (when (emagent-acp-state-prompt-finishing state)
         (emagent-acp--schedule-prompt-render state))
@@ -3432,7 +3493,11 @@ Arguments: EMAGENT-ACP-NOTIFICATION."
       (pcase update-type
         ("agent_message_chunk"
          (let ((text (or (map-nested-elt emagent-acp-notification '(params update content text)) "")))
-           (unless (emagent-acp-state-replaying-history state)
+           ;; Drop late chunks after compress finalize (busy cleared): they
+           ;; must not rewrite the SUMMARY snapshot before render runs.
+           (unless (or (emagent-acp-state-replaying-history state)
+                       (and (emagent-acp-state-compress-pending state)
+                            (not (emagent-acp-state-busy state))))
              (when (and (not (string-empty-p text))
                         (emagent-acp-state-tool-call-since-last-chunk state)
                         (not (string-empty-p (or (emagent-acp-state-assistant-text state) ""))))
@@ -3589,10 +3654,10 @@ Arguments: STATE, ON-READY."
   (setf (emagent-acp-state-ready state) t)
   (emagent-acp--persist-session-id state session-id)
   (emagent-acp--hydrate-session-permissions state session-id)
-  (emagent-tools-set-project-directory (emagent-acp--session-cwd state))
   (emagent-acp--progress state (if resumed "resumed" "connected"))
   (when-let ((buffer (emagent-acp--chat-buffer state)))
     (with-current-buffer buffer
+      (emagent-tools-set-project-directory (emagent-acp--session-cwd state))
       (pcase emagent-chat-provider
         ('cursor (emagent-chat-seed-cursor-slash-commands))
         ('claude
@@ -3606,10 +3671,26 @@ Arguments: STATE, ON-READY."
   
   "Internal helper for STATE and ON-READY and COMPRESSED-CONTEXT."
   (when (fboundp 'emagent-tools-age-reset)
-    (emagent-tools-age-reset))
+    (let* ((chat (emagent-acp--chat-buffer state))
+           (emagent-tools-age--session-key
+            (or (and (buffer-live-p chat)
+                     (buffer-local-value 'emagent-mcp--token chat))
+                (and (buffer-live-p chat)
+                     (format "buf:%s" (buffer-name chat)))
+                'global)))
+      (emagent-tools-age-reset)))
   (when (fboundp 'emagent-usage-tax-reset)
-    (emagent-usage-tax-reset))
-  (setq emagent-chat--explore-sticky nil)
+    (let* ((chat (emagent-acp--chat-buffer state))
+           (emagent-usage--session-key
+            (or (and (buffer-live-p chat)
+                     (buffer-local-value 'emagent-mcp--token chat))
+                (and (buffer-live-p chat)
+                     (format "buf:%s" (buffer-name chat)))
+                'global)))
+      (emagent-usage-tax-reset)))
+  (when-let ((chat (emagent-acp--chat-buffer state)))
+    (with-current-buffer chat
+      (setq emagent-chat--explore-sticky nil)))
   (emagent-acp--progress state "creating session…")
   (emagent-acp--send-request
    :state state

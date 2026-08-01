@@ -196,6 +196,24 @@ an `execute:rm' grant (e.g. from `rm foo.log') cannot auto-run `rm -rf /'."
 (ert-deftest emagent-policy-test-elisp-safe ()
   (should-not (emagent-policy-check-elisp "(+ 1 2)")))
 
+(ert-deftest emagent-policy-test-elisp-process-spawn-denied ()
+  "make-process and async-shell-command are hard-denied like call-process."
+  (dolist (form '("(make-process :name \"x\" :command (list \"true\"))"
+                  "(async-shell-command \"true\")"
+                  "(make-network-process :name \"n\" :host \"127.0.0.1\" :service 1)"))
+    (let ((result (emagent-policy-check-elisp form)))
+      (should (eq (car result) :deny)))))
+
+(ert-deftest emagent-policy-test-elisp-intern-evasion-denied ()
+  "String intern / quoted function names cannot bypass blocklists."
+  (dolist (form '("(funcall (intern \"call-process\") \"true\")"
+                  "(funcall 'call-process \"true\")"
+                  "(funcall #'call-process \"true\")"
+                  "(funcall (intern \"make-process\") :name \"x\" :command (list \"true\"))"))
+    (let ((result (emagent-policy-check-elisp form)))
+      (should (eq (car result) :deny)))))
+
+
 (ert-deftest emagent-policy-test-python-os-system ()
   (should (emagent-policy-rule-id-matches-p 'python 'python-os-system "os.system('x')")))
 

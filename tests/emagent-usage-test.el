@@ -38,7 +38,7 @@
       (ignore-errors (delete-directory dir t)))))
 
 (ert-deftest emagent-usage-test-baseline-delta ()
-  (emagent-usage-tax-reset)
+  (emagent-usage-tax-reset 'all)
   (should-not (emagent-usage-baseline-alist))
   (should-not (emagent-usage-tax-delta-string))
   (emagent-usage-tax-add 'context 100)
@@ -55,8 +55,23 @@
   (emagent-usage-baseline-clear)
   (should-not (emagent-usage-tax-delta-string))
   (emagent-usage-baseline-set)
-  (emagent-usage-tax-reset)
+  (emagent-usage-tax-reset 'all)
   (should-not (emagent-usage-baseline-alist)))
+
+(ert-deftest emagent-usage-test-tax-sessions-isolated ()
+  (emagent-usage-tax-reset 'all)
+  (let ((emagent-usage--session-key "tok-a"))
+    (emagent-usage-tax-add 'user 10)
+    (should (= 10 (emagent-usage-tax-get 'user))))
+  (let ((emagent-usage--session-key "tok-b"))
+    (should (= 0 (emagent-usage-tax-get 'user)))
+    (emagent-usage-tax-add 'user 3))
+  (let ((emagent-usage--session-key "tok-a"))
+    (emagent-usage-tax-reset)
+    (should (= 0 (emagent-usage-tax-get 'user))))
+  (let ((emagent-usage--session-key "tok-b"))
+    (should (= 3 (emagent-usage-tax-get 'user)))))
+
 
 (provide 'emagent-usage-test)
 

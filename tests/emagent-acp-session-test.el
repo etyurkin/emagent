@@ -722,6 +722,22 @@ Continuation uses `run-at-time'; pump those timers iteratively."
       (status . "completed")
       (rawInput . ,raw))))
 
+(ert-deftest emagent-acp-session-test-wakeup-ignored-during-compress ()
+  "Compress turns ignore ScheduleWakeup schedule and do not arm a timer."
+  (let ((state (emagent-acp--state-create))
+        (emagent-acp-honor-schedule-wakeup t))
+    (setf (emagent-acp-state-compress-pending state) t)
+    (emagent-acp--capture-schedule-wakeup
+     state (emagent-acp-session-test--wakeup-update
+            '(("delaySeconds" . 120) ("reason" . "should not arm"))))
+    (should-not (emagent-acp-state-wakeup-request state))
+    ;; Pre-set request still dropped on arm during compress.
+    (setf (emagent-acp-state-wakeup-request state)
+          (list :delay 120 :prompt "nope" :reason nil))
+    (emagent-acp--arm-wakeup state)
+    (should-not (emagent-acp-state-wakeup-timer state))
+    (should-not (emagent-acp-state-wakeup-request state))))
+
 (ert-deftest emagent-acp-session-test-wakeup-captured-and-armed ()
   "A ScheduleWakeup call is captured and armed when the turn completes."
   (let ((state (emagent-acp--state-create))
@@ -1859,6 +1875,111 @@ project directory rather than opening up unconfined access."
     (should-not (emagent-acp--stream-to-buffer-p state))
     (should-not (emagent-acp--stream-thought-to-buffer-p state))))
 
+(ert-deftest emagent-acp-session-test-late-chunks-ignored-after-compress-finalize ()
+  "After compress finalize (busy cleared), late message chunks are dropped."
+  (let ((state (emagent-test--make-acp-state)))
+    (setf (emagent-acp-state-compress-pending state) t
+          (emagent-acp-state-busy state) nil
+          (emagent-acp-state-assistant-text state) "SUMMARY only")
+    (emagent-acp--on-notification
+     :state state
+     :emagent-acp-notification
+     '((method . "session/update")
+       (params . ((update . ((sessionUpdate . "agent_message_chunk")
+                             (content . ((type . "text")
+                                         (text . " LATE")))))))))
+    (should (string= "SUMMARY only"
+                     (emagent-acp-state-assistant-text state)))))
+
+(ert-deftest emagent-acp-session-test-late-thoughts-ignored-after-compress-finalize ()
+  "After compress finalize (busy cleared), late thought chunks are dropped."
+  (let ((state (emagent-test--make-acp-state)))
+    (setf (emagent-acp-state-compress-pending state) t
+          (emagent-acp-state-busy state) nil
+          (emagent-acp-state-thought-text state) "thinking")
+    (emagent-acp--thought-chunk state " LATE")
+    (should (string= "thinking"
+                     (emagent-acp-state-thought-text state)))))
+
+(ert-deftest emagent-acp-session-test-interrupt-cancels-compress ()
+  "Interrupt during compress must not compact a stop stub as SUMMARY."
+  (let* ((state (emagent-test--make-acp-state))
+         (finished nil)
+         (emagent-acp--session state))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-compress-pending state) t
+          (emagent-acp-state-assistant-text state) "1) SUMMARY:\n- partial\n"
+          (emagent-acp-state-cb-finish state)
+          (lambda (text &optional _thought) (setq finished text)))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp-send-notification) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (_s) nil))
+         ((symbol-function 'emagent-mcp-cancel-session-tools) (lambda (_tok) nil))
+         ((symbol-function 'emagent-acp--new-session)
+          (lambda (&rest _) (error "should not reset"))))
+      (should (emagent-acp--finalize-in-flight-prompt "/Stopped./"))
+      (should-not (emagent-acp-state-compress-pending state))
+      (should finished)
+      (should (string-match-p "Stopped" finished)))))
+
+(ert-deftest emagent-acp-session-test-compress-pending-skips-tool-ui ()
+  "Tool-call updates during compress do not call the tool-call callback."
+  (let ((state (emagent-test--make-acp-state))
+        (shown nil))
+    (setf (emagent-acp-state-compress-pending state) t
+          (emagent-acp-state-cb-tool-call state)
+          (lambda (_id label &rest _) (setq shown label)))
+    (emagent-acp--on-tool-call
+     state '((toolCallId . "bash_1")
+             (title . "Bash")
+             (kind . "execute")
+             (status . "completed")
+             (content . [((type . "content")
+                          (content . ((type . "text")
+                                      (text . "Build complete!"))))])))
+    (should (null shown))))
+
+(ert-deftest emagent-acp-session-test-compress-pending-denies-permission ()
+  "Permission requests during compress are denied without prompting."
+  (let* ((state (emagent-test--make-acp-state))
+         (request '((id . "req-compress")
+                    (params . ((title . "Allow shell?")
+                               (options . [((optionId . "allow_once")
+                                            (kind . "allow_once"))
+                                           ((optionId . "reject_once")
+                                            (kind . "reject_once"))])
+                               (toolCall . ((toolCallId . "sh_1")
+                                            (kind . "execute")
+                                            (title . "Shell")))))))
+         (responses nil)
+         (prompted nil)
+         (shown nil))
+    (setf (emagent-acp-state-compress-pending state) t)
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-tools--buttons-prompt)
+          (lambda (&rest _) (setq prompted t)))
+         ((symbol-function 'emagent-acp--show-permission-decision)
+          (lambda (_state _tool-call choice) (setq shown choice)))
+         ((symbol-function 'emagent-acp-send-response)
+          (cl-function (lambda (&key response &allow-other-keys)
+                         (push response responses))))
+         ((symbol-function 'emagent-chat-show-tool-call)
+          (lambda (&rest _) nil)))
+      (emagent-acp--handle-one-permission
+       :state state :emagent-acp-request request)
+      (should-not prompted)
+      (should (null shown))
+      (should (= 1 (length responses)))
+      (should (equal "reject_once"
+                     (map-nested-elt (car responses)
+                                     '(:result outcome optionId)))))))
+
+(ert-deftest emagent-acp-session-test-status-snapshot-compressing ()
+  (let ((state (emagent-test--make-acp-state)))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-compress-pending state) t)
+    (should (plist-get (emagent-acp--status-snapshot state) :compressing))))
+
 (ert-deftest emagent-acp-session-test-materialize-dispatches-quiet-prompt ()
   "After compact, materialize sends a quiet session/prompt for durability."
   (let* ((requests nil)
@@ -1936,11 +2057,77 @@ project directory rather than opening up unconfined access."
   "Watchdog must not finalize while ACP requests are still pending."
   (let* ((state (emagent-test--make-acp-state))
          (completed nil)
-         (emagent-acp-watchdog-timeout 0.01))
+         (emagent-acp-watchdog-timeout 0.01)
+         (emagent-acp-watchdog-max-extensions 2))
     (setf (emagent-acp-state-busy state) t
           (emagent-acp-state-assistant-text state) "partial"
           (map-elt (emagent-acp-state-client state) :pending-requests)
           '(("1" . t)))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--complete-prompt)
+          (lambda (&rest _) (setq completed t)))
+         ((symbol-function 'emagent-acp--abort-prompt)
+          (lambda (&rest _) (setq completed 'aborted)))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (_s) nil)))
+      (emagent-acp--schedule-prompt-watchdog state)
+      (sleep-for 0.05)
+      (should-not completed)
+      (should (emagent-acp-state-prompt-watchdog-timer state))
+      (emagent-acp--clear-prompt-watchdog state))))
+
+(ert-deftest emagent-acp-session-test-watchdog-compress-finalizes-pending ()
+  "Compress with SUMMARY text finalizes on first stall even if prompt is pending."
+  (let* ((state (emagent-test--make-acp-state))
+         (completed nil)
+         (emagent-acp-watchdog-timeout 0.01)
+         (emagent-acp-watchdog-max-extensions 2))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-compress-pending state) t
+          (emagent-acp-state-assistant-text state) "1) SUMMARY:\n- done\n"
+          (map-elt (emagent-acp-state-client state) :pending-requests)
+          '(("20" . t)))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--complete-prompt)
+          (lambda (&rest _) (setq completed t)))
+         ((symbol-function 'emagent-acp--abort-prompt)
+          (lambda (&rest _) (setq completed 'aborted)))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (_s) nil)))
+      (emagent-acp--schedule-prompt-watchdog state)
+      (sleep-for 0.05)
+      (should (eq completed t)))))
+
+(ert-deftest emagent-acp-session-test-watchdog-max-extensions-finalizes ()
+  "After max extensions, pending work is abandoned and partial text finalized."
+  (let* ((state (emagent-test--make-acp-state))
+         (completed nil)
+         (emagent-acp-watchdog-timeout 0.01)
+         (emagent-acp-watchdog-max-extensions 1))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-assistant-text state) "partial answer"
+          (emagent-acp-state-prompt-watchdog-extensions state) 1
+          (map-elt (emagent-acp-state-client state) :pending-requests)
+          '(("1" . t)))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--complete-prompt)
+          (lambda (&rest _) (setq completed t)))
+         ((symbol-function 'emagent-acp--abort-prompt)
+          (lambda (&rest _) (setq completed 'aborted)))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (_s) nil)))
+      (emagent-acp--schedule-prompt-watchdog state)
+      (sleep-for 0.05)
+      (should (eq completed t)))))
+
+
+(ert-deftest emagent-acp-session-test-watchdog-permission-extends-past-max ()
+  "Open permission dialogs keep extending past max (user wait, not wedge)."
+  (let* ((state (emagent-test--make-acp-state))
+         (completed nil)
+         (emagent-acp-watchdog-timeout 0.01)
+         (emagent-acp-watchdog-max-extensions 0))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-assistant-text state) "partial"
+          (emagent-acp-state-permission-busy state) t
+          (emagent-acp-state-prompt-watchdog-extensions state) 5)
     (emagent-test--with-mocks
         (((symbol-function 'emagent-acp--complete-prompt)
           (lambda (&rest _) (setq completed t)))

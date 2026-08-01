@@ -109,15 +109,30 @@
                                    (map-nested-elt parsed '(result content 0 text))))))))))
 
 (ert-deftest emagent-mcp-integration-test-handle-tools-call-missing-token ()
+  "Nil / unresolved env tokens route to the durable external session."
   (let* ((params (make-hash-table :test 'equal))
          (resp nil)
-         (parsed nil))
-    (puthash "name" "project_directory" params)
-    (puthash "arguments" (make-hash-table :test 'equal) params)
-    (setq resp (emagent-test--tools-call-sync 1 params nil))
-    (setq parsed (json-parse-string resp :object-type 'alist))
-    (should (string-match-p "No emagent session token"
-                            (map-nested-elt parsed '(result content 0 text))))))
+         (parsed nil)
+         (emagent-mcp-external-root "/tmp")
+         (emagent-mcp--sessions (make-hash-table :test 'equal)))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-mcp-ensure-server)
+          (lambda ()
+            (emagent-mcp--install-external-session)
+            8771)))
+      (puthash "name" "project_directory" params)
+      (puthash "arguments" (make-hash-table :test 'equal) params)
+      (setq resp (emagent-test--tools-call-sync
+                  1 params "${env:EMAGENT_SESSION_TOKEN}"))
+      (setq parsed (json-parse-string resp :object-type 'alist))
+      (should (string-match-p "/tmp"
+                              (map-nested-elt parsed
+                                              '(result content 0 text))))
+      (setq resp (emagent-test--tools-call-sync 2 params nil))
+      (setq parsed (json-parse-string resp :object-type 'alist))
+      (should (string-match-p "/tmp"
+                              (map-nested-elt parsed
+                                              '(result content 0 text)))))))
 
 (ert-deftest emagent-mcp-integration-test-handle-tools-call-unknown-tool ()
   (emagent-test--with-mcp-session "/tmp"

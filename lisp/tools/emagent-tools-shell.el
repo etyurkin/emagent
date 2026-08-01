@@ -48,8 +48,27 @@ Falls back to a whitespace split when COMMAND cannot be shell-parsed."
     (error (split-string (string-trim command) "[[:space:]]+" t))))
 
 (defun emagent-policy-match--strip-quoted (command)
-  "Remove single- and double-quoted spans from COMMAND."
-  (replace-regexp-in-string "[\"'][^\"']*[\"']" "" command))
+  "Remove single- and double-quoted spans from COMMAND.
+
+Shell rules: single quotes are literal until the closer; backslash
+escapes apply outside quotes and inside double quotes."
+  (let (out quote escape)
+    (dolist (c (append command nil))
+      (cond
+       (escape
+        (unless quote (push c out))
+        (setq escape nil))
+       ((and (eq c ?\\) (not (eq quote ?\')))
+        (if quote
+            (setq escape t)
+          (push c out)
+          (setq escape t)))
+       (quote
+        (when (eq c quote) (setq quote nil)))
+       ((memq c '(?\" ?\'))
+        (setq quote c))
+       (t (push c out))))
+    (apply #'string (nreverse out))))
 
 (defun emagent-policy-match--split-commands (command)
   "Split COMMAND into segments at top-level `;' `|' `&' and newlines.
@@ -258,17 +277,32 @@ Arguments: WORDS, STRIPPED."
       current)))
 
 (defun emagent-policy-match--symbols-in-form (form symbols)
-  "Return symbols from SYMBOLS found anywhere in FORM."
+  "Return symbols from SYMBOLS found anywhere in FORM.
+
+Also treats `(intern \"NAME\")', `(quote NAME)', and `(function NAME)' as
+references to NAME so `(funcall (intern \"call-process\") …)' cannot
+bypass the blocklists."
   (let (found stack)
     (setq stack (list form))
     (while stack
       (let ((sexp (pop stack)))
-        (when sexp
-          (if (memq sexp symbols)
-              (push sexp found)
-            (when (consp sexp)
-              (push (cdr sexp) stack)
-              (push (car sexp) stack))))))
+        (cond
+         ((memq sexp symbols)
+          (push sexp found))
+         ((and (consp sexp)
+               (memq (car sexp) '(quote function))
+               (symbolp (cadr sexp)))
+          (when (memq (cadr sexp) symbols)
+            (push (cadr sexp) found)))
+         ((and (consp sexp)
+               (memq (car sexp) '(intern intern-soft))
+               (stringp (cadr sexp)))
+          (let ((sym (intern-soft (cadr sexp))))
+            (when (and sym (memq sym symbols))
+              (push sym found))))
+         ((consp sexp)
+          (push (cdr sexp) stack)
+          (push (car sexp) stack)))))
     (delete-dups found)))
 
 (defun emagent-policy-match--elisp-spec-p (key value parsed)
@@ -430,11 +464,14 @@ Arguments: WORDS, STRIPPED."
   :group 'emagent-policy)
 
 (defcustom emagent-policy-elisp-shell-blocked-symbols
-  '(shell-command shell-command-to-string
-    call-process call-process-shell-command process-file)
-  "Synchronous shell functions blocked in eval.
-These block Emacs until the subprocess exits; use shell op=run
-tool instead, which runs the process asynchronously."
+  '(shell-command shell-command-to-string async-shell-command
+    shell-command-on-region
+    call-process call-process-shell-command process-file
+    start-process start-file-process make-process make-network-process)
+  "Process/shell functions blocked in eval.
+
+Use shell op=run / op=compile instead — those go through ACP permission
+and prefer-Emacs routing."
   :type '(repeat symbol)
   :group 'emagent-policy)
 
@@ -445,9 +482,11 @@ tool instead, which runs the process asynchronously."
     write-region write-file
     insert-file-contents
     load load-file load-library
-    start-process start-file-process
     kill-buffer kill-buffer-and-save)
-  "Symbols in eval that require explicit user confirmation."
+  "Symbols in eval that require explicit user confirmation.
+
+Process spawners live in `emagent-policy-elisp-shell-blocked-symbols'
+\\(deny\\), not here."
   :type '(repeat symbol)
   :group 'emagent-policy)
 
@@ -921,6 +960,8 @@ Returns nil when all docstrings are within the limit."
 
 (defvar emagent-tools--root-boundary)
 
+(defvar-local emagent-tools--buffer-project-directory nil)
+
 (defconst emagent-tools--icloud-dir
   (expand-file-name "~/Library/Mobile Documents/"))
 
@@ -960,7 +1001,10 @@ A relative PATH is resolved against the session project directory (not the
 process `default-directory'), and an omitted PATH yields that directory.
 Signal an error when the result escapes `emagent-tools--root-boundary' or lands
 in a protected macOS tree (iCloud or another app's container)."
-  (let* ((base (or emagent-tools--project-directory default-directory))
+  (let* ((base (or emagent-tools--project-directory
+                   (and (boundp 'emagent-tools--buffer-project-directory)
+                        emagent-tools--buffer-project-directory)
+                   default-directory))
          (resolved (expand-file-name (or path base) base)))
     (unless (emagent-tools--within-boundary-p resolved)
       (user-error "Path %s is outside the session root %s"
@@ -997,7 +1041,7 @@ Agent tools may override this per call up to
   :type 'integer
   :group 'emagent-tools)
 
-(defcustom emagent-tools-subprocess-timeout-max 300
+(defcustom emagent-tools-subprocess-timeout-max 1800
   "Maximum seconds an agent may request as a per-call subprocess timeout."
   :type 'integer
   :group 'emagent-tools)
@@ -1009,6 +1053,18 @@ touching the window layout; switch to it any time for navigable errors
 \\(\\[next-error])."
   :type 'boolean
   :group 'emagent-tools)
+
+(defvar emagent-tools--compile-buffer-seq 0
+  "Monotonic counter for unique `*emagent-compile*<N>' buffer names.")
+
+(defun emagent-tools--compile-buffer-name (_name-or-cmd)
+  "Return a unique compilation buffer name for this emagent compile call.
+
+Each call gets its own `*emagent-compile*<N>' buffer so a later compile
+\\(or agent \"retry\"\\) cannot kill a build left running after an MCP timeout."
+  (setq emagent-tools--compile-buffer-seq
+        (1+ emagent-tools--compile-buffer-seq))
+  (format "*emagent-compile*<%d>" emagent-tools--compile-buffer-seq))
 
 (defvar emagent-tools--timeout-override nil
   "When non-nil, the per-call subprocess timeout requested by the agent.
@@ -1040,6 +1096,22 @@ When SHELL is non-nil, also suggest background execution."
       " For genuinely long-running work, use background execution"
       " (append ' > /tmp/out.txt 2>&1 & echo \"PID: $!\"') and read the"
       " output file later with fs op=read."))))
+
+(defun emagent-tools--compile-timeout-message (secs buf proc)
+  "Return a compile-timeout message for SECS; process left running in BUF.
+PROC may be nil when the compilation buffer has no live process."
+  (let ((pid (and proc (process-live-p proc) (process-id proc)))
+        (name (if (buffer-live-p buf) (buffer-name buf) "*emagent-compile*")))
+    (format
+     (concat
+      "Timed out after %ds waiting for compile output (limit %ds). "
+      "Build left running in %s%s. "
+      "Poll with list_processes or read that buffer — do not relaunch "
+      "the same build to retry. Pass a larger `timeout` (up to %ds) only "
+      "when intentionally starting a new compile.")
+     secs emagent-tools-subprocess-timeout-max name
+     (if pid (format " (pid %d)" pid) "")
+     emagent-tools-subprocess-timeout-max)))
 
 (defun emagent-tools--run-async-sync (async-fn &rest args)
   "Run ASYNC-FN with ARGS and a result callback; block until it finishes.
@@ -1423,24 +1495,32 @@ Arguments: CALLBACK, ARGS."
   (let* ((args (and args (string-trim args)))
          (bare (or (null args) (string-empty-p args)))
          (refresh (and args (string-match-p "\\brefresh=1\\b" args)))
+         (ctx (and (fboundp 'emagent-tools--capture-session-context)
+                   (emagent-tools--capture-session-context)))
          (git-args
           (cond
            (bare '("diff" "--stat"))
            (t (cons "diff" (split-string-shell-command args))))))
     (apply #'emagent-tools--run-git-async
            (lambda (output is-error)
-             (let* ((clean (string-trim (or output "")))
-                    (body
-                     (if bare
-                         (concat
-                          (emagent-tools-compact-git-diff clean)
-                          (if (string-empty-p clean)
-                              ""
-                            "\n\n[Pass a path to git op=diff for full hunks.]"))
-                       (emagent-tools-compact-git-diff clean)))
-                    (noted (emagent-tools-age-note
-                            "git-diff" nil (or args "") body refresh)))
-               (funcall callback noted is-error)))
+             (let ((finish
+                    (lambda ()
+                      (let* ((clean (string-trim (or output "")))
+                             (body
+                              (if bare
+                                  (concat
+                                   (emagent-tools-compact-git-diff clean)
+                                   (if (string-empty-p clean)
+                                       ""
+                                     "\n\n[Pass a path to git op=diff for full hunks.]"))
+                                (emagent-tools-compact-git-diff clean)))
+                             (noted (emagent-tools-age-note
+                                     "git-diff" nil (or args "")
+                                     body refresh)))
+                        (funcall callback noted is-error)))))
+               (if ctx
+                   (emagent-tools--with-session-context ctx finish)
+                 (funcall finish))))
            git-args)))
 
 (defun emagent-tool-git-diff (&optional args)
@@ -1477,11 +1557,12 @@ Arguments: CALLBACK, ARGS."
 
 (defun emagent-tool-undo-file (path &optional steps)
   "Save PATH after undoing edits.
-STEPS is the undo depth.  Use to revert `emagent-tool-write-file' changes."
+STEPS is the undo depth.  Use to revert `emagent-tool-write-file' changes.
+Under ACP, append emagent-tick so the next mutate need not re-read."
   (let* ((resolved (emagent-tools--root-directory path))
-      (steps (max 1 (or steps 1)))
-      (buffer (emagent-tools--file-buffer path))
-      (done 0))
+         (steps (max 1 (or steps 1)))
+         (buffer (emagent-tools--file-buffer path))
+         (done 0))
     (unless buffer
       (user-error "No buffer for %s" resolved))
     (with-current-buffer buffer
@@ -1493,13 +1574,16 @@ STEPS is the undo depth.  Use to revert `emagent-tool-write-file' changes."
             ;; for every step after the first — otherwise repeated calls
             ;; oscillate (undo then redo) instead of undoing further.
             (condition-case _
-              (let ((last-command (if (> i 0) 'undo last-command)))
-                (undo)
-                (setq done (1+ done)))
+                (let ((last-command (if (> i 0) 'undo last-command)))
+                  (undo)
+                  (setq done (1+ done)))
               (user-error (throw 'exhausted nil)))))
         (when (buffer-file-name)
           (basic-save-buffer))))
-    (format "Undid %d change(s) in %s" done resolved)))
+    (let ((msg (format "Undid %d change(s) in %s" done resolved)))
+      (if emagent-tools--acp-session-p
+          (emagent-tools--append-file-tick path msg)
+        msg))))
 
 (defun emagent-tool-delete-file (path)
   "Delete PATH after user confirmation."
@@ -1624,11 +1708,11 @@ Arguments: DIRECTORY."
          (proc nil)
          (buf nil)
          (finish
-          (lambda (text is-error)
+          (lambda (text is-error &optional kill-proc)
             (unless done
               (setq done t)
               (when timer (cancel-timer timer))
-              (when (and proc (process-live-p proc))
+              (when (and kill-proc proc (process-live-p proc))
                 (delete-process proc))
               (funcall callback text is-error)))))
     (condition-case err
@@ -1638,7 +1722,7 @@ Arguments: DIRECTORY."
                             (list #'display-buffer-no-window
                                   '(allow-no-window . t)))))
                       (compilation-start command 'compilation-mode
-                                         (lambda (_) "*emagent-compile*"))))
+                                         #'emagent-tools--compile-buffer-name)))
           (setq proc (get-buffer-process buf))
           (emagent-tools--cont-register-cancel
            (lambda ()
@@ -1654,11 +1738,12 @@ Arguments: DIRECTORY."
                   (run-with-timer
                    timeout-secs nil
                    (lambda ()
-                     (when (process-live-p proc)
-                       (delete-process proc))
+                     ;; Leave the build running; only stop waiting on MCP.
                      (funcall finish
-                              (emagent-tools--timeout-message timeout-secs t)
-                              t))))
+                              (emagent-tools--compile-timeout-message
+                               timeout-secs buf proc)
+                              t
+                              nil))))
             (set-process-sentinel
              proc
              (lambda (p _event)
@@ -1672,22 +1757,23 @@ Arguments: DIRECTORY."
                    (when (> (length text) limit)
                      (setq text (concat (substring text 0 limit)
                                          "\n… (output truncated)")))
-                   (funcall finish text is-error))))))
+                   (funcall finish text is-error t))))))
           (unless proc
             (with-current-buffer buf
               (let ((text (buffer-substring-no-properties
                            (point-min) (point-max))))
                 (funcall finish
                          (emagent-tools-compact-compile text command nil)
-                         nil)))))
-      (error (funcall finish (error-message-string err) t)))))
+                         nil
+                         t)))))
+      (error (funcall finish (error-message-string err) t t)))))
 
 (defun emagent-tool-compile (command &optional directory)
   "Run COMMAND via `compilation-mode' and return its output as text.
 
-Unlike shell op=run, errors appear in a persistent
-`*emagent-compile*' buffer navigable with `next-error' / \\[next-error].
-The buffer fills in the background; set
+Unlike shell op=run, errors appear in a unique
+`*emagent-compile*<N>' buffer navigable with `next-error' /
+\\[next-error].  The buffer fills in the background; set
 `emagent-tools-display-compile-buffer' to show it when a build starts.
 
 Arguments: DIRECTORY."
