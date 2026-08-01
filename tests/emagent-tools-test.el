@@ -236,6 +236,22 @@ relative paths and does not cross directory boundaries on `*'."
       (fmakunbound 'emagent-tools-eval-test)
       (delete-directory dir t))))
 
+(ert-deftest emagent-tools-test-structural-eval-skips-side-effects ()
+  "Post-write eval only reloads definition heads, not delete-file/make-process."
+  (let ((ran nil))
+    (cl-letf (((symbol-function 'delete-file)
+               (lambda (&rest _) (setq ran t))))
+      (emagent-tools--structural-eval-after-edit
+       "(delete-file \"/tmp/should-not-run\")")
+      (should-not ran)
+      (emagent-tools--structural-eval-after-edit
+       "(progn (delete-file \"/tmp/should-not-run\"))")
+      (should-not ran))
+    (emagent-tools--structural-eval-after-edit
+     "(defun emagent-tools-eval-side-test () 1)")
+    (should (fboundp 'emagent-tools-eval-side-test))
+    (fmakunbound 'emagent-tools-eval-side-test)))
+
 (ert-deftest emagent-tools-test-structural-elisp-eval-blocked ()
   :tags '(lisp-sitter)
   (skip-unless (emagent-struct-available-p))

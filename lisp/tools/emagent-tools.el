@@ -142,7 +142,7 @@ mvn/gradle/make/cargo/go/npm/yarn/pytest through compilation-mode
 
 - Omit a path to use the session project directory; relative paths resolve against it.
 - File tools are confined to the session root.
-- To revert an fs op=write mistake, call fs op=undo — never rewrite from memory.
+- To revert an fs write/edit, call fs op=undo with expected_tick — never rewrite from memory.
 - Concurrent MCP edits: pass expected_tick from the latest fs op=read
   (or structural op=get) emagent-tick; stale_revision means re-read and retry.
 - Prefer fs op=edit for targeted non-Lisp edits (unique old_string → new_string).
@@ -660,6 +660,31 @@ falls back to fs op=write + elisp op=check."
 Agents must use structural MCP ops for .el, .lisp, .cl, and .scm files."
   :type 'boolean
   :group 'emagent-struct)
+
+(defconst emagent-tools--structural-eval-heads
+  '(defun cl-defun defmacro cl-defmacro defsubst cl-defsubst
+    defvar defvar-local defconst defcustom)
+  "Top-level heads safe to eval after a structural write.
+
+Only definition forms are reloaded into the live Emacs; bare progns and
+side-effect forms are never eval'd from structural edit results.")
+
+(defun emagent-tools--structural-eval-after-edit (form-str)
+  "Eval FORM-STR after a structural write when it is a definition form.
+
+Honors `emagent-struct-eval-after-structural-edit'.  Only heads in
+`emagent-tools--structural-eval-heads' run; other top-level forms are
+skipped so approving a structural MCP edit cannot execute `delete-file',
+`make-process', or similar."
+  (when (and emagent-struct-eval-after-structural-edit
+             (stringp form-str)
+             (not (string-empty-p (string-trim form-str))))
+    (condition-case nil
+        (let* ((form (read form-str))
+               (head (and (consp form) (car form))))
+          (when (memq head emagent-tools--structural-eval-heads)
+            (eval form)))
+      (error nil))))
 
 (defun emagent-struct--clef-file-p (path)
   "Return non-nil when PATH is a Clef source file (.clef)."
@@ -1853,12 +1878,18 @@ Arguments: REPLACE-ALL."
     (emagent-tool-write-file path new)))
 
 (defun emagent-tools--structural-sync-path (file)
-  "Sync FILE buffer content to disk; return absolute path.
-Skips tick CAS: a no-op sync must not require expected_tick."
-  (let ((emagent-tools--skip-file-tick-guard t)
-        (content (emagent-tools--read-structural-file-content file)))
-    (emagent-tools--write-file-content file content)
-    (emagent-tools--root-directory file)))
+  "Sync FILE buffer to disk when the visiting buffer is modified.
+
+Unmodified buffers and paths with no buffer need no write.  Flushing a
+modified buffer skips tick CAS: the visiting buffer is the editor source
+of truth, and MCP writes already update that buffer in place."
+  (let* ((resolved (emagent-tools--root-directory file))
+         (buffer (find-buffer-visiting resolved)))
+    (when (and buffer (buffer-modified-p buffer))
+      (let ((emagent-tools--skip-file-tick-guard t)
+            (content (emagent-tools--read-structural-file-content file)))
+        (emagent-tools--write-file-content file content)))
+    resolved))
 
 (defun emagent-tools--structural-apply-file-result (file result)
   "Write RESULT to FILE when it is updated content, not a status line."
@@ -2038,8 +2069,7 @@ Arguments: AT, WRAP."
          (updated (emagent-struct-replace content file symbol new-body))
          (result (progn
                    (emagent-tools--write-file-content file updated)
-                   (when emagent-struct-eval-after-structural-edit
-                     (ignore-errors (eval (read new-body))))
+                   (emagent-tools--structural-eval-after-edit new-body)
                    (format "Wrote %s" (expand-file-name file)))))
     (if emagent-tools--acp-session-p
         (emagent-tools--append-file-tick file result)
@@ -2053,8 +2083,7 @@ Arguments: AT, WRAP."
          (updated (emagent-struct-insert content file after-symbol node))
          (result (progn
                    (emagent-tools--write-file-content file updated)
-                   (when emagent-struct-eval-after-structural-edit
-                     (ignore-errors (eval (read node))))
+                   (emagent-tools--structural-eval-after-edit node)
                    (format "Wrote %s" (expand-file-name file)))))
     (if emagent-tools--acp-session-p
         (emagent-tools--append-file-tick file result)
@@ -2321,8 +2350,7 @@ Arguments: CALLBACK."
                    (let ((emagent-tools--expected-file-tick expected)
                          (emagent-tools--acp-session-p acp))
                      (emagent-tools--write-file-content file updated)
-                     (when emagent-struct-eval-after-structural-edit
-                       (ignore-errors (eval (read new-body))))
+                     (emagent-tools--structural-eval-after-edit new-body)
                      (let ((result (format "Wrote %s" (expand-file-name file))))
                        (funcall callback
                                 (if acp
@@ -2353,8 +2381,7 @@ Arguments: CALLBACK."
                    (let ((emagent-tools--expected-file-tick expected)
                          (emagent-tools--acp-session-p acp))
                      (emagent-tools--write-file-content file updated)
-                     (when emagent-struct-eval-after-structural-edit
-                       (ignore-errors (eval (read node))))
+                     (emagent-tools--structural-eval-after-edit node)
                      (let ((result (format "Wrote %s" (expand-file-name file))))
                        (funcall callback
                                 (if acp

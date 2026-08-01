@@ -80,7 +80,7 @@ are false."
              (description . ,description)
              (enum . ,(apply #'vector ops))))))
 
-(defconst emagent-mcp--fs-mutating-ops '("write" "edit")
+(defconst emagent-mcp--fs-mutating-ops '("write" "edit" "undo")
   "Fs ops that require expected_tick under ACP.")
 
 (defconst emagent-mcp--structural-ops
@@ -824,7 +824,7 @@ Handlers may return a value or an `emagent-mcp-cont' continuation."
   :required '("op")
   "Emacs FS. op=read|write|edit|undo|delete|delete_directory|list|find.
 
-Write/edit need expected_tick from fs op=read. Prefer edit for targeted changes;
+Write/edit/undo need expected_tick from fs op=read. Prefer edit for targeted changes;
 write replaces the whole file. Lisp files use structural."
   (args)
   (emagent-mcp--fs args))
@@ -1199,10 +1199,11 @@ is returned, CALLBACK is invoked later via its reply function."
                (format "Tool %s is not available (install lisp-sitter)" name)
                t))
      (t
-      (let* ((root (plist-get session :root))
+      (let* ((root (or (plist-get session :root)
+                       emagent-tools--project-directory
+                       default-directory))
              (buffer (plist-get session :buffer))
-             (emagent-tools--project-directory
-              (or root emagent-tools--project-directory))
+             (emagent-tools--project-directory root)
              (emagent-tools--root-boundary root)
              (emagent-tools--session-allowed-tools
               (emagent-mcp--session-allowed-tools buffer))

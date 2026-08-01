@@ -258,17 +258,32 @@ Arguments: WORDS, STRIPPED."
       current)))
 
 (defun emagent-policy-match--symbols-in-form (form symbols)
-  "Return symbols from SYMBOLS found anywhere in FORM."
+  "Return symbols from SYMBOLS found anywhere in FORM.
+
+Also treats `(intern \"NAME\")', `(quote NAME)', and `(function NAME)' as
+references to NAME so `(funcall (intern \"call-process\") …)' cannot
+bypass the blocklists."
   (let (found stack)
     (setq stack (list form))
     (while stack
       (let ((sexp (pop stack)))
-        (when sexp
-          (if (memq sexp symbols)
-              (push sexp found)
-            (when (consp sexp)
-              (push (cdr sexp) stack)
-              (push (car sexp) stack))))))
+        (cond
+         ((memq sexp symbols)
+          (push sexp found))
+         ((and (consp sexp)
+               (memq (car sexp) '(quote function))
+               (symbolp (cadr sexp)))
+          (when (memq (cadr sexp) symbols)
+            (push (cadr sexp) found)))
+         ((and (consp sexp)
+               (memq (car sexp) '(intern intern-soft))
+               (stringp (cadr sexp)))
+          (let ((sym (intern-soft (cadr sexp))))
+            (when (and sym (memq sym symbols))
+              (push sym found))))
+         ((consp sexp)
+          (push (cdr sexp) stack)
+          (push (car sexp) stack)))))
     (delete-dups found)))
 
 (defun emagent-policy-match--elisp-spec-p (key value parsed)
@@ -430,11 +445,14 @@ Arguments: WORDS, STRIPPED."
   :group 'emagent-policy)
 
 (defcustom emagent-policy-elisp-shell-blocked-symbols
-  '(shell-command shell-command-to-string
-    call-process call-process-shell-command process-file)
-  "Synchronous shell functions blocked in eval.
-These block Emacs until the subprocess exits; use shell op=run
-tool instead, which runs the process asynchronously."
+  '(shell-command shell-command-to-string async-shell-command
+    shell-command-on-region
+    call-process call-process-shell-command process-file
+    start-process start-file-process make-process make-network-process)
+  "Process/shell functions blocked in eval.
+
+Use shell op=run / op=compile instead — those go through ACP permission
+and prefer-Emacs routing."
   :type '(repeat symbol)
   :group 'emagent-policy)
 
@@ -445,9 +463,11 @@ tool instead, which runs the process asynchronously."
     write-region write-file
     insert-file-contents
     load load-file load-library
-    start-process start-file-process
     kill-buffer kill-buffer-and-save)
-  "Symbols in eval that require explicit user confirmation."
+  "Symbols in eval that require explicit user confirmation.
+
+Process spawners live in `emagent-policy-elisp-shell-blocked-symbols'
+\\(deny\\), not here."
   :type '(repeat symbol)
   :group 'emagent-policy)
 

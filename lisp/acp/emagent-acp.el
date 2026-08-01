@@ -2667,7 +2667,8 @@ here it is always the final text to dispatch."
 
 When STOP-NOTICE is non-nil, append it to any partial assistant text
 before closing the response block.  Returns non-nil when a prompt was
-finalized."
+finalized.  A compress turn is cancelled instead of compacted: the
+stop notice must not become the session SUMMARY."
   (let ((state emagent-acp--session))
     (unless (and state
                  (or (emagent-acp-state-busy state)
@@ -2679,12 +2680,20 @@ finalized."
     (emagent-acp--cancel-wakeup state)
     (emagent-acp--cancel-plan-build state)
     (emagent-acp--flush-thought-buffer state)
-    (when (and stop-notice (not (string-empty-p stop-notice)))
-      (let* ((text (or (emagent-acp-state-assistant-text state) ""))
-             (full (if (string-empty-p text)
-                       stop-notice
-                     (concat text "\n\n" stop-notice))))
-        (setf (emagent-acp-state-assistant-text state) full)))
+    (let ((was-compress (emagent-acp-state-compress-pending state)))
+      (when was-compress
+        (setf (emagent-acp-state-compress-pending state) nil)
+        (setf (emagent-acp-state-assistant-text state) "")
+        (setf (emagent-acp-state-thought-text state) "")
+        (emagent-log "compression cancelled by interrupt/stop"))
+      (when (and stop-notice (not (string-empty-p stop-notice)))
+        (if was-compress
+            (setf (emagent-acp-state-assistant-text state) stop-notice)
+          (let* ((text (or (emagent-acp-state-assistant-text state) ""))
+                 (full (if (string-empty-p text)
+                           stop-notice
+                         (concat text "\n\n" stop-notice))))
+            (setf (emagent-acp-state-assistant-text state) full)))))
     (setf (emagent-acp-state-prompt-generation state) (1+ (or (emagent-acp-state-prompt-generation state) 0)))
     (when-let ((client (emagent-acp-state-client state))
                (session-id (emagent-acp-state-session-id state)))
@@ -3477,7 +3486,11 @@ Arguments: EMAGENT-ACP-NOTIFICATION."
       (pcase update-type
         ("agent_message_chunk"
          (let ((text (or (map-nested-elt emagent-acp-notification '(params update content text)) "")))
-           (unless (emagent-acp-state-replaying-history state)
+           ;; Drop late chunks after compress finalize (busy cleared): they
+           ;; must not rewrite the SUMMARY snapshot before render runs.
+           (unless (or (emagent-acp-state-replaying-history state)
+                       (and (emagent-acp-state-compress-pending state)
+                            (not (emagent-acp-state-busy state))))
              (when (and (not (string-empty-p text))
                         (emagent-acp-state-tool-call-since-last-chunk state)
                         (not (string-empty-p (or (emagent-acp-state-assistant-text state) ""))))

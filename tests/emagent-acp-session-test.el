@@ -1875,6 +1875,43 @@ project directory rather than opening up unconfined access."
     (should-not (emagent-acp--stream-to-buffer-p state))
     (should-not (emagent-acp--stream-thought-to-buffer-p state))))
 
+(ert-deftest emagent-acp-session-test-late-chunks-ignored-after-compress-finalize ()
+  "After compress finalize (busy cleared), late message chunks are dropped."
+  (let ((state (emagent-test--make-acp-state)))
+    (setf (emagent-acp-state-compress-pending state) t
+          (emagent-acp-state-busy state) nil
+          (emagent-acp-state-assistant-text state) "SUMMARY only")
+    (emagent-acp--on-notification
+     :state state
+     :emagent-acp-notification
+     '((method . "session/update")
+       (params . ((update . ((sessionUpdate . "agent_message_chunk")
+                             (content . ((type . "text")
+                                         (text . " LATE")))))))))
+    (should (string= "SUMMARY only"
+                     (emagent-acp-state-assistant-text state)))))
+
+(ert-deftest emagent-acp-session-test-interrupt-cancels-compress ()
+  "Interrupt during compress must not compact a stop stub as SUMMARY."
+  (let* ((state (emagent-test--make-acp-state))
+         (finished nil)
+         (emagent-acp--session state))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-compress-pending state) t
+          (emagent-acp-state-assistant-text state) "1) SUMMARY:\n- partial\n"
+          (emagent-acp-state-cb-finish state)
+          (lambda (text &optional _thought) (setq finished text)))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp-send-notification) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (_s) nil))
+         ((symbol-function 'emagent-mcp-cancel-session-tools) (lambda (_tok) nil))
+         ((symbol-function 'emagent-acp--new-session)
+          (lambda (&rest _) (error "should not reset"))))
+      (should (emagent-acp--finalize-in-flight-prompt "/Stopped./"))
+      (should-not (emagent-acp-state-compress-pending state))
+      (should finished)
+      (should (string-match-p "Stopped" finished)))))
+
 (ert-deftest emagent-acp-session-test-compress-pending-skips-tool-ui ()
   "Tool-call updates during compress do not call the tool-call callback."
   (let ((state (emagent-test--make-acp-state))
