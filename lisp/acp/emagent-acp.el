@@ -1059,7 +1059,8 @@ detail from the Thinking arrow line."
 The agent ends its turn after calling ScheduleWakeup and expects the
 client to send the wakeup prompt after the delay.  Only recorded here;
 the timer is armed when the turn completes (`emagent-acp--arm-wakeup'),
-and a `stop' call cancels a pending wakeup immediately."
+and a `stop' call cancels a pending wakeup immediately.
+Compress turns ignore schedule requests (stop still cancels)."
   (when (and emagent-acp-honor-schedule-wakeup
              (emagent-acp--wakeup-tool-p (map-elt update 'title)))
     (when-let* ((raw (map-elt update 'rawInput))
@@ -1074,6 +1075,8 @@ and a `stop' call cancels a pending wakeup immediately."
          ((and stop (not (memq stop '(:false :json-false))))
           (emagent-acp--cancel-wakeup state)
           (emagent-log "wakeup: loop stopped by agent"))
+         ((emagent-acp-state-compress-pending state)
+          (emagent-log "wakeup: ignored during compress"))
          ((and (numberp delay) (> delay 0))
           (setf (emagent-acp-state-wakeup-request state)
                 (list :delay (max 10 (min (round delay) 3600))
@@ -3106,8 +3109,12 @@ pending ScheduleWakeup is cancelled by `emagent-acp--maybe-auto-compact'."
   "Start the ScheduleWakeup timer for STATE after this turn completes.
 Called when the turn completes: the agent has ended its reply and now
 waits to be re-invoked.  The wakeup prompt is sent as a regular user
-turn so the transcript records what re-started the agent."
+turn so the transcript records what re-started the agent.
+Compress turns drop any captured request instead of arming."
+  (when (emagent-acp-state-compress-pending state)
+    (emagent-acp--cancel-wakeup state))
   (when-let ((request (and emagent-acp-honor-schedule-wakeup
+                           (not (emagent-acp-state-compress-pending state))
                            (emagent-acp-state-wakeup-request state))))
     (emagent-acp--cancel-wakeup state)
     (let ((delay (plist-get request :delay))

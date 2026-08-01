@@ -51,8 +51,18 @@
       value)))
 
 (defun emagent-mcp--bool (args key)
-  "Return non-nil when KEY in ARGS is JSON true."
-  (eq (emagent-mcp--arg args key) t))
+  "Return non-nil when KEY in ARGS is a true JSON boolean.
+
+Accepts JSON true and the strings \"true\"/\"yes\" (some agents
+mis-type boolean fields).  JSON false, :false, nil, and other values
+are false."
+  (let ((value (emagent-mcp--arg args key)))
+    (cond
+     ((eq value t) t)
+     ((and (stringp value)
+           (member (downcase value) '("true" "yes")))
+      t)
+     (t nil))))
 
 (defun emagent-mcp--path-prop ()
   "JSON schema property for a session-relative file path."

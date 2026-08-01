@@ -722,6 +722,22 @@ Continuation uses `run-at-time'; pump those timers iteratively."
       (status . "completed")
       (rawInput . ,raw))))
 
+(ert-deftest emagent-acp-session-test-wakeup-ignored-during-compress ()
+  "Compress turns ignore ScheduleWakeup schedule and do not arm a timer."
+  (let ((state (emagent-acp--state-create))
+        (emagent-acp-honor-schedule-wakeup t))
+    (setf (emagent-acp-state-compress-pending state) t)
+    (emagent-acp--capture-schedule-wakeup
+     state (emagent-acp-session-test--wakeup-update
+            '(("delaySeconds" . 120) ("reason" . "should not arm"))))
+    (should-not (emagent-acp-state-wakeup-request state))
+    ;; Pre-set request still dropped on arm during compress.
+    (setf (emagent-acp-state-wakeup-request state)
+          (list :delay 120 :prompt "nope" :reason nil))
+    (emagent-acp--arm-wakeup state)
+    (should-not (emagent-acp-state-wakeup-timer state))
+    (should-not (emagent-acp-state-wakeup-request state))))
+
 (ert-deftest emagent-acp-session-test-wakeup-captured-and-armed ()
   "A ScheduleWakeup call is captured and armed when the turn completes."
   (let ((state (emagent-acp--state-create))

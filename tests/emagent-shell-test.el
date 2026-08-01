@@ -164,12 +164,22 @@ The bug caused Wrong type argument: listp in url-http-chunked-encoding-after-cha
            "make ansi CHAPTER=printer")
           (sleep-for 0.2)
           (should got-err)
-          (should (string-match-p "\\*emagent-compile\\*" got))
+          (should (string-match-p "\\*emagent-compile" got))
           (should (string-match-p "left running" got))
+          (should (string-match-p "do not relaunch" got))
           (should-not killed)
           (should (process-live-p fake-proc)))
       (when (process-live-p fake-proc)
         (delete-process fake-proc)))))
+
+
+(ert-deftest emagent-shell-test-compile-buffer-names-unique ()
+  "Each compile call gets a distinct buffer name."
+  (let ((emagent-tools--compile-buffer-seq 0))
+    (should (string= "*emagent-compile*<1>"
+                     (emagent-tools--compile-buffer-name "make")))
+    (should (string= "*emagent-compile*<2>"
+                     (emagent-tools--compile-buffer-name "make")))))
 
 (provide 'emagent-shell-test)
 

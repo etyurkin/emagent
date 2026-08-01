@@ -166,11 +166,11 @@ See `emagent-prompts--prefer-emacs-prompt'.")
   "Return substitution-guide rows for Lisp file editing."
   (if (emagent-struct-available-p)
       "| Edit .el / .lisp / .cl / .scm | structural op=replace|insert (fs write refused) |
-| Edit .clef (Clef)         | fs op=read/write (not lisp-sitter)                  |
+| Edit .clef (Clef)         | fs op=read/write/edit (not lisp-sitter)             |
 | Structural file outline   | structural op=tree|outline|bounds                   |
 | Validate Lisp file        | structural op=check_file                            |"
     "| Edit .el files            | fs op=write + elisp op=check (small edits)          |
-| Edit .clef (Clef)         | fs op=read/write                                    |
+| Edit .clef (Clef)         | fs op=read/write/edit                             |
 | Validate before save      | elisp op=check                                      |"))
 
 (defun emagent-prompts--prefer-emacs-elisp-pattern-rows ()
@@ -668,7 +668,7 @@ Agents must use structural MCP ops for .el, .lisp, .cl, and .scm files."
 (defun emagent-struct--reject-unsupported (path)
   "Signal when PATH is not a lisp-sitter language (e.g. .clef)."
   (when (emagent-struct--clef-file-p path)
-    (error ".clef is not a lisp-sitter language; use fs op=read/write")))
+    (error ".clef is not a lisp-sitter language; use fs op=read/write/edit")))
 
 ;; ── Language detection ────────────────────────────────────────────
 

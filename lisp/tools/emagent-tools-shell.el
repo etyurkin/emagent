@@ -1010,6 +1010,18 @@ touching the window layout; switch to it any time for navigable errors
   :type 'boolean
   :group 'emagent-tools)
 
+(defvar emagent-tools--compile-buffer-seq 0
+  "Monotonic counter for unique `*emagent-compile*<N>' buffer names.")
+
+(defun emagent-tools--compile-buffer-name (_name-or-cmd)
+  "Return a unique compilation buffer name for this emagent compile call.
+
+Each call gets its own `*emagent-compile*<N>' buffer so a later compile
+\\(or agent \"retry\"\\) cannot kill a build left running after an MCP timeout."
+  (setq emagent-tools--compile-buffer-seq
+        (1+ emagent-tools--compile-buffer-seq))
+  (format "*emagent-compile*<%d>" emagent-tools--compile-buffer-seq))
+
 (defvar emagent-tools--timeout-override nil
   "When non-nil, the per-call subprocess timeout requested by the agent.
 Bound dynamically around a tool call and read synchronously when a runner
@@ -1050,8 +1062,9 @@ PROC may be nil when the compilation buffer has no live process."
      (concat
       "Timed out after %ds waiting for compile output (limit %ds). "
       "Build left running in %s%s. "
-      "Poll with list_processes or read that buffer; "
-      "retry with a larger `timeout` (up to %ds) if you need to wait.")
+      "Poll with list_processes or read that buffer — do not relaunch "
+      "the same build to retry. Pass a larger `timeout` (up to %ds) only "
+      "when intentionally starting a new compile.")
      secs emagent-tools-subprocess-timeout-max name
      (if pid (format " (pid %d)" pid) "")
      emagent-tools-subprocess-timeout-max)))
@@ -1653,7 +1666,7 @@ Arguments: DIRECTORY."
                             (list #'display-buffer-no-window
                                   '(allow-no-window . t)))))
                       (compilation-start command 'compilation-mode
-                                         (lambda (_) "*emagent-compile*"))))
+                                         #'emagent-tools--compile-buffer-name)))
           (setq proc (get-buffer-process buf))
           (emagent-tools--cont-register-cancel
            (lambda ()
@@ -1702,9 +1715,9 @@ Arguments: DIRECTORY."
 (defun emagent-tool-compile (command &optional directory)
   "Run COMMAND via `compilation-mode' and return its output as text.
 
-Unlike shell op=run, errors appear in a persistent
-`*emagent-compile*' buffer navigable with `next-error' / \\[next-error].
-The buffer fills in the background; set
+Unlike shell op=run, errors appear in a unique
+`*emagent-compile*<N>' buffer navigable with `next-error' /
+\\[next-error].  The buffer fills in the background; set
 `emagent-tools-display-compile-buffer' to show it when a build starts.
 
 Arguments: DIRECTORY."
