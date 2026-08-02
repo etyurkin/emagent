@@ -237,11 +237,17 @@
   (should-not (emagent-chat--bare-slash-command-p "/compress\nmore")))
 
 
-(ert-deftest emagent-chat-test-mode-disables-undo ()
-  "Chat buffers are transcripts; undo must not retain a second copy."
+(ert-deftest emagent-chat-test-mode-configures-undo-limit ()
+  "Chat buffers keep undo, capped so the transcript does not double memory."
   (with-temp-buffer
-    (delay-mode-hooks (emagent-mode))
-    (should (eq t buffer-undo-list))))
+    (let ((emagent-chat-undo-limit 65536))
+      (delay-mode-hooks (emagent-mode))
+      (should-not (eq t buffer-undo-list))
+      (should (local-variable-p 'undo-limit))
+      (should (= undo-limit 65536))
+      (should (= undo-strong-limit 98304))
+      (should (= undo-outer-limit (* 65536 8)))
+      (should (functionp undo-outer-limit-function)))))
 
 (ert-deftest emagent-chat-test-mode-enable-seeds-cursor-slash-commands ()
   "Cursor built-ins are available after mode enable without connecting."

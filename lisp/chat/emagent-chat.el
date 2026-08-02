@@ -3007,6 +3007,31 @@ after focus moves elsewhere."
        (emagent-chat--maybe-force-mode-line-update))))
   nil)
 
+(defcustom emagent-chat-undo-limit 65536
+  "Soft undo size limit (bytes) for emagent chat buffers.
+
+Applied buffer-locally as `undo-limit' when `emagent-mode' starts.
+`undo-strong-limit' is 1.5x and `undo-outer-limit' is 8x so large
+streamed inserts discard quietly instead of prompting.  Nil keeps the
+global Emacs undo limits."
+  :type '(choice (const :tag "Emacs defaults" nil)
+                 (integer :tag "Bytes"))
+  :group 'emagent-chat)
+
+(defun emagent-chat--configure-undo ()
+  "Enable undo in the current chat buffer with sized limits."
+  (buffer-enable-undo)
+  (when (integerp emagent-chat-undo-limit)
+    (setq-local undo-limit emagent-chat-undo-limit)
+    (setq-local undo-strong-limit
+                (max undo-limit
+                     (floor (* (float emagent-chat-undo-limit) 1.5))))
+    (setq-local undo-outer-limit
+                (max undo-strong-limit (* emagent-chat-undo-limit 8)))
+    ;; One streamed insert can exceed outer-limit; discard that command's
+    ;; undo quietly instead of a yes/no dialog.
+    (setq-local undo-outer-limit-function (lambda (_size) t))))
+
 (defcustom emagent-chat-spinner-interval 0.4
   "Seconds between spinner animation frames."
   :type 'number
@@ -4704,9 +4729,9 @@ Run \\[emagent-mode] to reconnect a saved session."
     (require 'emagent)
     (setq-local buffer-read-only nil)
     (setq-local emagent-chat--tool-call-lines (make-hash-table :test 'equal))
-    ;; Chat is a live transcript log; undo would retain a second copy of every
-    ;; streamed insert and tool-line rewrite for the whole session.
-    (buffer-disable-undo)
+    ;; Cap undo so C-/ works for recent edits without retaining a second
+    ;; copy of the whole streamed transcript.
+    (emagent-chat--configure-undo)
     (emagent-chat--writable)
     (when-let* ((raw (or emagent-chat-project-directory
                          (emagent-session-store-read-project-property)))
