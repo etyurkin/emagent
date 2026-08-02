@@ -389,6 +389,7 @@ Allow-always fingerprints never override hard denies.  Workspace trust helpers:
 | =emagent-shell-block-no-verify= | =t= | Refuse =git --no-verify= |
 | =emagent-shell-guard-push= | =t= | Block push when PR already merged |
 | =emagent-chat-inactive-bell= | =t= | Bell when agent finishes unfocused |
+| =emagent-chat-undo-limit= | =65536= | Soft undo cap (bytes) in chat buffers |
 
 Destructive =fs= writes still prompt (unified diff).  *Allow all* remembers a
 tool for the project.  Shell and =eval= also re-check at execution time.
