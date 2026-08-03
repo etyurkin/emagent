@@ -603,7 +603,9 @@ Return the cached diff when present, otherwise DIFF (which may be nil)."
         diff)))
 
 (defun emagent-acp--edit-diff-cache-forget (id &optional state)
-  "Drop the cached edit diff for toolCallId ID (session-scoped when known)."
+  "Drop the cached edit diff for toolCallId ID.
+
+When STATE is known, only that session's cache entry is removed."
   (when-let ((key (emagent-acp--edit-diff-cache-key id state)))
     (remhash key emagent-acp--edit-diff-cache)
     (setq emagent-acp--edit-diff-cache-order
@@ -4210,7 +4212,7 @@ Optional SPEC is ((CONFIG-ID . VALUE) ...) applied instead of MODEL-ID alone
 when non-nil (composed model_config / thought_level rows).
 
 Each call bumps `emagent-chat--model-switch-generation' so a later switch
-(or a restore racing a new `/model' turn) ignores a stale RPC response."
+\(or a restore racing a new `/model' turn) ignores a stale RPC response."
   (let* ((gen (setq emagent-chat--model-switch-generation
                     (1+ (or emagent-chat--model-switch-generation 0))))
          (guard (lambda ()

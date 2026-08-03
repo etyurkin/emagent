@@ -71,7 +71,7 @@ Ignored for unsaved (scratch) buffers.  `/archive force' skips this gate."
 (defun emagent-archive--next-chunk-path (&optional session-file)
   "Return and exclusively claim the next archive chunk path for SESSION-FILE.
 
-Creates an empty placeholder with write-region MUSTBENEW=`excl'
+Creates an empty placeholder with `write-region' MUSTBENEW=`excl'
 so two Emacs instances cannot both pick the same `001.org'.  The
 caller overwrites the placeholder via `emagent-archive--write-chunk'."
   (when-let ((dir (emagent-archive--dir session-file)))
@@ -88,7 +88,7 @@ caller overwrites the placeholder via `emagent-archive--write-chunk'."
           (file-already-exists nil))
         (setq n (1+ n)))
       (or claimed
-          (error "emagent: could not claim an archive chunk under %s" dir)))))
+          (error "Could not claim an archive chunk under %s" dir)))))
 
 (defun emagent-archive--buffer-bytes ()
   "Return the current buffer size in bytes."
@@ -283,7 +283,7 @@ duplicated."
                 (condition-case save-err
                     (basic-save-buffer)
                   (error
-                   (error "emagent: archive save failed: %s"
+                   (error "Archive save failed: %s"
                           (error-message-string save-err)))))
               (setq ok t)
               (message "emagent: moved %d turns → %s" turns
