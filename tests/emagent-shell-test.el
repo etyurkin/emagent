@@ -191,6 +191,164 @@ The bug caused Wrong type argument: listp in url-http-chunked-encoding-after-cha
     (should (string= "*emagent-compile*<2>"
                      (emagent-tools--compile-buffer-name "make")))))
 
+
+
+(ert-deftest emagent-shell-test-timeout-preserves-message ()
+  "Timeout must report Timed out…, not empty signal output from pre-kill."
+  (let ((emagent-tools-subprocess-timeout 0.05)
+        (emagent-tools-subprocess-timeout-max 1800)
+        (got 'unset))
+    (cl-letf (((symbol-function 'emagent-tools--clamp-timeout) #'identity))
+      (emagent-tools--run-shell-async
+       (lambda (output is-error)
+         (setq got (list output is-error)))
+       "sleep 30" default-directory)
+      (let ((deadline (+ (float-time) 2.0)))
+        (while (and (eq got 'unset) (< (float-time) deadline))
+          (accept-process-output nil 0.05)))
+      (should (eq t (cadr got)))
+      (should (string-match-p "Timed out" (car got))))))
+
+
+(ert-deftest emagent-shell-test-kill-subprocess-children ()
+  "Kill helper should reap direct children of a shell pipeline parent."
+  (skip-unless (executable-find "pkill"))
+  (let* ((marker (make-temp-file "emagent-child"))
+         (cmd (format "sleep 30 & echo $! >%s; sleep 30"
+                      (shell-quote-argument marker)))
+         (proc (start-process-shell-command "emagent-child-test" nil cmd)))
+    (unwind-protect
+        (progn
+          (let ((deadline (+ (float-time) 2.0)))
+            (while (and (< (float-time) deadline)
+                        (or (not (file-exists-p marker))
+                            (= 0 (file-attribute-size (file-attributes marker)))))
+              (accept-process-output nil 0.05)))
+          (should (file-exists-p marker))
+          (let ((child (string-to-number
+                        (string-trim
+                         (with-temp-buffer
+                           (insert-file-contents marker)
+                           (buffer-string))))))
+            (should (> child 1))
+            (emagent-tools--kill-subprocess proc)
+            (should-not (process-live-p proc))
+            (let ((deadline (+ (float-time) 2.0))
+                  (alive t))
+              (while (and alive (< (float-time) deadline))
+                (setq alive
+                      (= 0 (call-process "kill" nil nil nil "-0"
+                                         (number-to-string child))))
+                (when alive (accept-process-output nil 0.05)))
+              (should-not alive))))
+      (when (process-live-p proc) (delete-process proc))
+      (ignore-errors (delete-file marker)))))
+
+(ert-deftest emagent-shell-test-kill-subprocess ()
+  "Timeout kill helper deletes a live process."
+  (let ((proc (start-process "emagent-kill-test" nil "sleep" "30")))
+    (unwind-protect
+        (progn
+          (should (process-live-p proc))
+          (emagent-tools--kill-subprocess proc)
+          (should-not (process-live-p proc)))
+      (when (process-live-p proc)
+        (delete-process proc)))))
+
+
+(ert-deftest emagent-shell-test-compile-survives-killed-buffer ()
+  "Compile sentinel must finish even if the output buffer was killed."
+  (let* ((emagent-tools-subprocess-timeout 30)
+         (emagent-tools-subprocess-timeout-max 1800)
+         (emagent-tools-display-compile-buffer nil)
+         (got 'unset)
+         fake-proc
+         fake-buf
+         sentinel)
+    (unwind-protect
+        (progn
+          (setq fake-buf (generate-new-buffer " *emagent-compile-dead*"))
+          (setq fake-proc
+                (make-process
+                 :name "emagent-compile-dead"
+                 :buffer fake-buf
+                 :command (list "sleep" "30")
+                 :noquery t))
+          (cl-letf (((symbol-function 'compilation-start)
+                     (lambda (&rest _)
+                       fake-buf))
+                    ((symbol-function 'get-buffer-process)
+                     (lambda (_buf) fake-proc))
+                    ((symbol-function 'emagent-tools--cont-register-cancel)
+                     #'ignore)
+                    ((symbol-function 'ansi-color-compilation-filter)
+                     #'ignore)
+                    ((symbol-function 'emagent-tools--clamp-timeout)
+                     #'identity)
+                    ((symbol-function 'set-process-sentinel)
+                     (lambda (_p fn) (setq sentinel fn))))
+            (emagent-tool-compile-async
+             (lambda (text is-error)
+               (setq got (list text is-error)))
+             "sleep 30"))
+          (should (functionp sentinel))
+          (kill-buffer fake-buf)
+          (funcall sentinel fake-proc "finished\n")
+          (should (consp got))
+          (should (string-match-p "output buffer was killed" (car got))))
+      (when (process-live-p fake-proc)
+        (delete-process fake-proc))
+      (when (buffer-live-p fake-buf)
+        (kill-buffer fake-buf)))))
+
+
+(ert-deftest emagent-shell-test-async-survives-killed-buffer ()
+  "Shell sentinel must finish even if the output buffer was killed."
+  (let* ((emagent-tools-subprocess-timeout 30)
+         (emagent-tools-subprocess-timeout-max 1800)
+         (got 'unset)
+         fake-proc
+         fake-buf
+         sentinel)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'start-process-shell-command)
+                     (lambda (_name buffer _command)
+                       (setq fake-buf buffer)
+                       (setq fake-proc
+                             (make-process
+                              :name "emagent-shell-dead"
+                              :buffer buffer
+                              :command (list "sleep" "30")
+                              :noquery t))
+                       (set-process-query-on-exit-flag fake-proc nil)
+                       fake-proc))
+                    ((symbol-function 'emagent-tools--cont-register-cancel)
+                     #'ignore)
+                    ((symbol-function 'emagent-tools--clamp-timeout)
+                     #'identity)
+                    ((symbol-function 'emagent-tools--root-directory)
+                     #'identity)
+                    ((symbol-function 'set-process-sentinel)
+                     (lambda (_p fn) (setq sentinel fn))))
+            (emagent-tools--run-shell-async
+             (lambda (text is-error)
+               (setq got (list text is-error)))
+             "sleep 30" default-directory))
+          (should (functionp sentinel))
+          (should (buffer-live-p fake-buf))
+          (let ((kill-buffer-query-functions nil))
+            (kill-buffer fake-buf))
+          (when (process-live-p fake-proc)
+            (delete-process fake-proc))
+          (funcall sentinel fake-proc "finished\n")
+          (should (consp got))
+          (should (string-match-p "output buffer was killed" (car got))))
+      (when (process-live-p fake-proc)
+        (delete-process fake-proc))
+      (when (buffer-live-p fake-buf)
+        (kill-buffer fake-buf)))))
+
 (provide 'emagent-shell-test)
 
 ;;; emagent-shell-test.el ends here

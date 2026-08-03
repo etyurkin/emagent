@@ -462,14 +462,41 @@ Arguments: RAW."
        (t nil)))))
 
 (defun emagent-acp--tool-call-apply-edit (text old new)
-  "Apply a single OLD/NEW patch-style edit to TEXT."
+  "Apply a single OLD/NEW patch-style edit to TEXT.
+
+Idempotent for append-style edits where NEW extends OLD: if TEXT already
+contains NEW and has no remaining standalone OLD (outside that NEW),
+return TEXT unchanged so a post-write re-render does not duplicate.
+Empty OLD (create/append) is idempotent when NEW is already a suffix."
   (cond
    ((and (stringp old) (stringp new))
-    (if (string-empty-p old)
-        (concat (or text "") new)
-      (replace-regexp-in-string (regexp-quote old) new (or text "") t t)))
+    (let ((text (or text "")))
+      (cond
+       ((string-empty-p old)
+        (if (or (string-empty-p new)
+                (equal text new)
+                (string-suffix-p new text))
+            text
+          (concat text new)))
+       ((and (string-prefix-p old new)
+             (emagent-acp--append-edit-already-applied-p text old new))
+        text)
+       (t (replace-regexp-in-string (regexp-quote old) new text t t)))))
    ((stringp new) new)
    (t text)))
+
+(defun emagent-acp--append-edit-already-applied-p (text old new)
+  "Return non-nil when append-style OLD→NEW is already present in TEXT.
+
+Reverse NEW back to OLD and re-apply; if that yields TEXT again, every
+OLD was already part of an applied NEW (including overlapping tails
+like OLD=`\\n' NEW=`\\n\\n')."
+  (and (string-search new text)
+       (let* ((reversed (replace-regexp-in-string
+                         (regexp-quote new) old text t t))
+              (reapplied (replace-regexp-in-string
+                          (regexp-quote old) new reversed t t)))
+         (equal reapplied text))))
 
 (defun emagent-acp--tool-call-proposed-content (path data)
   "Return PATH's content after applying the edits in DATA, or nil."
@@ -544,32 +571,72 @@ nothing.  The first render's diff is kept here so re-renders show it.")
 Sized for display re-renders within a turn; completed tool calls stop
 re-rendering once the turn ends, so evicted entries are rarely missed.")
 
-(defun emagent-acp--edit-diff-cache-put (id diff)
-  "Remember DIFF for toolCallId ID, evicting the oldest entry over the cap."
-  (when (and id diff)
-    (unless (gethash id emagent-acp--edit-diff-cache)
-      (push id emagent-acp--edit-diff-cache-order)
-      (when (> (length emagent-acp--edit-diff-cache-order)
-               emagent-acp--edit-diff-cache-max)
-        (remhash (car (last emagent-acp--edit-diff-cache-order))
-                 emagent-acp--edit-diff-cache)
-        (setq emagent-acp--edit-diff-cache-order
-              (butlast emagent-acp--edit-diff-cache-order))))
-    (puthash id diff emagent-acp--edit-diff-cache))
-  diff)
+(defun emagent-acp--edit-diff-cache-key (id &optional state)
+  "Return a cache key for toolCallId ID scoped to STATE's session when known."
+  (let* ((state (or state
+                    (and (boundp 'emagent-acp--session)
+                         emagent-acp--session)))
+         (sid (and state (emagent-acp-state-session-id state))))
+    (if (and sid id)
+        (format "%s\0%s" sid id)
+      id)))
 
-(defun emagent-acp--edit-diff-cache-forget (id)
-  "Drop the cached edit diff for toolCallId ID, if any."
-  (when id
-    (remhash id emagent-acp--edit-diff-cache)
+(defun emagent-acp--edit-diff-cache-put (id diff &optional state)
+  "Remember DIFF for toolCallId ID, evicting the oldest entry over the cap.
+
+Never overwrites an existing entry: a post-write re-render can invent a
+non-nil false diff that must not replace the real pre-write preview.
+Keys are session-scoped when STATE (or the current session) has an id.
+Return the cached diff when present, otherwise DIFF (which may be nil)."
+  (let ((key (emagent-acp--edit-diff-cache-key id state)))
+    (when (and key diff)
+      (unless (gethash key emagent-acp--edit-diff-cache)
+        (push key emagent-acp--edit-diff-cache-order)
+        (when (> (length emagent-acp--edit-diff-cache-order)
+                 emagent-acp--edit-diff-cache-max)
+          (remhash (car (last emagent-acp--edit-diff-cache-order))
+                   emagent-acp--edit-diff-cache)
+          (setq emagent-acp--edit-diff-cache-order
+                (butlast emagent-acp--edit-diff-cache-order)))
+        (puthash key diff emagent-acp--edit-diff-cache)))
+    (or (and key (gethash key emagent-acp--edit-diff-cache))
+        diff)))
+
+(defun emagent-acp--edit-diff-cache-forget (id &optional state)
+  "Drop the cached edit diff for toolCallId ID.
+
+When STATE is known, only that session's cache entry is removed."
+  (when-let ((key (emagent-acp--edit-diff-cache-key id state)))
+    (remhash key emagent-acp--edit-diff-cache)
     (setq emagent-acp--edit-diff-cache-order
-          (delete id emagent-acp--edit-diff-cache-order))))
+          (delete key emagent-acp--edit-diff-cache-order))))
 
-(defun emagent-acp--edit-diff-cache-clear ()
-  "Drop all cached edit diffs.
-Called at turn start; the org transcript already holds rendered diffs."
-  (clrhash emagent-acp--edit-diff-cache)
-  (setq emagent-acp--edit-diff-cache-order nil))
+(defun emagent-acp--edit-diff-cache-clear (&optional state)
+  "Clear edit-diff cache entries.
+
+With STATE, drop only that session's keys so another chat's previews survive.
+With no STATE (or no session id), clear the whole table."
+  (let ((sid (and state (emagent-acp-state-session-id state))))
+    (if (not sid)
+        (progn
+          (clrhash emagent-acp--edit-diff-cache)
+          (setq emagent-acp--edit-diff-cache-order nil))
+      (let ((prefix (format "%s\0" sid))
+            (survivors nil))
+        (dolist (key emagent-acp--edit-diff-cache-order)
+          (if (and (stringp key) (string-prefix-p prefix key))
+              (remhash key emagent-acp--edit-diff-cache)
+            (push key survivors)))
+        (setq emagent-acp--edit-diff-cache-order (nreverse survivors))))))
+
+(defun emagent-acp--bump-prompt-generation (state)
+  "Invalidate STATE's turn generation and drop stale tool-resolve work.
+
+Call at turn begin and when ending an in-flight turn early (abort or
+interrupt finalize) so late provider callbacks cannot strand workers."
+  (setf (emagent-acp-state-prompt-generation state)
+        (1+ (or (emagent-acp-state-prompt-generation state) 0)))
+  (emagent-acp--provider-reset-tool-resolve state))
 
 (defun emagent-acp--release-tool-call-payloads (state id)
   "Drop large in-flight payloads for toolCallId ID in STATE.
@@ -580,7 +647,7 @@ decision maps for arrow-line updates."
       (remhash id inputs))
     (when-let ((pending (emagent-acp-state-tool-call-pending state)))
       (remhash id pending))
-    (emagent-acp--edit-diff-cache-forget id)))
+    (emagent-acp--edit-diff-cache-forget id state)))
 
 (defun emagent-acp--tool-call-reversed-diff-string (resolved data proposed)
   "Real diff recovered by reverse-applying DATA's edits to PROPOSED.
@@ -608,20 +675,23 @@ Arguments: RESOLVED."
         (emagent-tools--diff-strings (file-name-nondirectory resolved)
                                      old-content proposed)))))
 
-(defun emagent-acp--tool-call-edit-diff-string (path data &optional id)
+(defun emagent-acp--tool-call-edit-diff-string (path data &optional id state)
   "Return a diff rendering the edit in DATA against PATH, or nil.
 Prefers a real diff; the hand-built patch preview is the last resort:
-1. `diff' against the on-disk file (renders before the write).
-2. The diff cached under toolCallId ID by an earlier pre-write render.
+1. The diff cached under toolCallId ID by an earlier pre-write render.
+2. `diff' against the on-disk file (renders before the write).
 3. `diff' against pre-edit content reconstructed by reversing the edits.
-4. A patch-shaped preview built from the raw old/new strings."
+4. A patch-shaped preview built from the raw old/new strings.
+Optional STATE scopes the cache to that ACP session."
   (when-let* ((proposed (emagent-acp--tool-call-proposed-content path data))
               (resolved (emagent-tools--root-directory path)))
-    (or (emagent-acp--edit-diff-cache-put
-         id (emagent-tools--write-diff-string resolved proposed))
-        (and id (gethash id emagent-acp--edit-diff-cache))
+    (or (and id (gethash (emagent-acp--edit-diff-cache-key id state)
+                         emagent-acp--edit-diff-cache))
         (emagent-acp--edit-diff-cache-put
-         id (emagent-acp--tool-call-reversed-diff-string resolved data proposed))
+         id (emagent-tools--write-diff-string resolved proposed) state)
+        (emagent-acp--edit-diff-cache-put
+         id (emagent-acp--tool-call-reversed-diff-string resolved data proposed)
+         state)
         (when-let* ((items (emagent-acp--tool-call-edit-items data))
                     (item (car items))
                     (new (emagent-acp--tool-call-edit-field
@@ -651,7 +721,9 @@ permission prompt would, instead of a bare arrow line."
                      update raw (emagent-acp--tool-call-detail update)))
               (data (emagent-acp--tool-call-normalize-data raw))
               (diff (emagent-acp--tool-call-edit-diff-string
-                     path data (map-elt update 'toolCallId))))
+                     path data (map-elt update 'toolCallId)
+                     (and (boundp 'emagent-acp--session)
+                          emagent-acp--session))))
     (cons "diff" diff)))
 
 (defun emagent-acp--tool-call-shell-command (update)
@@ -1775,7 +1847,9 @@ Arguments: STATE, TOOL-CALL."
            (heading (format "Allow edit: %s" (file-name-nondirectory resolved))))
       (if-let ((diff (when data
                        (emagent-acp--tool-call-edit-diff-string
-                        path data (map-elt tool-call 'toolCallId)))))
+                        path data (map-elt tool-call 'toolCallId)
+                        (and (boundp 'emagent-acp--session)
+                             emagent-acp--session)))))
           (format "** %s\n#+BEGIN_SRC diff\n%s\n#+END_SRC" heading diff)
         (if-let ((proposed (emagent-acp--tool-call-proposed-content path data)))
             (let ((lang (or (file-name-extension resolved) "text")))
@@ -2589,7 +2663,7 @@ provider tool-resolve queue, and any outstanding permission requests.  This is
 the single entry point for turn start; the terminal paths (`--complete-prompt',
 `--abort-prompt', `--finalize-in-flight-prompt') own turn end."
   (setf (emagent-acp-state-busy state) t)
-  (setf (emagent-acp-state-prompt-generation state) (1+ (or (emagent-acp-state-prompt-generation state) 0)))
+  (emagent-acp--bump-prompt-generation state)
   (setf (emagent-acp-state-continue-attempts state) 0)
   (setf (emagent-acp-state-assistant-text state) "")
   (setf (emagent-acp-state-thought-text state) "")
@@ -2600,13 +2674,12 @@ the single entry point for turn start; the terminal paths (`--complete-prompt',
   (clrhash (emagent-acp-state-tool-call-labels state))
   (clrhash (emagent-acp-state-tool-call-decisions state))
   (clrhash (emagent-acp-state-tool-call-pending state))
-  (emagent-acp--edit-diff-cache-clear)
+  (emagent-acp--edit-diff-cache-clear state)
   ;; A new turn supersedes any agent-scheduled wakeup: a stale request must
   ;; not arm after an unrelated prompt, and a pending timer must not fire
   ;; into the middle of this turn's conversation.
   (emagent-acp--cancel-wakeup state)
   (emagent-acp--cancel-plan-build state)
-  (emagent-acp--provider-reset-tool-resolve state)
   (emagent-acp--reset-permission-gate state)
   (emagent-acp--cancel-prompt-render state)
   (emagent-acp--clear-thought-buffer state)
@@ -2696,7 +2769,9 @@ stop notice must not become the session SUMMARY."
                            stop-notice
                          (concat text "\n\n" stop-notice))))
             (setf (emagent-acp-state-assistant-text state) full)))))
-    (setf (emagent-acp-state-prompt-generation state) (1+ (or (emagent-acp-state-prompt-generation state) 0)))
+    ;; Drop in-flight Cursor store lookups so a stale finish cannot strand
+    ;; tool-resolve-worker after this generation bump.
+    (emagent-acp--bump-prompt-generation state)
     (when-let ((client (emagent-acp-state-client state))
                (session-id (emagent-acp-state-session-id state)))
       (ignore-errors
@@ -3393,6 +3468,7 @@ was still working."
       (when in-flight
         (emagent-acp--clear-prompt-watchdog state)
         (emagent-acp--cancel-prompt-render state)
+        (emagent-acp--bump-prompt-generation state)
         (setf (emagent-acp-state-busy state) nil)
         (setf (emagent-acp-state-prompt-finishing state) nil)
         (setf (emagent-acp-state-prompt-finalized state) nil)
@@ -3895,6 +3971,9 @@ send; the buffer model is restored when the turn ends (see
 If the switch fails or the override id is unknown, abort the send — never
 fall through to the session model.
 
+With no per-turn override, heal ACP drift back to `emagent-session-model'
+before sending (covers a slow/failed post-turn restore).
+
 COMPRESS is forwarded to `emagent-acp-send-prompt': set by
 `emagent-chat--dispatch-compress' when USER-TEXT is already a compression
 summary prompt rather than ordinary chat input."
@@ -3909,26 +3988,47 @@ summary prompt rather than ordinary chat input."
          (when (emagent-chat--send-active-p token)
            (let* ((state emagent-acp--session)
                   (current (and state (emagent-acp-current-model-id)))
+                  (explicit-turn turn-model)
                   (explore
-                   (and (not turn-model)
+                   (and (not explicit-turn)
                         (not compress)
                         state
                         (emagent-acp--explore-prompt-p user-text)
                         (emagent-acp--resolve-explore-model state)))
-                  (turn-model (or turn-model explore))
-                  (target (and turn-model state
-                               (emagent-acp--match-model-id turn-model state nil)))
+                  (turn-model (or explicit-turn explore))
+                  (override-target
+                   (and turn-model state
+                        (emagent-acp--match-model-id turn-model state nil)))
+                  (session-id
+                   (and (not explicit-turn) (not explore) state
+                        (emagent-session-model)))
+                  (heal-target
+                   (and session-id current
+                        (let ((matched
+                               (emagent-acp--match-model-id
+                                session-id state nil)))
+                          (and matched
+                               (not (string= matched current))
+                               matched))))
+                  (target (or override-target heal-target))
                   (target-ok
                    (and target state
                         (emagent-acp--model-available-p target state nil)))
+                  (heal-p (and heal-target (equal target heal-target)))
                   (spec
-                   (and turn-spec state target-ok
+                   ;; Heal with model-id only (nil spec): session apply-spec
+                   ;; hardcodes config id "model", which may not match the
+                   ;; live option id and can be skipped as a sibling failure
+                   ;; while still invoking on-success.
+                   (and (not heal-p)
+                        turn-spec state target-ok
                         (equal (emagent-acp--spec-model-value turn-spec state)
                                target)
                         turn-spec))
                   (need-switch
                    (or (and target-ok current (not (string= target current)))
-                       (and spec (> (length spec) 1))))
+                       (and spec (not heal-p) (> (length spec) 1))
+                       (and heal-p target-ok)))
                   (still-label (or current "session model")))
              (when (and explore target-ok)
                (setq emagent-chat--turn-model target
@@ -3936,27 +4036,34 @@ summary prompt rather than ordinary chat input."
                      emagent-chat--turn-apply-spec nil))
              (cond
               ;; Override requested but not a real advertised model — abort.
-              ((and turn-model (not target-ok))
+              ((and turn-model (not heal-p) (not target-ok))
                (emagent-acp--abort-turn-model-send
                 buf
                 (format
                  "Per-turn model `%s' is not available; send aborted (still on %s). Use /model TAB to pick a valid model."
                  turn-model still-label)))
+              ((and heal-p (not target-ok))
+               (emagent-acp--abort-turn-model-send
+                buf
+                (format
+                 "Session model `%s' is not available; send aborted (still on %s). Use /model TAB to pick a valid model."
+                 target still-label)))
               (need-switch
-               (unless emagent-chat--turn-model-base
-                 (setq emagent-chat--turn-model-base current))
-               (unless emagent-chat--turn-config-base
-                 (setq emagent-chat--turn-config-base
-                       (and state spec
-                            (emagent-acp--snapshot-config-values
-                             state spec))))
-               (when (fboundp 'emagent-acp--progress)
-                 (emagent-acp--progress
-                  state
-                  (format "switching model to %s for this turn…"
-                          (if (fboundp 'emagent-acp--model-display-name)
-                              (emagent-acp--model-display-name state nil target)
-                            target))))
+               (unless heal-p
+                 (unless emagent-chat--turn-model-base
+                   (setq emagent-chat--turn-model-base current))
+                 (unless emagent-chat--turn-config-base
+                   (setq emagent-chat--turn-config-base
+                         (and state spec
+                              (emagent-acp--snapshot-config-values
+                               state spec))))
+                 (when (fboundp 'emagent-acp--progress)
+                   (emagent-acp--progress
+                    state
+                    (format "switching model to %s for this turn…"
+                            (if (fboundp 'emagent-acp--model-display-name)
+                                (emagent-acp--model-display-name state nil target)
+                              target)))))
                (emagent-acp-set-model-transient
                 target
                 (lambda ()
@@ -3965,11 +4072,17 @@ summary prompt rather than ordinary chat input."
                 spec
                 (lambda ()
                   (when (emagent-chat--send-active-p token)
-                    (emagent-acp--abort-turn-model-send
-                     buf
-                     (format
-                      "Could not switch to `%s' for this turn; send aborted (still on %s)."
-                      target still-label))))))
+                    (if heal-p
+                        (emagent-acp--abort-turn-model-send
+                         buf
+                         (format
+                          "Could not restore session model `%s'; send aborted (still on %s)."
+                          target still-label))
+                      (emagent-acp--abort-turn-model-send
+                       buf
+                       (format
+                        "Could not switch to `%s' for this turn; send aborted (still on %s)."
+                        target still-label)))))))
               (t
                (emagent-acp--send-prompt-safe buf user-text compress))))))))))
 
@@ -3986,20 +4099,27 @@ function slots are needed."
 (defun emagent-acp--restore-turn-model ()
   "Restore the session model overridden by `/model' and clear the override.
 Called on a successful turn: switches back to the captured base model and clears
-`emagent-chat--turn-model' so the next prompt uses the buffer model again."
+`emagent-chat--turn-model' so the next prompt uses the buffer model again.
+Locals clear immediately; ACP restore is async.  `emagent-acp-send' heals
+any remaining ACP/session drift before the next prompt."
   (when emagent-chat--turn-model
-    (cond
-     (emagent-chat--turn-config-base
-      (emagent-acp-set-model-transient
-       emagent-chat--turn-model-base
-       #'ignore
-       emagent-chat--turn-config-base))
-     (emagent-chat--turn-model-base
-      (emagent-acp-set-model-transient emagent-chat--turn-model-base #'ignore)))
-    (setq emagent-chat--turn-model nil
-          emagent-chat--turn-model-base nil
-          emagent-chat--turn-apply-spec nil
-          emagent-chat--turn-config-base nil)))
+    (let ((base emagent-chat--turn-model-base)
+          (config emagent-chat--turn-config-base))
+      (setq emagent-chat--turn-model nil
+            emagent-chat--turn-model-base nil
+            emagent-chat--turn-apply-spec nil
+            emagent-chat--turn-config-base nil)
+      (cond
+       (config
+        (emagent-acp-set-model-transient
+         base #'ignore config
+         (lambda ()
+           (emagent-log "emagent: failed to restore session model after /model turn"))))
+       (base
+        (emagent-acp-set-model-transient
+         base #'ignore nil
+         (lambda ()
+           (emagent-log "emagent: failed to restore session model after /model turn"))))))))
 
 (defun emagent-acp--turn-model-on-failure (&optional message)
   "After a failed `/model' turn, keep or restore the per-turn override.
@@ -4089,8 +4209,15 @@ ON-FAILURE runs when the switch fails — callers that send a prompt afterward
 must abort there instead of falling through to the session model.
 
 Optional SPEC is ((CONFIG-ID . VALUE) ...) applied instead of MODEL-ID alone
-when non-nil (composed model_config / thought_level rows)."
-  (let ((state (emagent-acp--session)))
+when non-nil (composed model_config / thought_level rows).
+
+Each call bumps `emagent-chat--model-switch-generation' so a later switch
+\(or a restore racing a new `/model' turn) ignores a stale RPC response."
+  (let* ((gen (setq emagent-chat--model-switch-generation
+                    (1+ (or emagent-chat--model-switch-generation 0))))
+         (guard (lambda ()
+                  (= gen emagent-chat--model-switch-generation)))
+         (state (emagent-acp--session)))
     (if state
         (if spec
             (emagent-acp--config-option-set-spec
@@ -4098,17 +4225,21 @@ when non-nil (composed model_config / thought_level rows)."
              :session-id (emagent-acp-state-session-id state)
              :spec spec
              :persist nil
+             :guard guard
              :on-success on-done
              :on-failure (lambda (&rest _)
-                           (when on-failure (funcall on-failure))))
+                           (when (funcall guard)
+                             (when on-failure (funcall on-failure)))))
           (emagent-acp--config-option-set-model-id
            :state state
            :session-id (emagent-acp-state-session-id state)
            :model-id model-id
            :persist nil
+           :guard guard
            :on-success on-done
            :on-failure (lambda (&rest _)
-                         (when on-failure (funcall on-failure)))))
+                         (when (funcall guard)
+                           (when on-failure (funcall on-failure))))))
       ;; No session yet — cannot honor a transient switch.
       (if on-failure
           (funcall on-failure)

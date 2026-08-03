@@ -610,37 +610,42 @@ Arguments: STATE, ID, ENTRY."
 
 Returns nil immediately after starting the lookup (or applying a sync result
 in batch tests).  The resolve worker stays busy until the callback runs.
+A callback from a superseded turn (prompt-generation changed) is ignored so
+it cannot clear a newer worker or drain a fresh queue.
 
 Arguments: STATE, ID."
-  (cl-flet
-      ((finish (entry)
-         (let ((retry-delay
-                (emagent-acp-cursor--apply-resolved-entry state id entry)))
-           (setf (emagent-acp-state-tool-resolve-worker state) nil)
-           (if retry-delay
-               (emagent-acp-cursor--drain-tool-resolve-queue state retry-delay)
-             (progn
-               (emagent-acp-cursor--drain-tool-resolve-queue
-                state emagent-acp-cursor--tool-resolve-yield)
-               (emagent-acp--maybe-complete-deferred-prompt state))))))
-    (let* ((pending-table (emagent-acp-state-tool-call-pending state))
-           (merged (and pending-table (gethash id pending-table)))
-           (session-id (emagent-acp-state-session-id state)))
-      (cond
-       ((not (and merged session-id))
-        (finish nil)
-        nil)
-       ;; ERT and other noninteractive callers mock the sync store helper and
-       ;; expect an immediate apply.
-       ((or noninteractive
-            (not (fboundp 'emagent-cursor-tool-call-from-store-async)))
-        (finish (and (fboundp 'emagent-cursor-tool-call-from-store)
-                     (emagent-cursor-tool-call-from-store session-id id)))
-        nil)
-       (t
-        (emagent-cursor-tool-call-from-store-async
-         session-id id (lambda (entry) (finish entry)))
-        nil)))))
+  (let ((gen (emagent-acp-state-prompt-generation state)))
+    (cl-flet
+        ((finish (entry)
+           (if (not (eq gen (emagent-acp-state-prompt-generation state)))
+               nil
+             (let ((retry-delay
+                    (emagent-acp-cursor--apply-resolved-entry state id entry)))
+               (setf (emagent-acp-state-tool-resolve-worker state) nil)
+               (if retry-delay
+                   (emagent-acp-cursor--drain-tool-resolve-queue state retry-delay)
+                 (progn
+                   (emagent-acp-cursor--drain-tool-resolve-queue
+                    state emagent-acp-cursor--tool-resolve-yield)
+                   (emagent-acp--maybe-complete-deferred-prompt state)))))))
+      (let* ((pending-table (emagent-acp-state-tool-call-pending state))
+             (merged (and pending-table (gethash id pending-table)))
+             (session-id (emagent-acp-state-session-id state)))
+        (cond
+         ((not (and merged session-id))
+          (finish nil)
+          nil)
+         ;; ERT and other noninteractive callers mock the sync store helper and
+         ;; expect an immediate apply.
+         ((or noninteractive
+              (not (fboundp 'emagent-cursor-tool-call-from-store-async)))
+          (finish (and (fboundp 'emagent-cursor-tool-call-from-store)
+                       (emagent-cursor-tool-call-from-store session-id id)))
+          nil)
+         (t
+          (emagent-cursor-tool-call-from-store-async
+           session-id id (lambda (entry) (finish entry)))
+          nil))))))
 
 (defun emagent-acp-cursor--generic-title-p (title)
   "Return non-nil when TITLE is a generic Cursor ACP placeholder."

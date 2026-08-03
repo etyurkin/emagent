@@ -156,8 +156,9 @@ Tool calls block until they finish or time out. Emagent has no background
 - Omit a path to use the session project directory; relative paths resolve against it.
 - File tools are confined to the session root.
 - To revert an fs write/edit, call fs op=undo with expected_tick — never rewrite from memory.
-- Concurrent MCP edits: pass expected_tick from the latest fs op=read
-  (or structural op=get) emagent-tick; stale_revision means re-read and retry.
+- Concurrent MCP mutates (write/edit/undo/delete): pass expected_tick from
+  the latest fs op=read (or structural op=get) emagent-tick; stale_revision
+  means re-read and retry.
 - Prefer fs op=edit for targeted non-Lisp edits (unique old_string → new_string).
   Use fs op=write only when replacing the whole file. Do not switch to agent
   Edit/Read mid-turn after an emagent fs op=read.
@@ -1670,12 +1671,57 @@ Used only for rare internal writes that must not participate in CAS.")
   "Return a revision token string for PATH's current contents.
 
 Uses a SHA-1 of buffer-or-disk file text so a no-op buffer sync keeps the
-same tick, while any concurrent edit invalidates it.  Missing files use
-\"0\"."
+same tick, while any concurrent edit invalidates it.  Directories use
+`emagent-tools--directory-tick' (nested size/mtime plus visiting buffers).
+Missing paths use \"0\"."
   (let ((resolved (emagent-tools--root-directory path)))
-    (condition-case nil
-        (secure-hash 'sha1 (emagent-tools--read-file-content resolved))
-      (file-missing "0"))))
+    (cond
+     ((not (file-exists-p resolved)) "0")
+     ((file-directory-p resolved)
+      (emagent-tools--directory-tick resolved))
+     (t
+      (condition-case nil
+          (secure-hash 'sha1 (emagent-tools--read-file-content resolved))
+        (file-missing "0"))))))
+
+(defun emagent-tools--directory-tick (resolved)
+  "Return a revision token for directory RESOLVED.
+
+Fingerprints nested paths by relative name, kind, size, and mtime.
+Visiting buffers contribute a content hash so unsaved nested edits
+change the tick even when disk mtime is unchanged."
+  (let ((parts nil))
+    (dolist (file (directory-files-recursively resolved "" t))
+      (let ((rel (file-relative-name file resolved)))
+        (unless (string-match-p "\\`\\.git\\(/\\|\\'\\)" rel)
+          (let* ((attrs (file-attributes file))
+                 (dirp (eq (car attrs) t))
+                 (size (or (file-attribute-size attrs) 0))
+                 (mtime (file-attribute-modification-time attrs)))
+            (push (format "%s\0%s\0%s\0%s"
+                          rel
+                          (if dirp "d" "f")
+                          size
+                          mtime)
+                  parts)
+            (unless dirp
+              (when-let ((buf (find-buffer-visiting file)))
+                (when (buffer-live-p buf)
+                  (push (format "%s\0buf\0%s"
+                                rel
+                                (secure-hash
+                                 'sha1
+                                 (with-current-buffer buf
+                                   (save-restriction
+                                     (widen)
+                                     (buffer-substring-no-properties
+                                      (point-min) (point-max))))))
+                        parts))))))))
+    (format "dir:%s"
+            (secure-hash 'sha1
+                         (mapconcat #'identity
+                                    (sort parts #'string<)
+                                    "\n")))))
 
 (defun emagent-tools--normalize-file-tick (tick)
   "Return TICK as a comparable string, or nil when TICK is absent."
@@ -1740,20 +1786,36 @@ CALLBACK is called as (CALLBACK RESULT &optional IS-ERROR)."
 
 Unmodified buffers whose file changed on disk are reverted so content
 and emagent-tick match disk.  When REQUIRE-CLEAN is non-nil, a modified
-buffer with a disk change signals `stale_revision' instead of clobbering."
+buffer with a disk change (or a deleted file) signals `stale_revision'
+instead of clobbering.  If the file was deleted on disk: keep a modified
+buffer so reads still see unsaved edits; with REQUIRE-CLEAN signal
+`stale_revision'; drop only a clean visiting buffer (avoid File no longer
+exists from `revert-buffer')."
   (let* ((resolved (emagent-tools--root-directory path))
          (buffer (find-buffer-visiting resolved)))
     (when buffer
-      (with-current-buffer buffer
-        (unless (verify-visited-file-modtime)
+      (if (not (file-exists-p resolved))
           (cond
-           ((and require-clean (buffer-modified-p))
-            (user-error
-             (concat "stale_revision: path=%s changed on disk while "
-                     "buffer has unsaved edits; re-read and retry")
-             resolved))
-           ((not (buffer-modified-p))
-            (revert-buffer t t t))))))
+           ((with-current-buffer buffer (buffer-modified-p))
+            (when require-clean
+              (user-error
+               (concat "stale_revision: path=%s deleted on disk while "
+                       "buffer has unsaved edits; re-read and retry")
+               resolved)))
+           (t
+            (with-current-buffer buffer
+              (set-buffer-modified-p nil))
+            (kill-buffer buffer)))
+        (with-current-buffer buffer
+          (unless (verify-visited-file-modtime)
+            (cond
+             ((and require-clean (buffer-modified-p))
+              (user-error
+               (concat "stale_revision: path=%s changed on disk while "
+                       "buffer has unsaved edits; re-read and retry")
+               resolved))
+             ((not (buffer-modified-p))
+              (revert-buffer t t t)))))))
     resolved))
 
 (defun emagent-tools--guard-file-tick (path expected-tick)
@@ -1770,9 +1832,10 @@ Also reconciles a visiting buffer that drifted from disk."
            (resolved (emagent-tools--root-directory path)))
       (unless expected
         (user-error
-         (concat "expected_tick required for MCP writes to %s; "
+         (concat "expected_tick required for MCP mutate of %s; "
                  "call fs op=read (or structural op=get) and pass its "
-                 "emagent-tick on write/structural mutate (current_tick=%s)")
+                 "emagent-tick on write/delete/structural mutate "
+                 "(current_tick=%s)")
          resolved current))
       (unless (string= expected current)
         (user-error
@@ -1801,47 +1864,50 @@ EXPECTED-TICK, when non-nil, overrides `emagent-tools--expected-file-tick'."
   (emagent-tools--guard-file-tick
    path (or expected-tick emagent-tools--expected-file-tick))
   (let* ((resolved (emagent-tools--root-directory path))
-         (dir (file-name-directory resolved))
-         (buffer (or (find-buffer-visiting resolved)
-                     (let ((auto-insert nil))
-                       (find-file-noselect resolved)))))
+         (dir (file-name-directory resolved)))
+    (when (file-directory-p resolved)
+      (user-error "Cannot write file content to directory %s" resolved))
     (when (and emagent-elisp-validate-on-write
                (emagent-elisp-elisp-file-p resolved))
       (when-let ((err (emagent-elisp--validate-content-strict content resolved)))
         (user-error "Validation failed for %s: %s" resolved err)))
+    ;; Create parents after validation so a rejected write leaves no orphans.
     (when (and dir (not (file-exists-p dir)))
       (make-directory dir t))
-    (with-temp-buffer
-      (insert content)
-      (let ((content-buffer (current-buffer))
-            (inhibit-read-only t))
-        (with-current-buffer buffer
-          (save-restriction
-            (widen)
-            (undo-boundary)
-            (replace-buffer-contents content-buffer 1.0)
-            (undo-boundary))
-          (basic-save-buffer))))
-    ;; Showing the result is best-effort: the file is already saved, so a
-    ;; display failure must not surface as a write_file tool error.
-    (condition-case-unless-debug err
-        (pcase emagent-tools-show-written-buffer
-          ('magit-diff
-           (with-current-buffer buffer
-             ;; `magit-diff-buffer-file' is autoloaded, so `fboundp' alone
-             ;; doesn't prove magit is loaded; `magit-toplevel' has no
-             ;; autoload cookie and would be void.
-             (if (and (fboundp 'magit-diff-buffer-file)
-                      (fboundp 'magit-toplevel)
-                      (magit-toplevel))
-                 (magit-diff-buffer-file)
-               (display-buffer buffer))))
-          ((pred identity)
-           (display-buffer buffer)))
-      (error
-       (emagent-log "write_file: showing %s failed: %s"
-                    resolved (error-message-string err))))
-    resolved))
+    (let ((buffer (or (find-buffer-visiting resolved)
+                      (let ((auto-insert nil))
+                        (find-file-noselect resolved)))))
+      (with-temp-buffer
+        (insert content)
+        (let ((content-buffer (current-buffer))
+              (inhibit-read-only t))
+          (with-current-buffer buffer
+            (save-restriction
+              (widen)
+              (undo-boundary)
+              (replace-buffer-contents content-buffer 1.0)
+              (undo-boundary))
+            (basic-save-buffer))))
+      ;; Showing the result is best-effort: the file is already saved, so a
+      ;; display failure must not surface as a write_file tool error.
+      (condition-case-unless-debug err
+          (pcase emagent-tools-show-written-buffer
+            ('magit-diff
+             (with-current-buffer buffer
+               ;; `magit-diff-buffer-file' is autoloaded, so `fboundp' alone
+               ;; doesn't prove magit is loaded; `magit-toplevel' has no
+               ;; autoload cookie and would be void.
+               (if (and (fboundp 'magit-diff-buffer-file)
+                        (fboundp 'magit-toplevel)
+                        (magit-toplevel))
+                   (magit-diff-buffer-file)
+                 (display-buffer buffer))))
+            ((pred identity)
+             (display-buffer buffer)))
+        (error
+         (emagent-log "write_file: showing %s failed: %s"
+                      resolved (error-message-string err))))
+      resolved)))
 
 (cl-defun emagent-tools--unified-diff-async (callback old new label)
   "Return unified diff between OLD and NEW for LABEL via CALLBACK."
@@ -1897,29 +1963,31 @@ EXPECTED-TICK, when non-nil, overrides `emagent-tools--expected-file-tick'."
   (let* ((ctx (emagent-tools--capture-session-context))
          (resolved (emagent-tools--root-directory path))
          (label (file-name-nondirectory resolved))
-         (old (emagent-tools--read-elisp-file-content path))
          (acp emagent-tools--acp-session-p))
     (condition-case err
         (progn
+          (when (file-directory-p resolved)
+            (user-error "Cannot write file content to directory %s" resolved))
           (when (emagent-tools--protected-fs-path-p path)
             (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
                         resolved))
-          (emagent-tools--write-file-content path content)
-          (emagent-tools--unified-diff-async
-           (emagent-tools--wrap-session-callback
-            ctx
-            (lambda (diff is-error)
-              (if is-error
-                  (funcall callback diff t)
-                (let ((result (if (string-empty-p diff)
-                                  (format "Wrote %s (no changes)" resolved)
-                                diff)))
-                  (funcall callback
-                           (if acp
-                               (emagent-tools--append-file-tick path result)
-                             result)
-                           nil)))))
-           old content label))
+          (let ((old (emagent-tools--read-elisp-file-content path)))
+            (emagent-tools--write-file-content path content)
+            (emagent-tools--unified-diff-async
+             (emagent-tools--wrap-session-callback
+              ctx
+              (lambda (diff is-error)
+                (if is-error
+                    (funcall callback diff t)
+                  (let ((result (if (string-empty-p diff)
+                                    (format "Wrote %s (no changes)" resolved)
+                                  diff)))
+                    (funcall callback
+                             (if acp
+                                 (emagent-tools--append-file-tick path result)
+                               result)
+                             nil)))))
+             old content label)))
       (error (funcall callback (error-message-string err) t)))))
 
 (defun emagent-tool-write-file (path content)
@@ -1929,19 +1997,21 @@ EXPECTED-TICK, when non-nil, overrides `emagent-tools--expected-file-tick'."
      "Refusing fs write on %s: lisp-sitter is installed — use structural"
      (emagent-tools--root-directory path)))
   (let* ((resolved (emagent-tools--root-directory path))
-         (label (file-name-nondirectory resolved))
-         (old (emagent-tools--read-elisp-file-content path)))
+         (label (file-name-nondirectory resolved)))
+    (when (file-directory-p resolved)
+      (user-error "Cannot write file content to directory %s" resolved))
     (when (emagent-tools--protected-fs-path-p path)
       (user-error "Refusing Emacs access to %s (iCloud or another app's container)"
                   resolved))
-    (emagent-tools--write-file-content path content)
-    (let* ((diff (emagent-tools--unified-diff old content label))
-           (result (if (string-empty-p diff)
-                       (format "Wrote %s (no changes)" resolved)
-                     diff)))
-      (if emagent-tools--acp-session-p
-          (emagent-tools--append-file-tick path result)
-        result))))
+    (let ((old (emagent-tools--read-elisp-file-content path)))
+      (emagent-tools--write-file-content path content)
+      (let* ((diff (emagent-tools--unified-diff old content label))
+             (result (if (string-empty-p diff)
+                         (format "Wrote %s (no changes)" resolved)
+                       diff)))
+        (if emagent-tools--acp-session-p
+            (emagent-tools--append-file-tick path result)
+          result)))))
 
 (defun emagent-tools--apply-string-edit (content old-string new-string &optional replace-all)
   "Return CONTENT with OLD-STRING replaced by NEW-STRING.

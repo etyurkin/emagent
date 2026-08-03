@@ -289,6 +289,167 @@
       (when (buffer-name retrieve-buf)
         (kill-buffer retrieve-buf)))))
 
+(ert-deftest emagent-mcp-test-tick-guard-error-is-tool-error ()
+  "Missing expected_tick must reach the MCP callback as isError."
+  (let* ((dir (make-temp-file "emagent-tick-guard" t))
+         (file (expand-file-name "x.txt" dir))
+         (session (list :root dir :buffer (current-buffer)))
+         (args (make-hash-table :test 'equal))
+         (got 'unset))
+    (unwind-protect
+        (progn
+          (write-region "hi\n" nil file nil 'quiet)
+          (puthash "op" "write" args)
+          (puthash "path" file args)
+          (puthash "content" "bye\n" args)
+          (emagent-mcp--run-tool-async
+           "fs" args session
+           (lambda (result is-error) (setq got (list result is-error))))
+          (should (eq t (cadr got)))
+          (should (string-match-p "expected_tick" (car got))))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-mcp-test-stale-tick-is-tool-error ()
+  "stale_revision must reach the MCP callback as isError, not hang."
+  (let* ((dir (make-temp-file "emagent-stale-tick" t))
+         (file (expand-file-name "x.txt" dir))
+         (session (list :root dir :buffer (current-buffer)))
+         (args (make-hash-table :test 'equal))
+         (got 'unset)
+         (tick nil))
+    (unwind-protect
+        (progn
+          (write-region "hi\n" nil file nil 'quiet)
+          (setq tick (emagent-tools--file-tick file))
+          (write-region "changed\n" nil file nil 'quiet)
+          (puthash "op" "write" args)
+          (puthash "path" file args)
+          (puthash "content" "bye\n" args)
+          (puthash "expected_tick" tick args)
+          (emagent-mcp--run-tool-async
+           "fs" args session
+           (lambda (result is-error) (setq got (list result is-error))))
+          (should (eq t (cadr got)))
+          (should (string-match-p "stale_revision" (car got))))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-mcp-test-delete-directory-requires-expected-tick ()
+  "fs delete_directory under ACP requires expected_tick."
+  (let* ((dir (make-temp-file "emagent-tick-deldir" t))
+         (sub (expand-file-name "sub" dir))
+         (session (list :root dir :buffer (current-buffer)))
+         (args (make-hash-table :test 'equal))
+         (got 'unset))
+    (unwind-protect
+        (progn
+          (make-directory sub t)
+          (puthash "op" "delete_directory" args)
+          (puthash "path" sub args)
+          (emagent-mcp--run-tool-async
+           "fs" args session
+           (lambda (result is-error) (setq got (list result is-error))))
+          (should (eq t (cadr got)))
+          (should (string-match-p "expected_tick" (car got)))
+          (should (file-directory-p sub)))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-mcp-test-delete-requires-expected-tick ()
+  "fs delete under ACP requires expected_tick like write/edit."
+  (let* ((dir (make-temp-file "emagent-tick-del" t))
+         (file (expand-file-name "x.txt" dir))
+         (session (list :root dir :buffer (current-buffer)))
+         (args (make-hash-table :test 'equal))
+         (got 'unset))
+    (unwind-protect
+        (progn
+          (write-region "hi\n" nil file nil 'quiet)
+          (puthash "op" "delete" args)
+          (puthash "path" file args)
+          (emagent-mcp--run-tool-async
+           "fs" args session
+           (lambda (result is-error) (setq got (list result is-error))))
+          (should (eq t (cadr got)))
+          (should (string-match-p "expected_tick" (car got)))
+          (should (file-exists-p file)))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-mcp-test-cont-finish-does-not-cancel-work ()
+  "Successful reply detaches without running kill cancel handlers."
+  (let* ((killed nil)
+         (detached nil)
+         (cont (emagent-mcp-cont (reply) (funcall reply "ok"))))
+    (emagent-mcp-cont-add-cancel-function cont (lambda () (setq killed t)))
+    (emagent-mcp-cont-add-detach-function cont (lambda () (setq detached t)))
+    (emagent-mcp-cont-finish cont)
+    (should detached)
+    (should-not killed)
+    (should (emagent-mcp-cont-replied-p cont))
+    (emagent-mcp-cont-cancel cont)
+    (should-not killed)))
+
+
+(ert-deftest emagent-mcp-test-cont-starter-error-cleans-inflight ()
+  "If the cont starter throws after track, cancel cleanup and one error reply."
+  (let* ((session (list :root "/tmp" :buffer (current-buffer)))
+         (args (make-hash-table :test 'equal))
+         (got nil)
+         (token "tok-starter-err")
+         (entry (emagent-mcp--tool-entry "eval")))
+    (cl-letf (((symbol-function (nth 4 entry))
+               (lambda (_args)
+                 (emagent-mcp-cont (reply)
+                   (ignore reply)
+                   (error "starter boom")))))
+      (let ((emagent-mcp--current-session-token token))
+        (emagent-mcp--run-tool-async
+         "eval" args session
+         (lambda (result is-error)
+           (push (list result is-error) got)))))
+    (should (= 1 (length got)))
+    (should (eq t (cadar got)))
+    (should (string-match-p "starter boom" (caar got)))
+    (should-not (gethash token emagent-mcp--session-inflight))))
+
+(ert-deftest emagent-mcp-test-cont-reply-detaches-from-session ()
+  "Successful reply must detach; later session cancel emits no second result."
+  (let* ((session (list :root "/tmp" :buffer (current-buffer)))
+         (args (make-hash-table :test 'equal))
+         (got nil)
+         (token "tok-reply-detach")
+         (entry (emagent-mcp--tool-entry "eval")))
+    (cl-letf (((symbol-function (nth 4 entry))
+               (lambda (_args)
+                 (emagent-mcp-cont (reply)
+                   (funcall reply "ok")))))
+      (let ((emagent-mcp--current-session-token token))
+        (emagent-mcp--run-tool-async
+         "eval" args session
+         (lambda (result is-error)
+           (push (list result is-error) got)))))
+    (should (equal got '(("ok" nil))))
+    (should-not (gethash token emagent-mcp--session-inflight))
+    (emagent-mcp-cancel-session-tools token)
+    (should (equal got '(("ok" nil))))))
+
+(ert-deftest emagent-mcp-test-cont-reply-is-one-shot ()
+  "A second reply after finish must not invoke the agent callback again."
+  (let* ((session (list :root "/tmp" :buffer (current-buffer)))
+         (args (make-hash-table :test 'equal))
+         (got nil)
+         (stored-reply nil)
+         (entry (emagent-mcp--tool-entry "eval")))
+    (cl-letf (((symbol-function (nth 4 entry))
+               (lambda (_args)
+                 (emagent-mcp-cont (reply)
+                   (setq stored-reply reply)
+                   (funcall reply "first")))))
+      (emagent-mcp--run-tool-async
+       "eval" args session
+       (lambda (result is-error)
+         (push (list result is-error) got)))
+      (funcall stored-reply "second")
+      (should (equal got '(("first" nil)))))))
+
 (ert-deftest emagent-mcp-test-cancel-session-tools ()
   (let* ((token "tok-session-cancel")
          (got nil)

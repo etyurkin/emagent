@@ -285,7 +285,7 @@ Full op docs live behind =elisp= =op=guide= / =describe= when needed
 
 | Tool | Ops / role |
 |------+------------|
-| =fs= | =read= =write= =edit= =undo= =delete= =delete_directory= =list= =find= (write/edit need =expected_tick=; Lisp → =structural=) |
+| =fs= | =read= =write= =edit= =undo= =delete= =delete_directory= =list= =find= (write/edit/undo/delete need =expected_tick=; Lisp → =structural=) |
 | =search= | Regexp search over the session tree (=rg= when available) |
 | =git= | =status= =diff= =log= |
 | =shell= | =run= (shell) or =compile= (compilation-mode; prefer for builds/tests) |
