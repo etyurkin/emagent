@@ -837,21 +837,63 @@ desktop restore) does not mark the session buffer modified."
 (defconst emagent-session-notes-max-chars 2000
   "Maximum characters kept in session notes.")
 
+(defconst emagent-session-notes--escape-mark "\\e1:"
+  "Prefix marking notes escaped with reversible backslash rules.
+
+Legacy notes (no prefix) only turned real newlines into `\\n' and left
+other backslashes alone; decode must keep that grammar for them.")
+
+(defun emagent-session-notes--encode (text)
+  "Escape TEXT for top-property storage (reversible).
+
+Prefixes `emagent-session-notes--escape-mark' so decode can distinguish
+new reversible escapes from legacy newline-only encoding."
+  (concat
+   emagent-session-notes--escape-mark
+   (replace-regexp-in-string
+    "\n" "\\n"
+    (replace-regexp-in-string "\\\\" "\\\\" text t t)
+    t t)))
+
+(defun emagent-session-notes--decode (text)
+  "Undo `emagent-session-notes--encode' on TEXT.
+
+Legacy (unmarked) values only expand `\\n' to newlines."
+  (if (string-prefix-p emagent-session-notes--escape-mark text)
+      (emagent-session-notes--decode-escaped
+       (substring text (length emagent-session-notes--escape-mark)))
+    (replace-regexp-in-string "\\\\n" "\n" text t t)))
+
+(defun emagent-session-notes--decode-escaped (text)
+  "Decode TEXT written by the marked reversible encoder."
+  (with-temp-buffer
+    (let ((i 0)
+          (n (length text)))
+      (while (< i n)
+        (if (and (< (1+ i) n) (= (aref text i) ?\\))
+            (pcase (aref text (1+ i))
+              (?n (insert ?\n) (setq i (+ i 2)))
+              (?\\ (insert ?\\) (setq i (+ i 2)))
+              (_ (insert (aref text i)) (setq i (1+ i))))
+          (insert (aref text i))
+          (setq i (1+ i))))
+      (buffer-string))))
+
 (defun emagent-session-notes-read ()
   "Return decoded session notes text, or \"\"."
   (let ((raw (emagent-session-store-read-top-property
               emagent-session-notes-property)))
     (if (not raw)
         ""
-      (replace-regexp-in-string "\\\\n" "\n" raw t t))))
+      (emagent-session-notes--decode raw))))
 
 (defun emagent-session-notes-write (text)
-  "Store TEXT as session notes (newline-escaped, capped)."
+  "Store TEXT as session notes (escaped, capped)."
   (let* ((trimmed (string-trim (or text "")))
          (capped (if (> (length trimmed) emagent-session-notes-max-chars)
                      (substring trimmed 0 emagent-session-notes-max-chars)
                    trimmed))
-         (encoded (replace-regexp-in-string "\n" "\\\\n" capped t t)))
+         (encoded (emagent-session-notes--encode capped)))
     (if (string-empty-p capped)
         (emagent-session-store-delete-top-property emagent-session-notes-property)
       (emagent-session-store-write-top-property

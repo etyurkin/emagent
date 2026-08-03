@@ -341,6 +341,21 @@ relative paths and does not cross directory boundaries on `*'."
             (should-not (string= tick (emagent-tools--file-tick file)))))
       (delete-directory dir t))))
 
+(ert-deftest emagent-tools-test-directory-tick-tracks-nested-content ()
+  "Directory tick must change when a nested file's size or mtime changes."
+  (let* ((dir (make-temp-file "emagent-dir-tick" t))
+         (nested (expand-file-name "nested.txt" dir))
+         (emagent-tools--project-directory dir))
+    (unwind-protect
+        (progn
+          (with-temp-file nested (insert "one\n"))
+          (let ((tick (emagent-tools--file-tick dir)))
+            (should (string-prefix-p "dir:" tick))
+            (should (string= tick (emagent-tools--file-tick dir)))
+            (with-temp-file nested (insert "two-chars-longer\n"))
+            (should-not (string= tick (emagent-tools--file-tick dir)))))
+      (delete-directory dir t))))
+
 (ert-deftest emagent-tools-test-mcp-write-requires-tick ()
   (let* ((dir (make-temp-file "emagent-tick-req-" t))
          (file (expand-file-name "note.txt" dir))
@@ -426,6 +441,42 @@ relative paths and does not cross directory boundaries on `*'."
                                  (buffer-string)))))))
       (delete-directory dir t))))
 
+
+
+(ert-deftest emagent-tools-test-reconcile-preserves-dirty-deleted ()
+  "Deleted-on-disk dirty buffers are kept for read; require-clean errors."
+  (let* ((dir (make-temp-file "emagent-reconcile-del-" t))
+         (file (expand-file-name "note.txt" dir))
+         (emagent-tools--root-boundary dir)
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p t)
+         buf)
+    (unwind-protect
+        (progn
+          (write-region "disk\n" nil file nil 'silent)
+          (setq buf (find-file-noselect file))
+          (with-current-buffer buf
+            (erase-buffer)
+            (insert "unsaved\n")
+            (set-buffer-modified-p t))
+          (delete-file file)
+          (should-error
+           (emagent-tools--reconcile-visited-file file t)
+           :type 'user-error)
+          (should (buffer-live-p buf))
+          (should (buffer-modified-p buf))
+          ;; Without require-clean, keep dirty so read can return edits.
+          (emagent-tools--reconcile-visited-file file nil)
+          (should (buffer-live-p buf))
+          (should (equal "unsaved\n"
+                         (emagent-tools--read-file-content file)))
+          ;; Clean ghost buffers are still dropped.
+          (with-current-buffer buf
+            (set-buffer-modified-p nil))
+          (emagent-tools--reconcile-visited-file file nil)
+          (should-not (buffer-live-p buf)))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (ignore-errors (delete-directory dir t)))))
 
 (ert-deftest emagent-tools-test-reconcile-reverts-clean-external ()
   "Unmodified buffer picks up external disk edits on read."
@@ -580,6 +631,96 @@ relative paths and does not cross directory boundaries on `*'."
       (delete-directory dir-a t)
       (delete-directory dir-b t))))
 
+
+
+
+
+(ert-deftest emagent-tools-test-delete-directory-preserves-buffers-on-failure ()
+  "delete_directory must refuse unsaved nested buffers; keep them intact."
+  (let* ((dir (make-temp-file "emagent-del-dir" t))
+         (sub (expand-file-name "sub" dir))
+         (path (expand-file-name "x.txt" sub))
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p nil)
+         buf)
+    (unwind-protect
+        (progn
+          (make-directory sub)
+          (write-region "disk\n" nil path nil 'quiet)
+          (setq buf (find-file-noselect path))
+          (with-current-buffer buf
+            (erase-buffer)
+            (insert "unsaved\n")
+            (set-buffer-modified-p t))
+          ;; Directory tick ignores nested edits; still must refuse.
+          (should-error (emagent-tool-delete-directory sub t)
+                        :type 'user-error)
+          (should (file-directory-p sub))
+          (should (buffer-live-p buf))
+          (should (buffer-modified-p buf))
+          (should (equal "unsaved\n"
+                         (with-current-buffer buf
+                           (buffer-substring-no-properties
+                            (point-min) (point-max)))))
+          ;; Clean buffer: non-recursive fails without killing; recursive works.
+          (with-current-buffer buf
+            (set-buffer-modified-p nil))
+          (should-error (emagent-tool-delete-directory sub nil))
+          (should (buffer-live-p buf))
+          (emagent-tool-delete-directory sub t)
+          (should-not (file-directory-p sub))
+          (should-not (buffer-live-p buf)))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (ignore-errors (delete-directory dir t)))))
+
+(ert-deftest emagent-tools-test-delete-kills-visiting-buffer ()
+  "fs delete must drop the visiting buffer so recreate is not stuck on ghost."
+  (let* ((dir (make-temp-file "emagent-del-buf" t))
+         (path (expand-file-name "x.txt" dir))
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p nil)
+         buf)
+    (unwind-protect
+        (progn
+          (write-region "hi\n" nil path nil 'quiet)
+          (setq buf (find-file-noselect path))
+          (should (buffer-live-p buf))
+          (emagent-tool-delete-file path)
+          (should-not (file-exists-p path))
+          (should-not (buffer-live-p buf)))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-write-rejects-directory ()
+  "Writing file content to a directory path must error with a clear message."
+  (let* ((dir (make-temp-file "emagent-write-dir" t))
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p nil))
+    (unwind-protect
+        (progn
+          (should-error (emagent-tools--write-file-content dir "nope\n"))
+          (let ((err (should-error (emagent-tool-write-file dir "nope\n"))))
+            (should (string-match-p "Cannot write file content to directory"
+                                    (error-message-string err)))))
+      (delete-directory dir t))))
+
+(ert-deftest emagent-tools-test-write-creates-nested-parents ()
+  "fs write must create missing parent directories before visiting the file."
+  (let* ((dir (make-temp-file "emagent-write-nested" t))
+         (path (expand-file-name "a/b/c.txt" dir))
+         (emagent-tools--project-directory dir)
+         (emagent-tools--acp-session-p nil)
+         (emagent-tools-show-written-buffer nil))
+    (unwind-protect
+        (progn
+          (should-not (file-directory-p (expand-file-name "a/b" dir)))
+          (emagent-tools--write-file-content path "hello\n")
+          (should (file-readable-p path))
+          (should (string= "hello\n"
+                           (with-temp-buffer
+                             (insert-file-contents path)
+                             (buffer-string)))))
+      (delete-directory dir t))))
 
 (provide 'emagent-tools-test)
 

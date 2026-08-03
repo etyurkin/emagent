@@ -1097,6 +1097,23 @@ When SHELL is non-nil, also suggest background execution."
       " (append ' > /tmp/out.txt 2>&1 & echo \"PID: $!\"') and read the"
       " output file later with fs op=read."))))
 
+(defun emagent-tools--kill-subprocess (proc)
+  "Kill PROC, its process group, and direct children when possible.
+
+Shell pipelines and `&' children often outlive `delete-process' on the
+top-level shell.  Signal the process group (negative PID), then
+`pkill -P' for pipe children under a shared group, then delete PROC."
+  (when (and proc (process-live-p proc))
+    (when-let ((pid (process-id proc)))
+      (let ((pid-str (number-to-string pid)))
+        (ignore-errors (signal-process (- pid) 'SIGTERM))
+        (ignore-errors (call-process "pkill" nil nil nil "-TERM" "-P" pid-str))
+        (sit-for 0.05)
+        (ignore-errors (signal-process (- pid) 'SIGKILL))
+        (ignore-errors (call-process "pkill" nil nil nil "-KILL" "-P" pid-str))))
+    (when (process-live-p proc)
+      (delete-process proc))))
+
 (defun emagent-tools--compile-timeout-message (secs buf proc)
   "Return a compile-timeout message for SECS; process left running in BUF.
 PROC may be nil when the compilation buffer has no live process."
@@ -1147,7 +1164,7 @@ For tests and internal callers only — MCP agent tools use the async path."
               (setq done t)
               (when timer (cancel-timer timer))
               (when (and proc (process-live-p proc))
-                (delete-process proc))
+                (emagent-tools--kill-subprocess proc))
               (when (buffer-live-p buf)
                 (kill-buffer buf))
               (funcall callback output is-error)))))
@@ -1159,15 +1176,13 @@ For tests and internal callers only — MCP agent tools use the async path."
              (setq done t)
              (when timer (cancel-timer timer) (setq timer nil))
              (when (and proc (process-live-p proc))
-               (delete-process proc))
+               (emagent-tools--kill-subprocess proc))
              (when (buffer-live-p buf)
                (kill-buffer buf))))
           (setq timer
                 (run-with-timer
                  timeout-secs nil
                  (lambda ()
-                   (when (and proc (process-live-p proc))
-                     (delete-process proc))
                    (funcall finish
                             (emagent-tools--timeout-message timeout-secs)
                             t))))
@@ -1196,7 +1211,7 @@ For tests and internal callers only — MCP agent tools use the async path."
               (setq done t)
               (when timer (cancel-timer timer))
               (when (and proc (process-live-p proc))
-                (delete-process proc))
+                (emagent-tools--kill-subprocess proc))
               (when (buffer-live-p buf)
                 (kill-buffer buf))
               (funcall callback output is-error)))))
@@ -1228,15 +1243,13 @@ For tests and internal callers only — MCP agent tools use the async path."
              (setq done t)
              (when timer (cancel-timer timer) (setq timer nil))
              (when (and proc (process-live-p proc))
-               (delete-process proc))
+               (emagent-tools--kill-subprocess proc))
              (when (buffer-live-p buf)
                (kill-buffer buf))))
           (setq timer
                 (run-with-timer
                  timeout-secs nil
                  (lambda ()
-                   (when (and proc (process-live-p proc))
-                     (delete-process proc))
                    (funcall finish
                             (emagent-tools--timeout-message timeout-secs)
                             t)))))
@@ -1257,7 +1270,7 @@ For tests and internal callers only — MCP agent tools use the async path."
               (setq done t)
               (when timer (cancel-timer timer))
               (when (and proc (process-live-p proc))
-                (delete-process proc))
+                (emagent-tools--kill-subprocess proc))
               (when (buffer-live-p buf)
                 (kill-buffer buf))
               (funcall callback output is-error)))))
@@ -1269,15 +1282,13 @@ For tests and internal callers only — MCP agent tools use the async path."
              (setq done t)
              (when timer (cancel-timer timer) (setq timer nil))
              (when (and proc (process-live-p proc))
-               (delete-process proc))
+               (emagent-tools--kill-subprocess proc))
              (when (buffer-live-p buf)
                (kill-buffer buf))))
           (setq timer
                 (run-with-timer
                  timeout-secs nil
                  (lambda ()
-                   (when (and proc (process-live-p proc))
-                     (delete-process proc))
                    (funcall finish
                             (emagent-tools--timeout-message timeout-secs t)
                             t))))
@@ -1285,17 +1296,25 @@ For tests and internal callers only — MCP agent tools use the async path."
            proc
            (lambda (p _event)
              (when (memq (process-status p) '(signal exit))
-               (let* ((output (with-current-buffer buf (buffer-string)))
-                      (status (process-exit-status p))
+               (let* ((status (process-exit-status p))
                       (is-error (or (eq status 'signal)
                                     (and (numberp status)
                                          (not (zerop status))))))
-                 (setq output
-                       (emagent-tools-compact-shell output command is-error))
-                 (when (and (not is-error) (> (length output) limit))
-                   (setq output (concat (substring output 0 limit)
-                                        "\n… (output truncated)")))
-                 (funcall finish output is-error))))))
+                 (if (not (buffer-live-p buf))
+                     (funcall finish
+                              (format
+                               "Command finished (exit %s); output buffer was killed"
+                               status)
+                              is-error)
+                   (let ((output (with-current-buffer buf (buffer-string))))
+                     (setq output
+                           (emagent-tools-compact-shell
+                            output command is-error))
+                     (when (and (not is-error) (> (length output) limit))
+                       (setq output
+                             (concat (substring output 0 limit)
+                                     "\n… (output truncated)")))
+                     (funcall finish output is-error))))))))
       (error (funcall finish (error-message-string start-err) t)))))
 
 (defun emagent-tools--run-process-to-string (program &rest args)
@@ -1389,7 +1408,8 @@ Inside a git repository this is what git considers the project:
 tracked plus untracked-but-not-ignored files (`git ls-files'), so
 build artifacts and other gitignored trees don't flood the result.
 Elsewhere it walks the tree, skipping
-`emagent-tools--list-files-ignored-dirs'."
+`emagent-tools--list-files-ignored-dirs'.
+Under ACP, append emagent-tick for PATH so delete_directory can CAS."
   (let* ((root (emagent-tools--root-directory path))
          (default-directory root)
          (result
@@ -1400,8 +1420,11 @@ Elsewhere it walks the tree, skipping
                                              "--cached" "--others"
                                              "--exclude-standard"))
                     (string-trim-right (buffer-string)))))
-              (emagent-tools--list-files-walk root))))
-    (emagent-tools-compact-file-list result)))
+              (emagent-tools--list-files-walk root)))
+         (compacted (emagent-tools-compact-file-list result)))
+    (if emagent-tools--acp-session-p
+        (emagent-tools--append-file-tick root compacted)
+      compacted)))
 
 (defun emagent-tools--glob-to-regexp (glob)
   "Convert a simple shell GLOB to a regexp."
@@ -1587,15 +1610,56 @@ Under ACP, append emagent-tick so the next mutate need not re-read."
 
 (defun emagent-tool-delete-file (path)
   "Delete PATH after user confirmation."
-  (let ((resolved (emagent-tools--root-directory path)))
+  (let* ((resolved (emagent-tools--root-directory path))
+         (buf (find-buffer-visiting resolved)))
     (delete-file resolved t)
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (set-buffer-modified-p nil))
+      (kill-buffer buf))
     (format "Deleted %s" resolved)))
+
+(defun emagent-tools--dirty-visiting-under (dir)
+  "Return buffers visiting files under DIR that have unsaved edits."
+  (let ((prefix (file-name-as-directory (expand-file-name dir)))
+        dirty)
+    (dolist (buf (buffer-list))
+      (when-let ((file (buffer-file-name buf)))
+        (when (and (string-prefix-p prefix (expand-file-name file))
+                   (buffer-live-p buf)
+                   (with-current-buffer buf (buffer-modified-p)))
+          (push buf dirty))))
+    (nreverse dirty)))
+
+(defun emagent-tools--kill-visiting-under (dir)
+  "Kill buffers visiting files under DIR without prompting.
+
+Call only after DIR was deleted (or emptied).  Callers must refuse
+unsaved visiting buffers before mutating the tree."
+  (let ((prefix (file-name-as-directory (expand-file-name dir))))
+    (dolist (buf (buffer-list))
+      (when-let ((file (buffer-file-name buf)))
+        (when (string-prefix-p prefix (expand-file-name file))
+          (with-current-buffer buf
+            (set-buffer-modified-p nil))
+          (kill-buffer buf))))))
 
 (defun emagent-tool-delete-directory (path &optional recursive)
   "Delete directory PATH after user confirmation.
-When RECURSIVE is non-nil, delete contents as well."
+When RECURSIVE is non-nil, delete contents as well.
+
+Refuses when a buffer visiting a file under PATH has unsaved edits:
+directory ticks do not hash nested file contents, so CAS alone cannot
+protect those buffers."
   (let ((resolved (emagent-tools--root-directory path)))
+    (when-let ((dirty (emagent-tools--dirty-visiting-under resolved)))
+      (user-error
+       (concat "stale_revision: unsaved edits in %s under %s; "
+               "save or revert them before delete_directory")
+       (mapconcat #'buffer-name dirty ", ")
+       resolved))
     (delete-directory resolved recursive)
+    (emagent-tools--kill-visiting-under resolved)
     (format "Deleted %s" resolved)))
 
 (defun emagent-tool-fetch-url-async (callback url &optional max-bytes)
@@ -1713,7 +1777,7 @@ Arguments: DIRECTORY."
               (setq done t)
               (when timer (cancel-timer timer))
               (when (and kill-proc proc (process-live-p proc))
-                (delete-process proc))
+                (emagent-tools--kill-subprocess proc))
               (funcall callback text is-error)))))
     (condition-case err
         (progn
@@ -1729,7 +1793,7 @@ Arguments: DIRECTORY."
              (setq done t)
              (when timer (cancel-timer timer) (setq timer nil))
              (when (and proc (process-live-p proc))
-               (delete-process proc))))
+               (emagent-tools--kill-subprocess proc))))
           (with-current-buffer buf
             (add-hook 'compilation-filter-hook
                       #'ansi-color-compilation-filter nil t))
@@ -1747,17 +1811,24 @@ Arguments: DIRECTORY."
             (set-process-sentinel
              proc
              (lambda (p _event)
-               (with-current-buffer buf
-                 (let* ((raw (buffer-substring-no-properties
-                              (point-min) (point-max)))
-                        (status (process-exit-status p))
-                        (is-error (not (zerop status)))
-                        (text (emagent-tools-compact-compile
-                               raw command is-error)))
-                   (when (> (length text) limit)
-                     (setq text (concat (substring text 0 limit)
-                                         "\n… (output truncated)")))
-                   (funcall finish text is-error t))))))
+               (let* ((status (process-exit-status p))
+                      (is-error (not (zerop status))))
+                 (if (not (buffer-live-p buf))
+                     (funcall finish
+                              (format
+                               "Compile finished (exit %d); output buffer was killed"
+                               status)
+                              is-error
+                              t)
+                   (with-current-buffer buf
+                     (let* ((raw (buffer-substring-no-properties
+                                  (point-min) (point-max)))
+                            (text (emagent-tools-compact-compile
+                                   raw command is-error)))
+                       (when (> (length text) limit)
+                         (setq text (concat (substring text 0 limit)
+                                             "\n… (output truncated)")))
+                       (funcall finish text is-error t))))))))
           (unless proc
             (with-current-buffer buf
               (let ((text (buffer-substring-no-properties

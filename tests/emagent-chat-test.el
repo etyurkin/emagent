@@ -1512,6 +1512,134 @@ no custom fontification), even on org heading lines (prompt and Thinking)."
         (emagent-chat--slash-model-apply)
         (should called)))))
 
+
+(ert-deftest emagent-chat-test-turn-model-restore-ignores-stale ()
+  "A newer transient switch bumps generation so a late restore does not apply."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (let* ((state (emagent-test--make-acp-state))
+           (applied nil)
+           (restore-success nil)
+           (newer-success nil))
+      (setq emagent-acp--session state
+            emagent-chat--turn-model "haiku"
+            emagent-chat--turn-model-base "sonnet"
+            emagent-chat--model-switch-generation 0)
+      (setf (emagent-acp-state-session-id state) "sess-restore")
+      (cl-letf (((symbol-function 'emagent-acp--session) (lambda () state))
+                ((symbol-function 'emagent-acp--model-config-option)
+                 (lambda (_s) '((:id . "model"))))
+                ((symbol-function 'emagent-acp--send-request)
+                 (lambda (&rest args)
+                   (let ((on-success (plist-get args :on-success)))
+                     (if restore-success
+                         (setq newer-success on-success)
+                       (setq restore-success on-success)))))
+                ((symbol-function 'emagent-acp--save-config-options)
+                 (lambda (&rest _) (setq applied 'saved)))
+                ((symbol-function 'emagent-acp--config-option-set-value)
+                 (lambda (&rest _) (setq applied 'set)))
+                ((symbol-function 'emagent-acp--progress) (lambda (&rest _) nil))
+                ((symbol-function 'emagent-acp--refresh-mode-line)
+                 (lambda (&rest _) nil)))
+        (emagent-acp--restore-turn-model)
+        (should restore-success)
+        (emagent-acp-set-model-transient "haiku" #'ignore)
+        (should newer-success)
+        (funcall restore-success '((configOptions . ())))
+        (should-not applied)
+        (funcall newer-success '((configOptions . ())))
+        (should applied)))))
+
+
+(ert-deftest emagent-chat-test-send-heals-session-model-drift ()
+  "With no /model override, send must switch ACP back to the session model."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (let* ((state (emagent-test--make-acp-state))
+           (switched nil)
+           (heal-spec 'unset)
+           (sent nil))
+      (setq emagent-acp--session state
+            emagent-chat--turn-model nil
+            emagent-chat-model "grok-4.5"
+            emagent-chat--send-token (cons t nil))
+      (setf (emagent-acp-state-config-options state)
+            '((( :id . "model") (:category . "model")
+               (:current-value . "composer-2.5")
+               (:options . (((:value . "grok-4.5") (:name . "Grok"))
+                            ((:value . "composer-2.5") (:name . "Composer")))))))
+      (cl-letf (((symbol-function 'emagent-acp-ensure-connected)
+                 (lambda (&rest args)
+                   (funcall (plist-get args :on-ready))))
+                ((symbol-function 'emagent-acp--session) (lambda () state))
+                ((symbol-function 'emagent-session-model)
+                 (lambda () "grok-4.5"))
+                ((symbol-function 'emagent-acp-set-model-transient)
+                 (lambda (model done &optional spec _fail)
+                   (setq switched model
+                         heal-spec spec)
+                   (when done (funcall done))))
+                ((symbol-function 'emagent-acp--send-prompt-safe)
+                 (lambda (&rest _) (setq sent t)))
+                ((symbol-function 'emagent-chat--send-active-p)
+                 (lambda (_token) t))
+                ((symbol-function 'emagent-acp--explore-prompt-p)
+                 (lambda (_text) nil)))
+        (emagent-acp-send "hello"))
+      (should (equal "grok-4.5" switched))
+      (should-not heal-spec)
+      (should sent)
+      (should-not emagent-chat--turn-model-base))))
+
+
+(ert-deftest emagent-chat-test-send-heals-unavailable-aborts ()
+  "Unadvertised session model drift must abort, not send on the stale ACP model."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (let* ((state (emagent-test--make-acp-state))
+           (sent nil)
+           (failed nil))
+      (setq emagent-acp--session state
+            emagent-chat--turn-model nil
+            emagent-chat--send-token (cons t nil))
+      (setf (emagent-acp-state-config-options state)
+            '((( :id . "model") (:category . "model")
+               (:current-value . "composer-2.5")
+               (:options . (((:value . "composer-2.5") (:name . "Composer")))))))
+      (cl-letf (((symbol-function 'emagent-acp-ensure-connected)
+                 (lambda (&rest args)
+                   (funcall (plist-get args :on-ready))))
+                ((symbol-function 'emagent-acp--session) (lambda () state))
+                ((symbol-function 'emagent-session-model)
+                 (lambda () "deprecated-model-xyz"))
+                ((symbol-function 'emagent-acp--send-prompt-safe)
+                 (lambda (&rest _) (setq sent t)))
+                ((symbol-function 'emagent-chat-fail-assistant)
+                 (lambda (msg) (setq failed msg)))
+                ((symbol-function 'emagent-chat--send-active-p)
+                 (lambda (_token) t))
+                ((symbol-function 'emagent-acp--explore-prompt-p)
+                 (lambda (_text) nil)))
+        (emagent-acp-send "hello"))
+      (should-not sent)
+      (should (string-match-p "deprecated-model-xyz" failed))
+      (should (string-match-p "aborted" failed)))))
+
+(ert-deftest emagent-chat-test-turn-model-restore-logs-failure ()
+  "Restore must pass ON-FAILURE so a failed switch is observable."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (setq emagent-chat--turn-model "haiku"
+          emagent-chat--turn-model-base "sonnet")
+    (let (fail-fn)
+      (cl-letf (((symbol-function 'emagent-acp-set-model-transient)
+                 (lambda (_m _cb &optional _spec on-failure)
+                   (setq fail-fn on-failure))))
+        (emagent-acp--restore-turn-model))
+      (should (functionp fail-fn))
+      (should-not emagent-chat--turn-model))))
+
 (ert-deftest emagent-chat-test-turn-model-restore-clears ()
   "A successful turn restores the base model and clears the override state."
   (with-temp-buffer

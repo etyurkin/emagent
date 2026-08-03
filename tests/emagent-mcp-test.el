@@ -160,6 +160,32 @@
                 (should (equal keys (list expected)))))))
       (ignore-errors (delete-directory tmpdir t)))))
 
+
+(ert-deftest emagent-mcp-test-external-root-prefers-selected ()
+  "External auto-root prefers the selected window's emagent project."
+  (let* ((dir-a (make-temp-file "emagent-root-a" t))
+         (dir-b (make-temp-file "emagent-root-b" t))
+         (buf-a (generate-new-buffer " *emagent-root-a*"))
+         (buf-b (generate-new-buffer " *emagent-root-b*"))
+         (emagent-mcp-external-root nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf-a
+            (delay-mode-hooks (emagent-mode))
+            (setq emagent-chat-project-directory dir-a))
+          (with-current-buffer buf-b
+            (delay-mode-hooks (emagent-mode))
+            (setq emagent-chat-project-directory dir-b))
+          (set-window-buffer (selected-window) buf-b)
+          (should (equal (file-name-as-directory
+                          (expand-file-name dir-b))
+                         (file-name-as-directory
+                          (emagent-mcp--external-root)))))
+      (when (buffer-live-p buf-a) (kill-buffer buf-a))
+      (when (buffer-live-p buf-b) (kill-buffer buf-b))
+      (ignore-errors (delete-directory dir-a t))
+      (ignore-errors (delete-directory dir-b t)))))
+
 (provide 'emagent-mcp-test)
 
 ;;; emagent-mcp-test.el ends here

@@ -1436,12 +1436,14 @@ Arguments: STATE, MODELS, SAVED-MODEL-ID."
 
 (cl-defun emagent-acp--config-option-set-model-id (&key state session-id model-id
                                                         on-success on-failure
-                                                        (persist t))
+                                                        (persist t) guard)
   "Switch the ACP session model to MODEL-ID.
 When PERSIST is non-nil (the default) also record MODEL-ID as the buffer model;
 pass nil for a transient per-turn switch that must not change the buffer model.
+Optional GUARD is a zero-arg predicate; when it returns nil the response is
+ignored (stale restore racing a newer switch).
 
-Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
+Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE, GUARD."
   (if-let ((model-option (emagent-acp--model-config-option state)))
       (emagent-acp--send-request
        :state state
@@ -1450,51 +1452,55 @@ Arguments: STATE, SESSION-ID, ON-SUCCESS, ON-FAILURE."
                  :config-id (map-elt model-option :id)
                  :value model-id)
        :on-success (lambda (response)
-                     (if (map-elt response 'configOptions)
-                         (emagent-acp--save-config-options state
-                                                           (map-elt response 'configOptions))
-                       (emagent-acp--config-option-set-value state
-                                                             (map-elt model-option :id)
-                                                             model-id))
-                     (when persist
-                       (emagent-acp--persist-model-id state model-id :spec nil))
-                     (unless persist (emagent-acp--refresh-mode-line state))
-                     (emagent-acp--progress
-                      state
-                      (format "model %s"
-                              (emagent-acp--config-option-value-name model-option model-id)))
-                     (when on-success (funcall on-success)))
+                     (when (or (null guard) (funcall guard))
+                       (if (map-elt response 'configOptions)
+                           (emagent-acp--save-config-options state
+                                                             (map-elt response 'configOptions))
+                         (emagent-acp--config-option-set-value state
+                                                               (map-elt model-option :id)
+                                                               model-id))
+                       (when persist
+                         (emagent-acp--persist-model-id state model-id :spec nil))
+                       (unless persist (emagent-acp--refresh-mode-line state))
+                       (emagent-acp--progress
+                        state
+                        (format "model %s"
+                                (emagent-acp--config-option-value-name model-option model-id)))
+                       (when on-success (funcall on-success))))
        :on-failure (lambda (error _raw)
-                     (emagent-acp--notify-user
-                      state
-                      (format "emagent: model %s not applied: %s"
-                              model-id
-                              (or (map-elt error 'message) (format "%s" error))))
-                     (when on-failure (funcall on-failure))))
+                     (when (or (null guard) (funcall guard))
+                       (emagent-acp--notify-user
+                        state
+                        (format "emagent: model %s not applied: %s"
+                                model-id
+                                (or (map-elt error 'message) (format "%s" error))))
+                       (when on-failure (funcall on-failure)))))
     (emagent-acp--send-request
      :state state
      :request (emagent-acp-make-session-set-model-request
                :session-id session-id
                :model-id model-id)
      :on-success (lambda (_response)
-                   (when persist
-                     (emagent-acp--persist-model-id state model-id :spec nil))
-                   (unless persist (emagent-acp--refresh-mode-line state))
-                   (emagent-acp--notify-user
-                    state
-                    (format "emagent: model %s" model-id))
-                   (when on-success (funcall on-success)))
+                   (when (or (null guard) (funcall guard))
+                     (when persist
+                       (emagent-acp--persist-model-id state model-id :spec nil))
+                     (unless persist (emagent-acp--refresh-mode-line state))
+                     (emagent-acp--notify-user
+                      state
+                      (format "emagent: model %s" model-id))
+                     (when on-success (funcall on-success))))
      :on-failure (lambda (error _raw)
-                   (emagent-acp--notify-user
-                    state
-                    (format "emagent: model %s not applied: %s"
-                            model-id
-                            (or (map-elt error 'message) (format "%s" error))))
-                   (when on-failure (funcall on-failure))))))
+                   (when (or (null guard) (funcall guard))
+                     (emagent-acp--notify-user
+                      state
+                      (format "emagent: model %s not applied: %s"
+                              model-id
+                              (or (map-elt error 'message) (format "%s" error))))
+                     (when on-failure (funcall on-failure)))))))
 
 (cl-defun emagent-acp--config-option-set-spec (&key state session-id spec
                                                     on-success on-failure
-                                                    (persist t))
+                                                    (persist t) guard)
   "Apply SPEC ((CONFIG-ID . VALUE) ...) via session/set_config_option.
 
 Sets the model config first, then remaining pairs.  Refreshes configOptions
@@ -1502,44 +1508,50 @@ after each response.  A failed model pair aborts via ON-FAILURE; a failed
 sibling pair (e.g. an effort level the selected model does not support) is
 reported, skipped, and omitted from the persisted spec.  When PERSIST is
 non-nil, stores the model value as the buffer model.
+Optional GUARD is a zero-arg predicate; when it returns nil further steps
+and the final ON-SUCCESS are skipped.
 
-Arguments: STATE, SESSION-ID, SPEC, ON-SUCCESS, ON-FAILURE."
+Arguments: STATE, SESSION-ID, SPEC, ON-SUCCESS, ON-FAILURE, GUARD."
   (let* ((spec (emagent-acp--order-apply-spec spec state))
          (model-value (emagent-acp--spec-model-value spec state))
          (model-config-id
           (let ((option (emagent-acp--model-config-option state)))
             (or (and option (map-elt option :id)) "model"))))
     (cl-labels
-        ((step (remaining applied)
-           (if (null remaining)
-               (let* ((applied (nreverse applied))
-                      (detail
-                       (mapconcat (lambda (pair)
-                                    (format "%s=%s" (car pair) (cdr pair)))
-                                  (cl-remove-if
-                                   (lambda (pair)
-                                     (equal (car pair) model-config-id))
-                                   applied)
-                                  ", ")))
-                 (when (and persist model-value)
-                   (emagent-acp--persist-model-id
-                    state model-value :spec applied))
-                 (unless persist (emagent-acp--refresh-mode-line state))
-                 (when model-value
-                   ;; State the full applied spec once: hidden picker cells
-                   ;; (fast=false, effort=default) are applied silently, so
-                   ;; this echo is where the user sees what a row set.
-                   (emagent-acp--progress
-                    state
-                    (format "model %s%s"
-                            (or (emagent-acp--config-option-value-name
-                                 (emagent-acp--model-config-option state)
-                                 model-value)
-                                model-value)
-                            (if (string-empty-p detail)
-                                ""
-                              (format " (%s)" detail)))))
-                 (when on-success (funcall on-success)))
+        ((alive () (or (null guard) (funcall guard)))
+         (step (remaining applied)
+           (cond
+            ((not (alive)) nil)
+            ((null remaining)
+             (let* ((applied (nreverse applied))
+                    (detail
+                     (mapconcat (lambda (pair)
+                                  (format "%s=%s" (car pair) (cdr pair)))
+                                (cl-remove-if
+                                 (lambda (pair)
+                                   (equal (car pair) model-config-id))
+                                 applied)
+                                ", ")))
+               (when (and persist model-value)
+                 (emagent-acp--persist-model-id
+                  state model-value :spec applied))
+               (unless persist (emagent-acp--refresh-mode-line state))
+               (when model-value
+                 ;; State the full applied spec once: hidden picker cells
+                 ;; (fast=false, effort=default) are applied silently, so
+                 ;; this echo is where the user sees what a row set.
+                 (emagent-acp--progress
+                  state
+                  (format "model %s%s"
+                          (or (emagent-acp--config-option-value-name
+                               (emagent-acp--model-config-option state)
+                               model-value)
+                              model-value)
+                          (if (string-empty-p detail)
+                              ""
+                            (format " (%s)" detail)))))
+               (when on-success (funcall on-success))))
+            (t
              (pcase-let ((`(,config-id . ,value) (car remaining)))
                (let ((model-pair-p (equal config-id model-config-id)))
                  (emagent-acp--send-request
@@ -1550,35 +1562,41 @@ Arguments: STATE, SESSION-ID, SPEC, ON-SUCCESS, ON-FAILURE."
                             :value value)
                   :on-success
                   (lambda (response)
-                    (if (map-elt response 'configOptions)
-                        (emagent-acp--save-config-options
-                         state (map-elt response 'configOptions))
-                      (emagent-acp--config-option-set-value
-                       state config-id value))
-                    (step (cdr remaining) (cons (car remaining) applied)))
+                    (when (alive)
+                      (if (map-elt response 'configOptions)
+                          (emagent-acp--save-config-options
+                           state (map-elt response 'configOptions))
+                        (emagent-acp--config-option-set-value
+                         state config-id value))
+                      (step (cdr remaining) (cons (car remaining) applied))))
                   :on-failure
                   (lambda (error _raw)
-                    (emagent-acp--notify-user
-                     state
-                     (format "emagent: config %s=%s not applied: %s"
-                             config-id value
-                             (or (map-elt error 'message)
-                                 (format "%s" error))))
-                    (if model-pair-p
-                        (when on-failure (funcall on-failure))
-                      (step (cdr remaining) applied)))))))))
-      (if (null spec)
-          (when on-success (funcall on-success))
-        (if (emagent-acp--model-config-option state)
-            (step spec nil)
-          ;; No configOptions model entry: fall back to session/set_model.
-          (emagent-acp--config-option-set-model-id
-           :state state
-           :session-id session-id
-           :model-id (or model-value (cdar spec))
-           :persist persist
-           :on-success on-success
-           :on-failure on-failure))))))
+                    (when (alive)
+                      (emagent-acp--notify-user
+                       state
+                       (format "emagent: config %s=%s not applied: %s"
+                               config-id value
+                               (or (map-elt error 'message)
+                                   (format "%s" error))))
+                      (if model-pair-p
+                          (when on-failure (funcall on-failure))
+                        (step (cdr remaining) applied)))))))))))
+      (cond
+       ((not (alive)) nil)
+       ((null spec)
+        (when on-success (funcall on-success)))
+       ((emagent-acp--model-config-option state)
+        (step spec nil))
+       (t
+        ;; No configOptions model entry: fall back to session/set_model.
+        (emagent-acp--config-option-set-model-id
+         :state state
+         :session-id session-id
+         :model-id (or model-value (cdar spec))
+         :persist persist
+         :guard guard
+         :on-success on-success
+         :on-failure on-failure))))))
 
 (defun emagent-acp--save-session-modes (state response)
   "Store available modes and current mode id from session RESPONSE in STATE."

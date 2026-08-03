@@ -69,19 +69,30 @@ Ignored for unsaved (scratch) buffers.  `/archive force' skips this gate."
      (file-name-directory file))))
 
 (defun emagent-archive--next-chunk-path (&optional session-file)
-  "Return the path of the next unused archive chunk for SESSION-FILE."
+  "Return and exclusively claim the next archive chunk path for SESSION-FILE.
+
+Creates an empty placeholder with write-region MUSTBENEW=`excl'
+so two Emacs instances cannot both pick the same `001.org'.  The
+caller overwrites the placeholder via `emagent-archive--write-chunk'."
   (when-let ((dir (emagent-archive--dir session-file)))
+    (make-directory dir t)
     (let ((n 1)
-          path)
-      (while (progn
-               (setq path (expand-file-name (format "%03d.org" n) dir))
-               (file-exists-p path))
+          path
+          claimed)
+      (while (and (not claimed) (< n 10000))
+        (setq path (expand-file-name (format "%03d.org" n) dir))
+        (condition-case nil
+            (progn
+              (write-region "" nil path nil 'silent nil 'excl)
+              (setq claimed path))
+          (file-already-exists nil))
         (setq n (1+ n)))
-      path)))
+      (or claimed
+          (error "emagent: could not claim an archive chunk under %s" dir)))))
 
 (defun emagent-archive--buffer-bytes ()
   "Return the current buffer size in bytes."
-  (buffer-size))
+  (string-bytes (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun emagent-archive--over-threshold-p ()
   "Return non-nil when the buffer exceeds `emagent-archive-threshold-bytes'."
@@ -239,7 +250,10 @@ Ignored for unsaved (scratch) buffers.  `/archive force' skips this gate."
 (defun emagent-archive--execute (plan)
   "Apply PLAN by writing its body into the next archive chunk.
 
-Return the chunk path."
+Return the chunk path.  Saves the session file after a successful move so
+a quit/restart cannot reload the pre-archive transcript.  If the save
+fails, undo the buffer mutation and delete the chunk so history is not
+duplicated."
   (let* ((session (emagent-archive--session-file))
          (chunk (and session (emagent-archive--next-chunk-path session)))
          (beg (plist-get plan :beg))
@@ -247,23 +261,36 @@ Return the chunk path."
          (body (plist-get plan :body))
          (turns (plist-get plan :turns))
          (blurb (plist-get plan :blurb))
-         (inhibit-read-only t))
+         (inhibit-read-only t)
+         (ok nil))
     (unless (and session chunk body)
       (error "Missing session file or plan body"))
     (when (fboundp 'emagent-chat--writable)
       (emagent-chat--writable))
-    (emagent-archive--write-chunk chunk body session)
-    (delete-region beg end)
-    (let ((rel (emagent-archive--relative-chunk chunk session)))
-      (emagent-archive--append-toc rel blurb)
-      (emagent-archive--insert-hint
-       (format
-        "/Moved %d turns out of this buffer → ~%s~ (full text; not deleted)./"
-        turns
-        (abbreviate-file-name chunk)))
-      (message "emagent: moved %d turns → %s" turns
-               (abbreviate-file-name chunk))
-      chunk)))
+    (unwind-protect
+        (progn
+          (emagent-archive--write-chunk chunk body session)
+          (atomic-change-group
+            (delete-region beg end)
+            (let ((rel (emagent-archive--relative-chunk chunk session)))
+              (emagent-archive--append-toc rel blurb)
+              (emagent-archive--insert-hint
+               (format
+                "/Moved %d turns out of this buffer → ~%s~ (full text; not deleted)./"
+                turns
+                (abbreviate-file-name chunk)))
+              (when buffer-file-name
+                (condition-case save-err
+                    (basic-save-buffer)
+                  (error
+                   (error "emagent: archive save failed: %s"
+                          (error-message-string save-err)))))
+              (setq ok t)
+              (message "emagent: moved %d turns → %s" turns
+                       (abbreviate-file-name chunk))
+              chunk)))
+      (unless ok
+        (ignore-errors (delete-file chunk))))))
 
 (defun emagent-archive-try (&optional force)
   "Archive older conversation history when appropriate.
@@ -286,13 +313,23 @@ buffers and empty moves (never creates an empty chunk file)."
         (emagent-archive--execute plan))))))
 
 (defun emagent-archive-on-turn-end ()
-  "After a finished response: auto-roll or hint to save when large."
+  "After a finished response: auto-roll or hint to save when large.
+
+Errors from auto-archive must not escape: callers finalize the response
+and insert the next prompt stub after this runs."
   (cond
    ((null buffer-file-name)
     (emagent-archive-maybe-hint-unsaved))
    ((and emagent-archive-auto
          (emagent-archive--over-threshold-p))
-    (emagent-archive-try nil))))
+    (condition-case err
+        (emagent-archive-try nil)
+      (error
+       (let ((msg (error-message-string err)))
+         (when (fboundp 'emagent-log)
+           (emagent-log "emagent: auto-archive failed: %s" msg))
+         (message "emagent: auto-archive failed: %s" msg)
+         nil))))))
 
 (defun emagent-archive-command-p (text)
   "Return non-nil when TEXT is a `/archive' client command."

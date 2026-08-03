@@ -888,6 +888,28 @@ Continuation uses `run-at-time'; pump those timers iteratively."
     (should-not (emagent-acp-state-wakeup-request state))
     (should-not (emagent-acp-state-wakeup-timer state))))
 
+(ert-deftest emagent-acp-session-test-abort-prompt-bumps-generation ()
+  "In-flight abort must bump generation and reset tool-resolve like finalize."
+  (let* ((state (emagent-acp--state-create))
+         (reset-called nil)
+         (gen-before nil))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-prompt-generation state) 7)
+    (setq gen-before (emagent-acp-state-prompt-generation state))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--chat-buffer) (lambda (_) nil))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--flush-thought-buffer) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--clear-prompt-watchdog) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--cancel-prompt-render) (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--provider-reset-tool-resolve)
+          (lambda (&rest _) (setq reset-called t))))
+      (emagent-acp--abort-prompt state "boom"))
+    (should reset-called)
+    (should (= (1+ gen-before)
+               (emagent-acp-state-prompt-generation state)))
+    (should-not (emagent-acp-state-busy state))))
+
 (ert-deftest emagent-acp-session-test-wakeup-interrupt-clears ()
   "Finalize-in-flight (interrupt) cancels a pending or armed wakeup."
   (let ((state (emagent-acp--state-create))
@@ -959,6 +981,71 @@ diffing yields nothing and the display degraded to an all-`+' preview."
             (write-region content nil file nil 'quiet)
             ;; Post-write re-render: same diff, from the cache.
             (should (equal diff (emagent-acp--tool-call-edit-diff-string file data id)))))
+      (delete-directory dir t))))
+
+
+
+(ert-deftest emagent-acp-session-test-apply-edit-overlapping-newline-idempotent ()
+  "Append of doubled newline must not re-apply when already present."
+  (let* ((old "\n")
+         (new "\n\n")
+         (text "some text\n\n"))
+    (should (emagent-acp--append-edit-already-applied-p text old new))
+    (should (equal text (emagent-acp--tool-call-apply-edit text old new))))
+  (let* ((old "X\n")
+         (new "X\nX\n")
+         (text "X\nX\n"))
+    (should (emagent-acp--append-edit-already-applied-p text old new))
+    (should (equal text (emagent-acp--tool-call-apply-edit text old new)))))
+
+(ert-deftest emagent-acp-session-test-apply-edit-empty-old-idempotent ()
+  "Empty-old create/append must not duplicate on post-write re-apply."
+  (let* ((once (emagent-acp--tool-call-apply-edit "hello" "" "\nworld"))
+         (twice (emagent-acp--tool-call-apply-edit once "" "\nworld")))
+    (should (equal "hello\nworld" once))
+    (should (equal once twice))))
+
+(ert-deftest emagent-acp-session-test-apply-edit-append-not-fooled-by-elsewhere ()
+  "Append short-circuit must not skip when NEW exists elsewhere but OLD remains."
+  (let ((out (emagent-acp--tool-call-apply-edit "xy\nx" "x" "xy")))
+    ;; Must apply (not no-op). replace-all yields xyy\nxy.
+    (should-not (equal "xy\nx" out))
+    (should (equal "xyy\nxy" out))))
+
+(ert-deftest emagent-acp-session-test-edit-diff-append-no-duplicate-post-write ()
+  "Append-style Edit re-render must not invent a duplicate line.
+Claude-style edits use old_string as a prefix of new_string.  After the
+write, re-applying the edit onto the already-written file would duplicate
+the appended region and overwrite the good cached pre-write diff."
+  (skip-unless (executable-find "diff"))
+  (let* ((dir (make-temp-file "emagent-diff-append" t))
+         (file (expand-file-name "MEMORY.md" dir))
+         (old "- Quirks\n")
+         (new "- Quirks\n- snake\n")
+         (data `((edits . (((old_string . ,old)
+                            (new_string . ,new))))))
+         (id "toolu_append_snake")
+         (emagent-acp--edit-diff-cache (make-hash-table :test 'equal))
+         (emagent-acp--edit-diff-cache-order nil)
+         (emagent-tools--project-directory dir))
+    (unwind-protect
+        (progn
+          (write-region old nil file nil 'quiet)
+          (let ((pre (emagent-acp--tool-call-edit-diff-string file data id)))
+            (should pre)
+            (should (string-match-p "^\\+- snake" pre))
+            (should-not (string-match-p
+                         "\\+- snake\n\\+- snake" pre))
+            ;; Write lands; file equals proposed content.
+            (write-region new nil file nil 'quiet)
+            ;; Apply-edit itself must be idempotent for this shape.
+            (should (equal new
+                           (emagent-acp--tool-call-apply-edit new old new)))
+            ;; Post-write re-render: same diff, no duplicate snake line.
+            (let ((post (emagent-acp--tool-call-edit-diff-string file data id)))
+              (should (equal pre post))
+              (should-not (string-match-p
+                           "\\+- snake\n\\+- snake" post)))))
       (delete-directory dir t))))
 
 (ert-deftest emagent-acp-session-test-edit-diff-reverse-reconstruction ()
@@ -2479,6 +2566,23 @@ project directory rather than opening up unconfined access."
                              (modeId . "agent")))))))
     (should (string= "agent" (emagent-acp-state-session-mode-id state)))))
 
+
+(ert-deftest emagent-acp-session-test-edit-diff-cache-session-scoped ()
+  "Clearing one session's edit-diff cache must not drop another session's."
+  (let* ((emagent-acp--edit-diff-cache (make-hash-table :test 'equal))
+         (emagent-acp--edit-diff-cache-order nil)
+         (state-a (emagent-test--make-acp-state))
+         (state-b (emagent-test--make-acp-state)))
+    (setf (emagent-acp-state-session-id state-a) "sess-a")
+    (setf (emagent-acp-state-session-id state-b) "sess-b")
+    (emagent-acp--edit-diff-cache-put "tool1" "diff-a" state-a)
+    (emagent-acp--edit-diff-cache-put "tool1" "diff-b" state-b)
+    (emagent-acp--edit-diff-cache-clear state-a)
+    (should-not (gethash (emagent-acp--edit-diff-cache-key "tool1" state-a)
+                         emagent-acp--edit-diff-cache))
+    (should (equal "diff-b"
+                   (gethash (emagent-acp--edit-diff-cache-key "tool1" state-b)
+                            emagent-acp--edit-diff-cache)))))
 
 (ert-deftest emagent-acp-session-test-turn-begin-clears-edit-diff-cache ()
   "A new turn drops cached edit diffs; the transcript already has them."

@@ -80,7 +80,8 @@ are false."
              (description . ,description)
              (enum . ,(apply #'vector ops))))))
 
-(defconst emagent-mcp--fs-mutating-ops '("write" "edit" "undo")
+(defconst emagent-mcp--fs-mutating-ops
+  '("write" "edit" "undo" "delete" "delete_directory")
   "Fs ops that require expected_tick under ACP.")
 
 (defconst emagent-mcp--structural-ops
@@ -156,7 +157,8 @@ so tools still work against a live Emacs without a registered chat session."
 (defcustom emagent-mcp-external-root nil
   "Project root for `emagent-mcp-external-token' sessions.
 
-Nil means: first live emagent chat project, else `default-directory'."
+Nil means: selected emagent chat project, else most-recently-used
+emagent chat, else `default-directory'."
   :type '(choice (const :tag "Auto" nil) (directory :tag "Root"))
   :group 'emagent-mcp)
 
@@ -238,25 +240,65 @@ FN is a function of one argument, the reply callback.  The object is
   "Return non-nil when continuation OBJ has been cancelled."
   (plist-get (emagent-mcp-cont-plist obj) :cancelled))
 
+(defun emagent-mcp-cont-replied-p (obj)
+  "Return non-nil when continuation OBJ has already replied."
+  (plist-get (emagent-mcp-cont-plist obj) :replied))
+
+(defun emagent-mcp-cont-finish (obj)
+  "Mark OBJ as replied: detach tracking without cancelling work.
+
+Idempotent.  Runs `:detach-functions' only (inflight list cleanup),
+clears `:cancel-notify' and `:cancel-functions' without invoking them so
+a successful reply (including compile MCP-timeout) cannot kill still-
+running work.  Returns OBJ."
+  (unless (or (emagent-mcp-cont-cancelled-p obj)
+              (emagent-mcp-cont-replied-p obj))
+    (let* ((plist (copy-sequence (emagent-mcp-cont-plist obj)))
+           (detach (plist-get plist :detach-functions)))
+      (setq plist (plist-put plist :replied t))
+      (setq plist (plist-put plist :cancel-notify nil))
+      (setq plist (plist-put plist :cancel-functions nil))
+      (setq plist (plist-put plist :detach-functions nil))
+      (setcdr (cdr obj) plist)
+      (dolist (fn detach)
+        (ignore-errors (funcall fn)))))
+  obj)
+
 (defun emagent-mcp-cont-add-cancel-function (obj fn)
   "Append cancel function FN to continuation OBJ.  Return OBJ."
   (let ((fns (plist-get (emagent-mcp-cont-plist obj) :cancel-functions)))
     (emagent-mcp-cont-put obj :cancel-functions (append fns (list fn))))
   obj)
 
+(defun emagent-mcp-cont-add-detach-function (obj fn)
+  "Append detach function FN to continuation OBJ.  Return OBJ.
+
+Detach functions run on successful reply and on cancel; they must only
+remove CONT from tracking lists, never kill processes."
+  (let ((fns (plist-get (emagent-mcp-cont-plist obj) :detach-functions)))
+    (emagent-mcp-cont-put obj :detach-functions (append fns (list fn))))
+  obj)
+
 (defun emagent-mcp-cont-cancel (obj)
   "Cancel continuation OBJ: kill attached work and ignore later replies.
 
-Idempotent.  Runs `:cancel-functions', then a one-shot `:cancel-notify'
-when present.  Returns OBJ."
-  (unless (emagent-mcp-cont-cancelled-p obj)
+Idempotent.  No-op after a successful reply.  Runs `:cancel-functions'
+then `:detach-functions', then a one-shot `:cancel-notify' when present.
+Returns OBJ."
+  (unless (or (emagent-mcp-cont-cancelled-p obj)
+              (emagent-mcp-cont-replied-p obj))
     (let* ((plist (copy-sequence (emagent-mcp-cont-plist obj)))
-           (fns (plist-get plist :cancel-functions))
+           (cancel (plist-get plist :cancel-functions))
+           (detach (plist-get plist :detach-functions))
            (notify (plist-get plist :cancel-notify)))
       (setq plist (plist-put plist :cancelled t))
       (setq plist (plist-put plist :cancel-notify nil))
+      (setq plist (plist-put plist :cancel-functions nil))
+      (setq plist (plist-put plist :detach-functions nil))
       (setcdr (cdr obj) plist)
-      (dolist (fn fns)
+      (dolist (fn cancel)
+        (ignore-errors (funcall fn)))
+      (dolist (fn detach)
         (ignore-errors (funcall fn)))
       (when notify
         (ignore-errors (funcall notify)))))
@@ -290,7 +332,7 @@ agent-facing callback runs.  Ignored when the continuation is cancelled.")
   (when-let ((proc emagent-mcp--current-client-proc))
     (process-put proc 'emagent-mcp-inflight-conts
                  (cons cont (process-get proc 'emagent-mcp-inflight-conts)))
-    (emagent-mcp-cont-add-cancel-function
+    (emagent-mcp-cont-add-detach-function
      cont
      (lambda ()
        (when (processp proc)
@@ -301,7 +343,7 @@ agent-facing callback runs.  Ignored when the continuation is cancelled.")
     (puthash token
              (cons cont (gethash token emagent-mcp--session-inflight))
              emagent-mcp--session-inflight)
-    (emagent-mcp-cont-add-cancel-function
+    (emagent-mcp-cont-add-detach-function
      cont
      (lambda ()
        (let ((list (delq cont (gethash token emagent-mcp--session-inflight))))
@@ -841,8 +883,9 @@ Handlers may return a value or an `emagent-mcp-cont' continuation."
   :required '("op")
   "Emacs FS. op=read|write|edit|undo|delete|delete_directory|list|find.
 
-Write/edit/undo need expected_tick from fs op=read. Prefer edit for
-targeted changes; write replaces the whole file. Lisp files use structural."
+Write/edit/undo/delete/delete_directory need expected_tick from fs
+op=read. Prefer edit for targeted changes; write replaces the whole
+file. Lisp files use structural."
   (args)
   (emagent-mcp--fs args))
 
@@ -1244,27 +1287,36 @@ Async replies restore the session root/tick bindings captured here."
                ctx
                (lambda (result &optional is-error)
                  (when (or (null cont-cell)
-                           (not (emagent-mcp-cont-cancelled-p cont-cell)))
+                           (and (not (emagent-mcp-cont-cancelled-p cont-cell))
+                                (not (emagent-mcp-cont-replied-p cont-cell))))
                    (when cont-cell
+                     (emagent-mcp-cont-finish cont-cell)
                      (run-hook-with-args 'emagent-mcp-cont-reply-functions
                                          cont-cell result is-error))
                    (funcall callback
                             (emagent-mcp--string-result result)
                             is-error))))))
-        (emagent-mcp--maybe-guard-file-tick name args)
         (condition-case err
-            (let ((result (funcall handler args)))
-              (if (emagent-mcp-cont-p result)
-                  (progn
-                    (setq cont-cell result)
-                    (emagent-mcp-cont-put
-                     result :cancel-notify
-                     (lambda () (funcall callback "Cancelled" t)))
-                    (emagent-mcp--track-inflight-cont result)
-                    (let ((emagent-mcp--current-cont result))
-                      (funcall (emagent-mcp-cont-function result) reply)))
-                (funcall reply result nil)))
-          (error (funcall callback (error-message-string err) t))))))))
+            (progn
+              (emagent-mcp--maybe-guard-file-tick name args)
+              (let ((result (funcall handler args)))
+                (if (emagent-mcp-cont-p result)
+                    (progn
+                      (setq cont-cell result)
+                      (emagent-mcp-cont-put
+                       result :cancel-notify
+                       (lambda () (funcall callback "Cancelled" t)))
+                      (emagent-mcp--track-inflight-cont result)
+                      (let ((emagent-mcp--current-cont result))
+                        (funcall (emagent-mcp-cont-function result) reply)))
+                  (funcall reply result nil))))
+          (error
+           (when cont-cell
+             ;; Starter threw after track: drop notify to avoid a second
+             ;; callback, then cancel so inflight/detach cleanup still runs.
+             (emagent-mcp-cont-put cont-cell :cancel-notify nil)
+             (emagent-mcp-cont-cancel cont-cell))
+           (funcall callback (error-message-string err) t))))))))
 
 (defun emagent-mcp--json-encode (object)
   "Serialize OBJECT to a JSON string."
@@ -1309,20 +1361,34 @@ A nil ID is serialized as JSON null (not an empty object)."
            (string-match-p "EMAGENT_SESSION_TOKEN" token))))
 
 (defun emagent-mcp--external-root ()
-  "Return the project root for the durable external MCP session."
+  "Return the project root for the durable external MCP session.
+
+Resolution order:
+1. `emagent-mcp-external-root' when set
+2. the selected window's emagent buffer project (if any)
+3. the most recently used emagent chat project (`buffer-list' order)
+4. `default-directory'"
   (or (and emagent-mcp-external-root
            (expand-file-name emagent-mcp-external-root))
+      (emagent-mcp--root-from-buffer
+       (window-buffer (selected-window)))
       (cl-loop for buf in (buffer-list)
-               for root = (with-current-buffer buf
-                            (and (bound-and-true-p emagent-mode)
-                                 (or (and (boundp 'emagent-chat-project-directory)
-                                          emagent-chat-project-directory)
-                                     (and (fboundp 'emagent-chat--session-directory)
-                                          (ignore-errors
-                                            (emagent-chat--session-directory))))))
-               when (and root (file-directory-p root))
-               return (expand-file-name root))
+               for root = (emagent-mcp--root-from-buffer buf)
+               when root return root)
       (expand-file-name default-directory)))
+
+(defun emagent-mcp--root-from-buffer (buf)
+  "Return BUF's emagent project root when it is an emagent chat, else nil."
+  (when (buffer-live-p buf)
+    (with-current-buffer buf
+      (when (derived-mode-p 'emagent-mode)
+        (let ((root (or (and (fboundp 'emagent-session-project-directory)
+                             (emagent-session-project-directory))
+                        (and (fboundp 'emagent-chat--session-directory)
+                             (ignore-errors
+                               (emagent-chat--session-directory))))))
+          (and root (file-directory-p root)
+               (expand-file-name root)))))))
 
 (defun emagent-mcp--install-external-session ()
   "Register or refresh the durable external MCP session entry."
@@ -5032,6 +5098,10 @@ Set when `/model' picks a composed variant; consumed by `emagent-acp-send'.")
 
 (defvar-local emagent-chat--turn-config-base nil
   "Snapshot of config values to restore after a per-turn `/model' override.")
+
+(defvar-local emagent-chat--model-switch-generation 0
+  "Bumped on each transient model switch; stale RPC applies are ignored.")
+
 
 (defvar-local emagent-chat-slug nil
   "Filesystem slug for the current emagent buffer.")
