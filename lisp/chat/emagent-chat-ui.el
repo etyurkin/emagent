@@ -1681,6 +1681,8 @@ Called once the ACP finish render has settled (no newer assistant text)."
   (emagent-chat--maybe-insert-compact-hint)
   (when (fboundp 'emagent-archive-on-turn-end)
     (emagent-archive-on-turn-end))
+  (when (fboundp 'emagent-session-maybe-autosave)
+    (emagent-session-maybe-autosave))
   (when emagent-chat--pending-hide-reasoning
     (emagent-chat--hide-reasoning-deferred
      emagent-chat--pending-hide-reasoning)

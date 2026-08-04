@@ -314,9 +314,122 @@ Layout:
 - global.json — fingerprints from \"Allow always\"
 - sessions/SESSION.json — per-ACP-session fingerprints and allow-all flag
 - projects/HASH.json — per-project MCP tools and permission fingerprints
-- projects/HASH.notes.org — per-project durable notes (outside the repo)"
+- projects/HASH.notes.org — per-project durable notes (outside the repo)
+- scratch/*.org — default transcripts for pathless session buffers
+  \(see `emagent-session-scratch-directory')"
   :type 'directory
   :group 'emagent-permissions)
+
+(defcustom emagent-session-autosave t
+  "When non-nil, persist emagent session files automatically.
+
+Idle saves use a buffer-local timer that calls `save-buffer' on the
+visited file.  Each finished turn also saves once the response closes.
+Pathless scratch buffers get a file under
+`emagent-session-scratch-directory' on first send."
+  :type 'boolean
+  :group 'emagent)
+
+(defcustom emagent-session-autosave-idle-seconds 30
+  "Idle seconds before autosaving a modified file-backed session buffer."
+  :type 'integer
+  :group 'emagent)
+
+(defcustom emagent-session-scratch-directory
+  (expand-file-name "scratch" emagent-permissions-directory)
+  "Directory for Org transcripts assigned to pathless emagent buffers.
+
+Distinct from `emagent-permissions-directory'/sessions/, which holds
+permission JSON — not chat files."
+  :type 'directory
+  :group 'emagent)
+
+(defvar-local emagent-session--autosave-timer nil
+  "Idle timer for `emagent-session-maybe-autosave', or nil.")
+
+(defun emagent-session-disable-autosave ()
+  "Cancel the buffer-local session autosave idle timer."
+  (when emagent-session--autosave-timer
+    (cancel-timer emagent-session--autosave-timer)
+    (setq emagent-session--autosave-timer nil)))
+
+(defun emagent-session-maybe-autosave ()
+  "Silently save the current session file when modified and allowed.
+
+No-op without variable `buffer-file-name', when unmodified, or when
+`emagent-session-autosave' is nil.  Errors are logged and never
+re-signaled so turn finalization can continue."
+  (when (and emagent-session-autosave
+             buffer-file-name
+             (buffer-modified-p))
+    (condition-case err
+        (let ((save-silently t))
+          (basic-save-buffer))
+      (error
+       (when (fboundp 'emagent-log)
+         (emagent-log "session autosave failed: %s"
+                      (error-message-string err)))))))
+
+(defun emagent-session-enable-autosave ()
+  "Arm idle autosave for the current file-backed emagent buffer."
+  (emagent-session-disable-autosave)
+  (when (and emagent-session-autosave buffer-file-name)
+    (let ((buf (current-buffer))
+          (secs (max 1 (or emagent-session-autosave-idle-seconds 30))))
+      (setq emagent-session--autosave-timer
+            (run-with-idle-timer
+             secs t
+             (lambda ()
+               (when (buffer-live-p buf)
+                 (with-current-buffer buf
+                   (emagent-session-maybe-autosave))))))
+      (add-hook 'kill-buffer-hook #'emagent-session-disable-autosave nil t))))
+
+(defun emagent-session--scratch-basename ()
+  "Return a timestamped Org basename for a new scratch session file."
+  (let* ((proj (emagent-session-project-directory))
+         (raw (and proj (file-name-nondirectory
+                         (directory-file-name proj))))
+         (slug (emagent-permissions--safe-filename
+                (if (and raw (not (string-empty-p raw))) raw "scratch")))
+         (stamp (format-time-string "%Y-%m-%dT%H-%M-%S")))
+    (format "%s-%s.org" stamp slug)))
+
+(defun emagent-session--unique-scratch-path ()
+  "Return a new absolute path under `emagent-session-scratch-directory'."
+  (let* ((dir emagent-session-scratch-directory)
+         (base (emagent-session--scratch-basename))
+         (path (progn (make-directory dir t)
+                      (expand-file-name base dir)))
+         (n 0))
+    (while (file-exists-p path)
+      (setq n (1+ n)
+            path (expand-file-name
+                  (format "%s-%d.org"
+                          (file-name-sans-extension base) n)
+                  dir)))
+    path))
+
+(defun emagent-session-ensure-scratch-file ()
+  "Assign `emagent-session-scratch-directory' when the buffer is pathless.
+
+Called on first agent send.  No-op when autosave is off or a visited
+file already exists.  Returns the new path, or nil."
+  (when (and emagent-session-autosave (null buffer-file-name))
+    (let ((path (emagent-session--unique-scratch-path)))
+      ;; ALONG-WITH-FILE avoids confirmations; keep emagent-mode intact.
+      (set-visited-file-name path t t)
+      (when (fboundp 'emagent-chat--ensure-mode-cookie)
+        (emagent-chat--ensure-mode-cookie))
+      (condition-case err
+          (let ((save-silently t))
+            (basic-save-buffer))
+        (error
+         (when (fboundp 'emagent-log)
+           (emagent-log "scratch initial save failed: %s"
+                        (error-message-string err)))))
+      (emagent-session-enable-autosave)
+      path)))
 
 (defvar emagent-permissions--cache (make-hash-table :test 'equal)
   "Cache of (FILE-MTIME . DATA) keyed by absolute file path.")
