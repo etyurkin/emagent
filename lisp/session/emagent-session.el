@@ -414,11 +414,18 @@ re-signaled so turn finalization can continue."
   "Assign `emagent-session-scratch-directory' when the buffer is pathless.
 
 Called on first agent send.  No-op when autosave is off or a visited
-file already exists.  Returns the new path, or nil."
+file already exists.  Returns the new path, or nil.
+Restores `default-directory' to the session project after assigning the
+visited file so tool cwd and `M-x emagent' stay on the project, not
+under the scratch directory."
   (when (and emagent-session-autosave (null buffer-file-name))
-    (let ((path (emagent-session--unique-scratch-path)))
+    (let ((path (emagent-session--unique-scratch-path))
+          (project (emagent-session-project-directory)))
       ;; ALONG-WITH-FILE avoids confirmations; keep emagent-mode intact.
       (set-visited-file-name path t t)
+      (when project
+        (setq-local default-directory
+                    (file-name-as-directory (expand-file-name project))))
       (when (fboundp 'emagent-chat--ensure-mode-cookie)
         (emagent-chat--ensure-mode-cookie))
       (condition-case err

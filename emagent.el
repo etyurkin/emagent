@@ -431,7 +431,9 @@ When MODEL-ID is non-nil, persist it before connecting.
 When `emagent--pending-config-spec' is set, also write
 #+EMAGENT_MODEL_SPEC so the variant is visible and restored.
 When the project buffer is already connected, the chosen variant is
-applied to the live session instead of waiting for a reconnect."
+applied to the live session instead of waiting for a reconnect.
+Always show BUFFER immediately — do not wait for an async connect
+reveal, which can no-op while a prior connect is still in flight."
   (let ((buffer (emagent-chat-open :project-dir project-dir))
         (spec (and (boundp 'emagent--pending-config-spec)
                    emagent--pending-config-spec)))
@@ -441,21 +443,19 @@ applied to the live session instead of waiting for a reconnect."
       (emagent-session-set-agent provider)
       (when (and model-id (not (string-empty-p model-id)))
         (emagent-chat-set-model model-id spec))
-      (cond
-       ((not connect)
-        (pop-to-buffer buffer))
-       ((emagent-acp--connected-p)
-        (when (and model-id (not (string-empty-p model-id)))
-          (when-let ((state emagent-acp--session)
-                     (session-id (emagent-acp-state-session-id state)))
-            (emagent-acp--config-option-set-spec
-             :state state
-             :session-id session-id
-             :spec (emagent-session-model-apply-spec))))
-        (pop-to-buffer buffer))
-       (t
-        (let ((reveal (lambda () (pop-to-buffer buffer))))
-          (emagent-acp-ensure-connected :on-reveal reveal)))))
+      (when connect
+        (cond
+         ((emagent-acp--connected-p)
+          (when (and model-id (not (string-empty-p model-id)))
+            (when-let ((state emagent-acp--session)
+                       (session-id (emagent-acp-state-session-id state)))
+              (emagent-acp--config-option-set-spec
+               :state state
+               :session-id session-id
+               :spec (emagent-session-model-apply-spec)))))
+         (t
+          (emagent-acp-ensure-connected))))
+      (pop-to-buffer buffer))
     buffer))
 
 (defun emagent--existing-buffer-agent (project-dir)
@@ -484,9 +484,15 @@ its session cannot change agents."
 
 (defun emagent--project-directory-initial ()
   "Default project directory for a new emagent session.
-Uses the current buffer's cwd when it is a shell or file-backed buffer,
-otherwise the project.el root, otherwise ~/."
+
+Prefer this buffer's `emagent-session-project-directory' when already in
+`emagent-mode' (file-backed scratch sessions live under
+`emagent-session-scratch-directory', which must not become the project).
+Otherwise use the current buffer's cwd when it is a shell or file-backed
+buffer, else the project.el root, else ~/."
   (cond
+   ((and (derived-mode-p 'emagent-mode)
+         (emagent-session-project-directory)))
    ((derived-mode-p 'shell-mode 'eshell-mode 'term-mode 'vterm-mode)
     default-directory)
    (buffer-file-name

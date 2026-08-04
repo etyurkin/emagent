@@ -59,12 +59,16 @@
 (ert-deftest emagent-session-autosave-test-ensure-scratch-assigns-file ()
   "ensure-scratch-file assigns ~/.emagent/scratch under a temp root."
   (let* ((dir (emagent-test--temp-directory))
+         (proj (expand-file-name "proj" dir))
          (emagent-session-autosave t)
          (emagent-session-scratch-directory
           (expand-file-name "scratch" dir)))
+    (make-directory proj t)
     (unwind-protect
         (with-temp-buffer
           (insert "# -*- mode: emagent -*-\n* user> hi\n")
+          (setq emagent-chat-project-directory proj
+                default-directory proj)
           (should-not buffer-file-name)
           (let ((path (emagent-session-ensure-scratch-file)))
             (should (stringp path))
@@ -74,7 +78,10 @@
                      (file-name-as-directory
                       emagent-session-scratch-directory)
                      (file-name-as-directory
-                      (file-name-directory path))))))
+                      (file-name-directory path))))
+            ;; Visited file is under scratch/, but cwd stays on the project.
+            (should (equal (file-name-as-directory (expand-file-name proj))
+                           (file-name-as-directory default-directory)))))
       (delete-directory dir t))))
 
 (ert-deftest emagent-session-autosave-test-ensure-scratch-noop-when-off ()
