@@ -257,6 +257,47 @@ the buffer.  Cookie housekeeping had the same bug when inserting."
          (when (buffer-live-p b1) (kill-buffer b1))
          (when (buffer-live-p b2) (kill-buffer b2)))))))
 
+
+(ert-deftest emagent-core-test-project-directory-initial-emagent-buffer ()
+  "Emagent buffers keep the session project even when visited under scratch/."
+  (emagent-test--with-temp-project
+   (lambda (dir)
+     (let* ((scratch (emagent-test--temp-directory))
+            (file (expand-file-name "sess.org" scratch))
+            buf)
+       (unwind-protect
+           (progn
+             (write-region
+              (format "# -*- mode: emagent -*-\n#+EMAGENT_PROJECT: %s\n" dir)
+              nil file)
+             (setq buf (find-file-noselect file))
+             (with-current-buffer buf
+               (emagent-mode-force)
+               (setq default-directory scratch)
+               (should (equal (file-name-as-directory (expand-file-name dir))
+                              (file-name-as-directory
+                               (emagent--project-directory-initial))))))
+         (when (buffer-live-p buf) (kill-buffer buf))
+         (ignore-errors (delete-directory scratch t)))))))
+
+(ert-deftest emagent-core-test-start-with-provider-pops-when-connecting ()
+  "M-x emagent must pop the existing buffer even while connect is in flight."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer dir)
+     (let ((popped nil))
+       (with-current-buffer buffer
+         (emagent-session-set-agent 'claude)
+         (setq emagent-acp--session
+               (emagent-acp--make-state :client nil :chat-buffer buffer)))
+       (cl-letf (((symbol-function 'emagent-acp-ensure-connected)
+                  (lambda (&rest _) nil))
+                 ((symbol-function 'pop-to-buffer)
+                  (lambda (b &rest _)
+                    (setq popped b)
+                    b)))
+         (emagent--start-with-provider 'claude dir t)
+         (should (eq popped buffer)))))))
+
 (provide 'emagent-core-test)
 
 ;;; emagent-core-test.el ends here

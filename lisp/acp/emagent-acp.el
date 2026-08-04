@@ -3901,12 +3901,15 @@ When the agent process died but buffer-local state remains, tear it down and
 reconnect (resuming the saved session id when present).  Optional ON-READY runs
 once the session is ready; ON-REVEAL runs when the chat buffer should be shown.
 While a connection is already in flight, ON-READY is queued instead of tearing
-the session down and starting over."
+the session down and starting over; ON-REVEAL replaces any prior reveal
+callback so a later `M-x emagent' still shows the buffer when ready."
   (when on-ready (push on-ready emagent-acp--when-connected-queue))
   (cond
    ((emagent-acp--connected-p)
     (emagent-acp--run-when-connected-queue))
    ((emagent-acp--connecting-p)
+    (when on-reveal
+      (setf (emagent-acp-state-on-reveal emagent-acp--session) on-reveal))
     nil)
    (t
     (emagent-acp--teardown-stale-session)
