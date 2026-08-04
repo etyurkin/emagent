@@ -3851,6 +3851,9 @@ response."
           (if (and (emagent-chat--bare-slash-command-p input)
                    (emagent-chat--compress-command-p input))
               (emagent-chat--dispatch-compress)
+            ;; Pathless scratch → ~/.emagent/scratch/ before a normal turn.
+            (when (fboundp 'emagent-session-ensure-scratch-file)
+              (emagent-session-ensure-scratch-file))
             (emagent-chat--acp-send input))))))))
 
 (defun emagent-chat-interrupt ()
@@ -4476,7 +4479,9 @@ first prompt without spawning the agent.  Claude agent slash commands require
 `emagent-connect' (or any send) so the agent can publish them."
   (emagent-chat--set-provider)
   (emagent-chat--setup-faces)
-  (emagent-chat-seed-cursor-slash-commands))
+  (emagent-chat-seed-cursor-slash-commands)
+  (when (fboundp 'emagent-session-enable-autosave)
+    (emagent-session-enable-autosave)))
 
 (add-hook 'emagent-mode-hook #'emagent-chat--on-mode-enable)
 

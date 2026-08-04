@@ -175,8 +175,12 @@ emagent asks whether to keep it for retry/continue.
 
 * Sessions
 
-Save the buffer (=C-x C-s=).  Files start with =# -*- mode: emagent -*-= and
-restore =#+EMAGENT_AGENT=, =#+EMAGENT_SESSION=, =#+EMAGENT_MODEL=, and
+Save the buffer (=C-x C-s=), or rely on autosave: file-backed sessions save
+after each finished turn and after idle (=emagent-session-autosave=, default
+on).  Pathless scratch buffers get a file under =~/.emagent/scratch/= on the
+first agent send (not on client slash commands), then the same autosave
+applies.  Files start with =# -*- mode: emagent -*-= and restore
+=#+EMAGENT_AGENT=, =#+EMAGENT_SESSION=, =#+EMAGENT_MODEL=, and
 =#+EMAGENT_PROJECT=.  Permission allowlists reload from =~/.emagent/=.
 
 Opening a saved file does *not* connect immediately when
@@ -386,6 +390,9 @@ Allow-always fingerprints never override hard denies.  Workspace trust helpers:
 | =emagent-acp-honor-schedule-wakeup= | =t= | Honor =ScheduleWakeup= timers |
 | =emagent-acp-watchdog-timeout= | =300= | Seconds of silence before abort |
 | =emagent-activate-on-display= | =t= | Deferred =emagent-mode= on saved files |
+| =emagent-session-autosave= | =t= | Idle + turn-end save for visited files |
+| =emagent-session-autosave-idle-seconds= | =30= | Idle seconds before visited-file save |
+| =emagent-session-scratch-directory= | =~/.emagent/scratch= | Default path for pathless sessions |
 | =emagent-shell-block-no-verify= | =t= | Refuse =git --no-verify= |
 | =emagent-shell-guard-push= | =t= | Block push when PR already merged |
 | =emagent-chat-inactive-bell= | =t= | Bell when agent finishes unfocused |
