@@ -1100,7 +1100,11 @@ dialogs (and short chats) kept yanking point to the end on every chunk."
             (should section)
             (let ((entry (gethash "child-1" (plist-get section :lines))))
               (should entry)
-              (should (outline-invisible-p (car entry)))))))))))
+              ;; `outline-invisible-p' only recognizes the classic `outline'
+              ;; invisible-property value; Org's folding may use a different
+              ;; symbol (e.g. `org-fold-outline' under the text-properties
+              ;; style), so check invisibility generically instead.
+              (should (invisible-p (marker-position (car entry))))))))))))
 
 (ert-deftest emagent-chat-test-nested-tool-call-updates-in-place ()
   "A second update for the same nested id replaces the line, not duplicates it."
