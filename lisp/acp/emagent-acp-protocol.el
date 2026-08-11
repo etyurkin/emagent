@@ -95,7 +95,15 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
   ;; Cursor parameterized model catalog (cursor/list_available_models).
   model-catalog model-catalog-loading
   ;; Session mode (ACP modes / current_mode_update); kept last for hot-reload.
-  session-mode-id available-modes)
+  session-mode-id available-modes
+  ;; Background task plan (ACP session/update sessionUpdate="plan"; driven by
+  ;; Claude Agent SDK TaskCreated/TaskCompleted hooks, not gated to an open turn)
+  task-plan-entries
+  ;; Live subagent (Task tool) calls still in flight, keyed by toolCallId;
+  ;; gates whether the chat buffer's response section may close (see
+  ;; `emagent-acp--render-prompt-response') so nested subagent tool activity
+  ;; keeps rendering after the main turn's own text has settled.
+  (active-task-calls (make-hash-table :test 'equal)))
 
 (defvar emagent-acp--provider-specs (make-hash-table :test 'eq)
   "Hash table mapping provider symbol to adapter property list.")
@@ -463,6 +471,11 @@ Arguments: STATE."
         (require 'emagent-acp))
       (emagent-acp--drain-permission-queue state))))
 
+(defun emagent-acp--task-plan-pending-count (state)
+  "Return the number of STATE's task-plan entries not yet completed."
+  (length (seq-remove (lambda (entry) (equal (map-elt entry 'status) "completed"))
+                      (emagent-acp-state-task-plan-entries state))))
+
 (defun emagent-acp--status-snapshot (state)
   "Return a mode-line status plist computed from STATE.
 
@@ -494,7 +507,8 @@ layer (see `emagent-chat-set-status')."
           :ctx-unavailable (and (or busy ready)
                                 (emagent-acp--provider-context-usage-unavailable-p
                                  state))
-          :mode-id (emagent-acp-state-session-mode-id state))))
+          :mode-id (emagent-acp-state-session-mode-id state)
+          :task-plan-pending (emagent-acp--task-plan-pending-count state))))
 
 (defun emagent-acp--refresh-mode-line (state)
   

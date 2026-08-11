@@ -972,10 +972,13 @@ Keeps query/path detail when a later status tick only carries the tool title."
           (if ann (concat prev-base ann) prev-base))
       next)))
 
-(defun emagent-acp--emit-tool-call-display (state id kind merged label status)
+(defun emagent-acp--emit-tool-call-display (state id kind merged label status
+                                            &optional parent-id parent-heading)
   "Push TOOL-CALL LABEL to the chat buffer and update session UI.
 
-Arguments: STATE, ID, KIND, MERGED, STATUS."
+Arguments: STATE, ID, KIND, MERGED, STATUS.  PARENT-ID and PARENT-HEADING,
+when non-nil, mark LABEL as nested subagent activity to render inside that
+subagent's own section; see `emagent-chat-show-tool-call'."
   (let* ((labels (emagent-acp-state-tool-call-labels state))
          (prev (and id labels (gethash id labels)))
          (decision (and id (when-let ((d (emagent-acp-state-tool-call-decisions state)))
@@ -1007,7 +1010,7 @@ Arguments: STATE, ID, KIND, MERGED, STATUS."
                  (cb (emagent-acp-state-cb-tool-call state)))
         (let ((spec (emagent-acp--tool-call-block-spec merged)))
           (with-current-buffer buf
-            (funcall cb id display (car spec) (cdr spec))))))
+            (funcall cb id display (car spec) (cdr spec) parent-id parent-heading)))))
     (if completed
         (progn
           (emagent-acp--release-tool-call-payloads state id)
@@ -1159,6 +1162,51 @@ Compress turns ignore schedule requests (stop still cancels)."
                                    (not (string-empty-p reason))
                                    reason)))))))))
 
+(defun emagent-acp--task-call-p (merged)
+  "Return non-nil when MERGED is a Task-tool (subagent) call."
+  (equal (map-elt merged 'title) "Task"))
+
+(defun emagent-acp--track-task-call (state id merged status)
+  "Update STATE's `active-task-calls' liveness table for a Task-tool call.
+
+Only applies when MERGED is a Task-tool call (see `emagent-acp--task-call-p').
+Registers ID while STATUS is non-terminal, removes it once STATUS is
+\"completed\", \"failed\", or \"cancelled\".  This gates whether the chat
+buffer's response section may close (see
+`emagent-acp--render-prompt-response'), so nested subagent tool activity
+keeps rendering after the main turn's own text has settled.  When removal
+drains the table to zero and the turn is still waiting to close, this
+re-triggers the close directly -- the only place that does, so nothing
+polls while a subagent is running."
+  (when (and id (emagent-acp--task-call-p merged))
+    (let ((table (emagent-acp-state-active-task-calls state)))
+      (if (member status '("completed" "failed" "cancelled"))
+          (when (gethash id table)
+            (remhash id table)
+            (when (and (zerop (hash-table-count table))
+                       (emagent-acp-state-prompt-finishing state))
+              (emagent-acp--render-prompt-response state)))
+        (puthash id t table)))))
+
+(defun emagent-acp--task-call-heading-label (state parent-id)
+  "Return a `*** ...' heading label for subagent PARENT-ID within STATE.
+
+Reads PARENT-ID's already-stored title/rawInput (populated when its own
+Task tool_call was processed) rather than the live UPDATE, since a nested
+child's notification carries only the child's own fields."
+  (let* ((titles (emagent-acp-state-tool-call-titles state))
+         (inputs (emagent-acp-state-tool-call-inputs state))
+         (title (or (and parent-id (gethash parent-id titles)) "Task"))
+         (raw (and parent-id (gethash parent-id inputs)))
+         (data (and raw (emagent-acp--tool-call-normalize-data raw)))
+         (subagent-type (and data (emagent-acp--tool-call-data-get data 'subagent_type)))
+         (description (and data (emagent-acp--tool-call-data-get data 'description))))
+    (cond
+     ((and subagent-type description) (format "%s: %s — %s" title subagent-type description))
+     (subagent-type (format "%s: %s" title subagent-type))
+     (description (format "%s: %s" title description))
+     (t title))))
+
 (defun emagent-acp--on-tool-call (state update)
   "Display or refresh a tool-call line from ACP UPDATE.
 
@@ -1169,12 +1217,16 @@ Arguments: STATE."
            (id (map-elt update 'toolCallId))
            (status (map-elt update 'status))
            (kind (map-elt update 'kind))
+           (parent-id (map-nested-elt update '(_meta claudeCode parentToolUseId)))
+           (parent-heading (and parent-id
+                                (emagent-acp--task-call-heading-label state parent-id)))
            (merged (emagent-acp--merged-tool-call-update state update))
            (label (emagent-acp--tool-call-label merged))
            (pending-table (emagent-acp-state-tool-call-pending state))
            (defer (emagent-acp--provider-defer-tool-call-p state merged))
            (show (and label (not (string-empty-p label)) (not defer)
                         (emagent-acp--tool-call-displayable-p state merged))))
+      (emagent-acp--track-task-call state id merged status)
       (emagent-acp--capture-schedule-wakeup state merged)
       (unless (emagent-acp-state-compress-pending state)
         (emagent-acp--explore-note-tool-kind
@@ -1183,7 +1235,8 @@ Arguments: STATE."
           (puthash id merged pending-table)
           (emagent-acp--provider-enqueue-tool-resolve state id))
         (when show
-          (emagent-acp--emit-tool-call-display state id kind merged label status)
+          (emagent-acp--emit-tool-call-display
+           state id kind merged label status parent-id parent-heading)
           (when id (remhash id pending-table)))
         (when (emagent-acp-state-permission-queue state)
           (unless (fboundp 'emagent-acp--drain-permission-queue)
@@ -3040,7 +3093,9 @@ the final text is stable."
            ((and (emagent-acp-state-prompt-finishing state)
                  (eq (emagent-acp-state-finish-token state) token)
                  (eq (emagent-acp-state-assistant-text state) assistant)
-                 (eq (emagent-acp-state-thought-text state) thought))
+                 (eq (emagent-acp-state-thought-text state) thought)
+                 (zerop (hash-table-count
+                         (emagent-acp-state-active-task-calls state))))
             ;; Finalize before close so a reentrant chunk cannot stream or
             ;; schedule another render against a half-closed response.
             (setf (emagent-acp-state-prompt-finalized state) t)
@@ -3050,6 +3105,15 @@ the final text is stable."
               (emagent-chat--close-finished-response))
             (emagent-acp--refresh-mode-line state)
             (emagent-acp--schedule-auto-compact state))
+           ((and (emagent-acp-state-prompt-finishing state)
+                 (eq (emagent-acp-state-finish-token state) token)
+                 (eq (emagent-acp-state-assistant-text state) assistant)
+                 (eq (emagent-acp-state-thought-text state) thought))
+            ;; Text is stable but a Task-tool subagent is still running:
+            ;; leave the response open and do nothing further -- there is
+            ;; no timer to arm here, `emagent-acp--track-task-call' calls
+            ;; back into this function once the last one finishes.
+            nil)
            ((and (emagent-acp-state-prompt-finishing state)
                  (eq (emagent-acp-state-finish-token state) token))
             ;; Text changed during finish but no newer timer was scheduled.
@@ -3606,6 +3670,11 @@ Arguments: EMAGENT-ACP-NOTIFICATION."
          (emagent-acp--update-usage-from-notification
           state
           (map-nested-elt emagent-acp-notification '(params update))))
+        ("plan"
+         (unless (emagent-acp-state-replaying-history state)
+           (setf (emagent-acp-state-task-plan-entries state)
+                 (map-nested-elt emagent-acp-notification '(params update entries)))
+           (emagent-acp--refresh-mode-line state)))
         ("available_commands_update"
          (let ((commands (map-nested-elt emagent-acp-notification
                                          '(params update availableCommands))))
