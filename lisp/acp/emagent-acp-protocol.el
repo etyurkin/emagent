@@ -98,7 +98,12 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
   session-mode-id available-modes
   ;; Background task plan (ACP session/update sessionUpdate="plan"; driven by
   ;; Claude Agent SDK TaskCreated/TaskCompleted hooks, not gated to an open turn)
-  task-plan-entries)
+  task-plan-entries
+  ;; Live subagent (Task tool) calls still in flight, keyed by toolCallId;
+  ;; gates whether the chat buffer's response section may close (see
+  ;; `emagent-acp--render-prompt-response') so nested subagent tool activity
+  ;; keeps rendering after the main turn's own text has settled.
+  (active-task-calls (make-hash-table :test 'equal)))
 
 (defvar emagent-acp--provider-specs (make-hash-table :test 'eq)
   "Hash table mapping provider symbol to adapter property list.")

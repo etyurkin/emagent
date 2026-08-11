@@ -1368,7 +1368,10 @@ Thinking block."
         emagent-chat--permission-pending nil)
   (if emagent-chat--tool-call-lines
       (clrhash emagent-chat--tool-call-lines)
-    (setq-local emagent-chat--tool-call-lines (make-hash-table :test 'equal))))
+    (setq-local emagent-chat--tool-call-lines (make-hash-table :test 'equal)))
+  (if emagent-chat--subagent-sections
+      (clrhash emagent-chat--subagent-sections)
+    (setq-local emagent-chat--subagent-sections (make-hash-table :test 'equal))))
 
 (defvar-local emagent-chat--response-fence-state nil
   "Streaming fence state for the response body.
