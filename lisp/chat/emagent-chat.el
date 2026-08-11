@@ -3416,6 +3416,13 @@ the mode line pulling session state back out of the ACP layer."
       (emagent-chat--mode-line-recompute)
       (force-mode-line-update))))
 
+(defun emagent-chat--mode-line-task-plan ()
+  "Return a propertized \"tasks:N\" fragment for outstanding background
+tasks, or nil."
+  (let ((n (emagent-chat--stat :task-plan-pending)))
+    (when (and (numberp n) (> n 0))
+      (propertize (format "tasks:%d" n) 'face 'shadow))))
+
 (defun emagent-chat--mode-line-strings ()
   "Return (HEAD . TAIL) strings for the emagent mode line."
   (let* ((busy  (emagent-chat--stat :busy))
@@ -3467,6 +3474,7 @@ the mode line pulling session state back out of the ACP layer."
          (context (emagent-chat--mode-line-context-usage))
          (tokens (emagent-chat--mode-line-token-usage))
          (mcp-bytes (emagent-chat--mode-line-mcp-bytes))
+         (task-plan-str (emagent-chat--mode-line-task-plan))
          (rss-str (when rss
                     (propertize (format "agent:%dMB" rss)
                                 (quote face) (cond ((>= rss 1000) (quote error))
@@ -3483,6 +3491,7 @@ the mode line pulling session state back out of the ACP layer."
                        (when context   (concat sep (string-trim-left context)))
                        (when tokens    (concat sep (string-trim-left tokens)))
                        (when mcp-bytes (concat sep (string-trim-left mcp-bytes)))
+                       (when task-plan-str (concat sep task-plan-str))
                        (when rss-str   (concat sep rss-str))
                        (when emacs-rss-str (concat sep emacs-rss-str)))))
     (cons head tail)))

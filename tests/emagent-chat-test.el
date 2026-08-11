@@ -504,6 +504,21 @@ session present (the UI no longer pulls from the ACP layer)."
        (should-not (string-match-p "Thinking"
                                    (car (emagent-chat--mode-line-strings))))))))
 
+(ert-deftest emagent-chat-test-mode-line-task-plan-fragment ()
+  "The mode line shows tasks:N for outstanding background tasks, and hides
+the fragment once none remain or the key is absent."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (pop-to-buffer buffer)
+     (with-current-buffer buffer
+       (setq emagent-acp--session nil)
+       (emagent-chat-set-status '(:ready t :task-plan-pending 2))
+       (should (string-match-p "tasks:2" (cdr (emagent-chat--mode-line-strings))))
+       (emagent-chat-set-status '(:ready t :task-plan-pending 0))
+       (should-not (string-match-p "tasks:" (cdr (emagent-chat--mode-line-strings))))
+       (emagent-chat-set-status '(:ready t))
+       (should-not (string-match-p "tasks:" (cdr (emagent-chat--mode-line-strings))))))))
+
 (ert-deftest emagent-chat-test-mode-line-connecting ()
   "Connecting shows a Thinking-style busy head with a spinner."
   (emagent-test--with-emagent-buffer

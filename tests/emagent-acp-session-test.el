@@ -2566,6 +2566,30 @@ project directory rather than opening up unconfined access."
                              (modeId . "agent")))))))
     (should (string= "agent" (emagent-acp-state-session-mode-id state)))))
 
+(ert-deftest emagent-acp-session-test-plan-update-sets-state ()
+  (let ((state (emagent-test--make-acp-state)))
+    (emagent-acp--on-notification
+     :state state
+     :emagent-acp-notification
+     '((method . "session/update")
+       (params . ((update . ((sessionUpdate . "plan")
+                             (entries . (((content . "Write layout engine") (status . "in_progress") (priority . "medium"))
+                                         ((content . "Add golden tests") (status . "pending") (priority . "medium"))
+                                         ((content . "Wire Makefile") (status . "completed") (priority . "medium"))))))))))
+    (should (= 3 (length (emagent-acp-state-task-plan-entries state))))
+    (should (= 2 (emagent-acp--task-plan-pending-count state)))))
+
+(ert-deftest emagent-acp-session-test-plan-update-skipped-during-replay ()
+  (let ((state (emagent-test--make-acp-state)))
+    (setf (emagent-acp-state-replaying-history state) t)
+    (emagent-acp--on-notification
+     :state state
+     :emagent-acp-notification
+     '((method . "session/update")
+       (params . ((update . ((sessionUpdate . "plan")
+                             (entries . (((content . "x") (status . "pending") (priority . "medium"))))))))))
+    (should (null (emagent-acp-state-task-plan-entries state)))))
+
 
 (ert-deftest emagent-acp-session-test-edit-diff-cache-session-scoped ()
   "Clearing one session's edit-diff cache must not drop another session's."

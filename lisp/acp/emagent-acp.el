@@ -3606,6 +3606,11 @@ Arguments: EMAGENT-ACP-NOTIFICATION."
          (emagent-acp--update-usage-from-notification
           state
           (map-nested-elt emagent-acp-notification '(params update))))
+        ("plan"
+         (unless (emagent-acp-state-replaying-history state)
+           (setf (emagent-acp-state-task-plan-entries state)
+                 (map-nested-elt emagent-acp-notification '(params update entries)))
+           (emagent-acp--refresh-mode-line state)))
         ("available_commands_update"
          (let ((commands (map-nested-elt emagent-acp-notification
                                          '(params update availableCommands))))
