@@ -2323,11 +2323,162 @@ only before the first tool line after prose."
                     (looking-at emagent-chat--thinking-headline-re))))
     (insert "\n")))
 
-(defun emagent-chat--append-tool-line (label &optional id lang code)
+(defun emagent-chat--new-tool-line-text (label lang code)
+  "Return the text to insert for a brand-new tool line LABEL/LANG/CODE.
+When CODE is non-empty, render it as an Org src block in LANG instead of a
+single → line, with LABEL's trailing decision/(Emacs) annotation beneath."
+  (let ((blockp (and code (not (string-empty-p code)))))
+    (if blockp
+        (if (and (equal lang "text")
+                 (not (string-match-p "\n" (or code ""))))
+            ;; Text block = file path: arrow with display path, no block.
+            (let* ((annotation (emagent-chat--tool-label-annotation label))
+                   (base (if annotation
+                             (string-trim
+                              (replace-regexp-in-string
+                               (concat " *" (regexp-quote annotation) "\\'")
+                               "" label))
+                           label))
+                   (verb (car (split-string base "[ :/]" t)))
+                   (full-label (concat (or verb base)
+                                       ": "
+                                       (emagent-chat--display-path code)
+                                       (if annotation (concat " " annotation) ""))))
+              (emagent-chat--format-tool-line full-label))
+          ;; Non-text blocks: arrow + block.
+          (concat (emagent-chat--format-tool-line
+                   (emagent-chat--combined-arrow-label label code))
+                  "\n"
+                  (emagent-chat--format-tool-block code lang nil)))
+      (emagent-chat--format-tool-line label))))
+
+(defun emagent-chat--find-tool-line-table (id)
+  "Return the hash table backing tool-call ID's displayed span, or nil.
+Checks the flat top-level table first, then each subagent section's own
+table, so an update (e.g. a permission-decision suffix) finds an existing
+line regardless of whether it was originally a top-level or nested call."
+  (cond
+   ((and emagent-chat--tool-call-lines (gethash id emagent-chat--tool-call-lines))
+    emagent-chat--tool-call-lines)
+   (emagent-chat--subagent-sections
+    (catch 'emagent-chat--tool-line-table
+      (maphash (lambda (_parent-id section)
+                 (let ((lines (plist-get section :lines)))
+                   (when (and lines (gethash id lines))
+                     (throw 'emagent-chat--tool-line-table lines))))
+               emagent-chat--subagent-sections)
+      nil))))
+
+(defun emagent-chat--append-top-level-tool-line (id label lang code)
+  "Insert or update LABEL as a top-level Reasoning tool line for ID."
+  (unless (and id
+               (when-let ((table (emagent-chat--find-tool-line-table id)))
+                 (emagent-chat--update-tool-call-line id label lang code table)))
+    (when (and emagent-chat--thought-open-p
+               emagent-chat--thought-marker
+               (marker-position emagent-chat--thought-marker))
+      (save-excursion
+        (goto-char emagent-chat--thought-marker)
+        (emagent-chat--separate-before-tool)
+        (let ((line-start (line-beginning-position))
+              (blockp (and code (not (string-empty-p code)))))
+          (insert (emagent-chat--new-tool-line-text label lang code))
+          (let ((line-end (line-end-position)))
+            (when id
+              (puthash id (cons (copy-marker line-start nil)
+                                (copy-marker line-end nil))
+                       emagent-chat--tool-call-lines))
+            (if blockp
+                (emagent-chat--fontify-tool-block line-start line-end)
+              (emagent-chat--fontify-tool-line line-start line-end)))
+          (emagent-chat--finish-tool-line-in-reasoning))))))
+
+(defun emagent-chat--advance-marker-past-line (marker)
+  "Move MARKER to a fresh line after the line at its current position.
+Mirrors `emagent-chat--finish-tool-line-in-reasoning' for a marker other
+than `emagent-chat--thought-marker' (a subagent section's `:body' tail)."
+  (goto-char (marker-position marker))
+  (goto-char (line-end-position))
+  (unless (or (eobp) (eq (char-after) ?\n))
+    (insert "\n"))
+  (set-marker marker (point)))
+
+(defun emagent-chat--subagent-heading-text (parent-heading)
+  "Return the `*** ...' heading line for a new subagent section.
+PARENT-HEADING is the label derived from the Task call's own title/input."
+  (format "*** %s\n" (or parent-heading "Subagent")))
+
+(defun emagent-chat--ensure-subagent-section (parent-id parent-heading)
+  "Return the subagent section plist for PARENT-ID, creating it if absent.
+A new section is inserted at the current `emagent-chat--thought-marker'
+tail, as a `*** ...' heading (seeded from PARENT-HEADING) followed by an
+initially-empty body."
+  (or (gethash parent-id emagent-chat--subagent-sections)
+      (when (and emagent-chat--thought-open-p
+                 emagent-chat--thought-marker
+                 (marker-position emagent-chat--thought-marker))
+        (save-excursion
+          (goto-char emagent-chat--thought-marker)
+          (emagent-chat--separate-before-tool)
+          (let ((heading-start (point)))
+            (insert (emagent-chat--subagent-heading-text parent-heading))
+            (let* ((heading (copy-marker heading-start nil))
+                   (body (point-marker))
+                   (section (list :heading heading :body body
+                                  :lines (make-hash-table :test 'equal))))
+              (puthash parent-id section emagent-chat--subagent-sections)
+              (setq emagent-chat--thought-marker (copy-marker (point) nil))
+              section))))))
+
+(defun emagent-chat--refold-subagent-section (section)
+  "Fold SECTION's body closed, leaving its heading line visible."
+  (let ((heading (plist-get section :heading))
+        (body (plist-get section :body)))
+    (when (and heading (marker-position heading) body (marker-position body))
+      (let ((fold-start (save-excursion (goto-char heading) (line-end-position))))
+        (when (< fold-start (marker-position body))
+          (ignore-errors
+            (font-lock-ensure fold-start (marker-position body))
+            (outline-flag-region fold-start (marker-position body) t)))))))
+
+(defun emagent-chat--append-nested-tool-line (parent-id parent-heading id label lang code)
+  "Insert or update LABEL (with ID, LANG, CODE) inside PARENT-ID's section.
+PARENT-HEADING seeds a new section's heading text when PARENT-ID has none
+yet.  Falls back to a top-level line when no section could be created (the
+open response was closed out from under a late notification)."
+  (let ((section (emagent-chat--ensure-subagent-section parent-id parent-heading)))
+    (if (not section)
+        (emagent-chat--append-top-level-tool-line id label lang code)
+      (let ((lines (plist-get section :lines))
+            (body (plist-get section :body)))
+        (unless (and id (emagent-chat--update-tool-call-line id label lang code lines))
+          (when (and body (marker-position body))
+            (save-excursion
+              (goto-char body)
+              (unless (bolp) (insert "\n"))
+              (let ((line-start (point))
+                    (blockp (and code (not (string-empty-p code)))))
+                (insert (emagent-chat--new-tool-line-text label lang code))
+                (let ((line-end (line-end-position)))
+                  (when id
+                    (puthash id (cons (copy-marker line-start nil)
+                                      (copy-marker line-end nil))
+                             lines))
+                  (if blockp
+                      (emagent-chat--fontify-tool-block line-start line-end)
+                    (emagent-chat--fontify-tool-line line-start line-end))))
+              (emagent-chat--advance-marker-past-line body))
+            (setq emagent-chat--thought-marker (copy-marker (marker-position body) nil))))
+        (emagent-chat--refold-subagent-section section)))))
+
+(defun emagent-chat--append-tool-line (label &optional id lang code parent-id parent-heading)
   "Append tool LABEL to the open Reasoning block.
 When ID is non-nil, remember the span for later in-place updates.  When CODE
 is non-empty, render it as an Org src block in LANG instead of a single →
-line, with LABEL's trailing decision/(Emacs) annotation beneath."
+line, with LABEL's trailing decision/(Emacs) annotation beneath.  When
+PARENT-ID is non-nil, LABEL is nested subagent activity: it renders inside a
+folded `*** ...' section for that subagent instead of as a top-level line,
+using PARENT-HEADING to seed the section's heading the first time."
   (when (and label (not (string-empty-p label))
                (emagent-chat--open-response-p)
                (not emagent-chat--permission-pending))
@@ -2344,53 +2495,16 @@ line, with LABEL's trailing decision/(Emacs) annotation beneath."
            (emagent-chat--flush-thought-pending t)
            (emagent-chat--ensure-response-markers)
            (emagent-chat--ensure-reasoning-for-tool)
-           (unless (and id (emagent-chat--update-tool-call-line id label lang code))
-             (when (and emagent-chat--thought-open-p
-                        emagent-chat--thought-marker
-                        (marker-position emagent-chat--thought-marker))
-               (save-excursion
-                 (goto-char emagent-chat--thought-marker)
-                 (emagent-chat--separate-before-tool)
-                 (let ((line-start (line-beginning-position))
-                       (blockp (and code (not (string-empty-p code)))))
-                   (insert (if blockp
-                               (if (and (equal lang "text")
-                                        (not (string-match-p "\n" (or code ""))))
-                                   ;; Text block = file path: arrow with display path, no block.
-                                   (let* ((annotation (emagent-chat--tool-label-annotation label))
-                                          (base (if annotation
-                                                    (string-trim
-                                                     (replace-regexp-in-string
-                                                      (concat " *" (regexp-quote annotation) "\\'")
-                                                      "" label))
-                                                  label))
-                                          (verb (car (split-string base "[ :/]" t)))
-                                          (full-label (concat (or verb base)
-                                                              ": "
-                                                              (emagent-chat--display-path code)
-                                                              (if annotation (concat " " annotation) ""))))
-                                     (emagent-chat--format-tool-line full-label))
-                                 ;; Non-text blocks: arrow + block.
-                                 (concat (emagent-chat--format-tool-line
-                                          (emagent-chat--combined-arrow-label label code))
-                                         "\n"
-                                         (emagent-chat--format-tool-block code lang nil)))
-                             (emagent-chat--format-tool-line label)))
-                   (let ((line-end (line-end-position)))
-                     (when id
-                       (puthash id (cons (copy-marker line-start nil)
-                                         (copy-marker line-end nil))
-                                emagent-chat--tool-call-lines))
-                     (if blockp
-                         (emagent-chat--fontify-tool-block line-start line-end)
-                       (emagent-chat--fontify-tool-line line-start line-end)))
-                   (emagent-chat--finish-tool-line-in-reasoning)))))))))))
+           (if parent-id
+               (emagent-chat--append-nested-tool-line
+                parent-id parent-heading id label lang code)
+             (emagent-chat--append-top-level-tool-line id label lang code))))))))
 
-(defun emagent-chat--update-tool-call-line (id label &optional lang code)
-  "Replace the displayed tool-call span for ID with LABEL.
+(defun emagent-chat--update-tool-call-line (id label lang code table)
+  "Replace the displayed tool-call span for ID with LABEL, looked up in TABLE.
 When CODE is non-empty, render an Org src block in LANG instead of a line.
 Return non-nil when a span was updated."
-  (let ((entry (gethash id emagent-chat--tool-call-lines)))
+  (let ((entry (gethash id table)))
     (when (and entry
                (markerp (car entry)) (marker-position (car entry))
                (markerp (cdr entry)) (marker-position (cdr entry)))
@@ -2450,15 +2564,18 @@ Return non-nil when a span was updated."
                                                   (marker-position end))
               (emagent-chat--fontify-tool-line (marker-position start)
                                                (marker-position end)))
-            (when emagent-chat--thought-open-p
+            (when (and emagent-chat--thought-open-p
+                       (eq table emagent-chat--tool-call-lines))
               (emagent-chat--sync-thought-marker-after-tool end))))
         t))))
 
-(defun emagent-chat-show-tool-call (id label &optional lang code)
+(defun emagent-chat-show-tool-call (id label &optional lang code parent-id parent-heading)
   "Show or update a tool-call display for ACP toolCallId ID with LABEL.
 When CODE is non-empty, render it as an Org src block in LANG instead of a
-single → line."
-  (emagent-chat--append-tool-line label id lang code))
+single → line.  When PARENT-ID is non-nil, LABEL nests inside that
+subagent's own section instead of the top-level Reasoning block; see
+`emagent-chat--append-tool-line' for PARENT-HEADING."
+  (emagent-chat--append-tool-line label id lang code parent-id parent-heading))
 
 (defun emagent-chat-permission-prompt (question choices callback &optional tool-call)
   "Show permission UI for QUESTION at the end of `** Thinking'.
@@ -4091,13 +4208,24 @@ relative path, size in lines, and a short content preview."
     ((name . "notes")
      (description . "show/set session notes; `/notes clear' empties them"))
     ((name . "archive")
-     (description . "move older turns into NAME-archive/NNN.org; `/archive force'")))
-  "Slash commands emagent handles itself; never sent to the agent.")
+     (description . "move older turns into NAME-archive/NNN.org; `/archive force'"))
+    ((name . "agent")
+     (description . "delegate this turn to a Claude subagent (Claude only)")
+     (provider . claude)))
+  "Slash commands emagent handles itself; never sent to the agent.
+
+An entry's `provider' key, when present, restricts it to sessions whose
+`emagent-chat-provider' matches; absent means any provider.")
 
 (defun emagent-chat--client-slash-command (name)
   "Return the client slash-command plist named NAME, or nil."
   (seq-find (lambda (c) (equal (map-elt c 'name) name))
             emagent-chat--client-slash-commands))
+
+(defun emagent-chat--client-slash-command-available-p (command)
+  "Return non-nil when COMMAND's `provider' restriction matches the buffer."
+  (let ((wanted (map-elt command 'provider)))
+    (or (null wanted) (eq wanted emagent-chat-provider))))
 
 (defun emagent-chat--slash-model-apply-1 (bounds)
   "Prompt for a model and replace BOUNDS with the `/model' marker link."
@@ -4149,6 +4277,46 @@ stripped from the text sent to the agent."
              (emagent-chat--slash-model-apply-1
               (or (emagent-chat--slash-token-bounds) bounds)))))))))
 
+(defun emagent-chat--agent-instruction-text (name)
+  "Return the bracketed Task-tool delegation instruction for subagent NAME."
+  (format "[Use the Task tool with subagent_type=\"%s\" for this request.]" name))
+
+(defun emagent-chat--slash-agent-apply ()
+  "Prompt for a subagent and replace the `/agent' token with its instruction.
+Discovers Claude Code subagents (built-in plus `.claude/agents/*.md' under
+`~/.claude' and the project directory) and, unlike `/model', needs no live
+connection since discovery is purely local filesystem reads."
+  (unless (derived-mode-p 'emagent-mode)
+    (user-error "Turn on emagent-mode in this buffer first"))
+  (unless (eq emagent-chat-provider 'claude)
+    (user-error "The `/agent' command isn't supported for the %s provider yet"
+               emagent-chat-provider))
+  (unless (fboundp 'emagent-claude-agents)
+    (require 'emagent-claude))
+  (let ((bounds (emagent-chat--slash-token-bounds)))
+    (unless bounds
+      (user-error "No `/agent' token at point"))
+    (let* ((root (or (emagent-session-project-directory) default-directory))
+           (agents (emagent-claude-agents root)))
+      (unless agents
+        (user-error "No Claude subagents discovered"))
+      (let* ((choices (mapcar
+                       (lambda (a)
+                         (let ((name (map-elt a 'name))
+                               (description (map-elt a 'description)))
+                           (cons (if (and description (not (string-empty-p description)))
+                                     (format "%s — %s" name description)
+                                   name)
+                                 name)))
+                       agents))
+             (selection (emagent-acp--read-labeled-choice
+                         "Subagent for this turn: " (mapcar #'car choices)))
+             (name (cdr (assoc selection choices))))
+        (when name
+          (delete-region (car bounds) (cdr bounds))
+          (goto-char (car bounds))
+          (insert (emagent-chat--agent-instruction-text name)))))))
+
 (defun emagent-chat--run-client-slash-command (name)
   "Run the client slash command NAME (dispatch after completion)."
   (pcase name
@@ -4156,7 +4324,8 @@ stripped from the text sent to the agent."
     ("mcp" (emagent-chat--slash-mcp-apply))
     ("usage" (emagent-chat--slash-usage-apply))
     ("notes" (emagent-chat--slash-notes-apply))
-    ("archive" (emagent-archive-apply))))
+    ("archive" (emagent-archive-apply))
+    ("agent" (emagent-chat--slash-agent-apply))))
 
 (defvar emagent-chat-provider)
 
@@ -4294,7 +4463,8 @@ long as the `/' is preceded by the heading, the line start, or whitespace."
               ;; commands are merged in once the session publishes them.
               ;; Cursor built-ins are seeded on mode enable / `emagent-connect'
               ;; without waiting for a dummy prompt.
-              (commands (append emagent-chat--client-slash-commands
+              (commands (append (seq-filter #'emagent-chat--client-slash-command-available-p
+                                            emagent-chat--client-slash-commands)
                                 emagent-chat-slash-commands)))
     ;; Start the completion region AFTER the "/" so the framework sees the
     ;; bare name (e.g. "relax", "session:relax") as its input.  This lets
@@ -4800,6 +4970,7 @@ Run \\[emagent-mode] to reconnect a saved session."
     (require 'emagent)
     (setq-local buffer-read-only nil)
     (setq-local emagent-chat--tool-call-lines (make-hash-table :test 'equal))
+    (setq-local emagent-chat--subagent-sections (make-hash-table :test 'equal))
     ;; Cap undo so C-/ works for recent edits without retaining a second
     ;; copy of the whole streamed transcript.
     (emagent-chat--configure-undo)
@@ -5068,6 +5239,13 @@ Used by focus/spinner refresh paths instead of scanning `buffer-list'.")
   "Map ACP toolCallId to (START . END) markers for displayed tool-call lines.
 Created per buffer in `emagent-mode'; must not use a shared mutable default,
 or concurrent chat buffers would alias one table.")
+
+(defvar-local emagent-chat--subagent-sections nil
+  "Map a Task tool call's ACP toolCallId to its nested-activity section.
+Each value is a plist (:heading MARKER :body MARKER :lines HASH), HASH
+mapping a nested ACP toolCallId to (START . END) markers -- parallel to but
+separate from `emagent-chat--tool-call-lines'.  Created per buffer in
+`emagent-mode'; must not use a shared mutable default.")
 
 (defvar-local emagent-chat--user-zone-start-marker nil
   "Position where the next user prompt may begin.")

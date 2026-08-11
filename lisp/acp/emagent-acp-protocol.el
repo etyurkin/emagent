@@ -95,7 +95,12 @@ and tool-call/tool-resolve tables, keyed by id) stay hash tables."
   ;; Cursor parameterized model catalog (cursor/list_available_models).
   model-catalog model-catalog-loading
   ;; Session mode (ACP modes / current_mode_update); kept last for hot-reload.
-  session-mode-id available-modes)
+  session-mode-id available-modes
+  ;; Live subagent (Task tool) calls still in flight, keyed by toolCallId;
+  ;; gates whether the chat buffer's response section may close (see
+  ;; `emagent-acp--render-prompt-response') so nested subagent tool activity
+  ;; keeps rendering after the main turn's own text has settled.
+  (active-task-calls (make-hash-table :test 'equal)))
 
 (defvar emagent-acp--provider-specs (make-hash-table :test 'eq)
   "Hash table mapping provider symbol to adapter property list.")

@@ -33,7 +33,9 @@
   (require 'cl-lib))
 
 (require 'cl-lib)
+(require 'map)
 (require 'emagent-acp-protocol)
+(require 'emagent-chat)
 
 (defgroup emagent-claude nil
   "Claude (Anthropic Agent SDK) ACP provider configuration for emagent."
@@ -117,6 +119,82 @@ changes.  Does nothing when the session is not found under OLD-DIR's hash."
           (when (file-exists-p src)
             (rename-file src dst)
             (message "emagent: moved %s → %s" src dst)))))))
+
+;;;; Subagent discovery
+
+(defconst emagent-claude--builtin-agent-names
+  '("claude" "general-purpose" "Explore" "Plan" "statusline-setup")
+  "Claude Code's built-in Task-delegation subagent types.
+
+Mirrors `BUILTIN_AGENT_NAMES' in the installed claude-agent-acp bridge
+\(acp-agent.js).  Not exposed over ACP, so this list can drift from the
+installed bridge/SDK version -- update it if Claude Code's built-in
+roster changes.")
+
+(defun emagent-claude--frontmatter-field (key limit)
+  "Return frontmatter KEY's value up to LIMIT, or nil.
+Strips one layer of matching double or single quotes."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward
+           (format "^%s:[ \t]*\\(.+?\\)[ \t]*$" (regexp-quote key)) limit t)
+      (let ((value (match-string 1)))
+        (if (and (> (length value) 1)
+                 (memq (aref value 0) '(?\" ?\'))
+                 (eq (aref value 0) (aref value (1- (length value)))))
+            (substring value 1 -1)
+          value)))))
+
+(defun emagent-claude--agent-frontmatter (file)
+  "Return (NAME . DESCRIPTION) parsed from FILE's YAML frontmatter, or nil.
+Reads only the `name' and `description' keys between a leading `---'
+delimiter pair; no general YAML parsing, matching Claude Code's subagent
+file format."
+  (with-temp-buffer
+    (insert-file-contents file nil 0 4096)
+    (goto-char (point-min))
+    (when (looking-at-p "^---[ \t]*$")
+      (forward-line 1)
+      (let ((limit (save-excursion
+                     (if (re-search-forward "^---[ \t]*$" nil t)
+                         (match-beginning 0)
+                       (point-max)))))
+        (let ((name (emagent-claude--frontmatter-field "name" limit))
+              (description (emagent-claude--frontmatter-field "description" limit)))
+          (when name (cons name description)))))))
+
+(defun emagent-claude--builtin-agent-plists ()
+  "Return built-in Claude subagents as slash-command plists."
+  (mapcar (lambda (name)
+            (emagent-chat--slash-command-plist name "Built-in Claude Code subagent"))
+          emagent-claude--builtin-agent-names))
+
+(defun emagent-claude--custom-agent-plists (directory)
+  "Return subagent plists discovered under DIRECTORY/agents/*.md."
+  (let ((agents-dir (and directory (expand-file-name "agents" directory))))
+    (when (and agents-dir (file-directory-p agents-dir))
+      (sort
+       (delq nil
+             (mapcar
+              (lambda (file)
+                (when-let ((parsed (ignore-errors (emagent-claude--agent-frontmatter file))))
+                  (emagent-chat--slash-command-plist (car parsed) (cdr parsed))))
+              (directory-files agents-dir t "\\.md\\'")))
+       (lambda (a b) (string< (map-elt a 'name) (map-elt b 'name)))))))
+
+(defun emagent-claude-agents (&optional project-dir)
+  "Return Claude subagents for delegation: built-ins, then user, then project.
+
+Arguments: PROJECT-DIR.  Later layers override earlier ones by name, so a
+custom agent (e.g. under PROJECT-DIR/.claude/agents) can replace a
+same-named built-in."
+  (emagent-chat--merge-slash-commands
+   (emagent-chat--merge-slash-commands
+    (emagent-claude--builtin-agent-plists)
+    (or (emagent-claude--custom-agent-plists (expand-file-name "~/.claude")) '()))
+   (or (emagent-claude--custom-agent-plists
+        (and project-dir (expand-file-name ".claude" project-dir)))
+       '())))
 
 (defun emagent-acp-claude--detect-p (state)
   "Return non-nil when STATE's agent is claude-agent-acp."

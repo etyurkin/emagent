@@ -3,12 +3,80 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'emagent-test-utils)
 (require 'emagent-acp)
+(require 'emagent-claude)
 
 (ert-deftest emagent-providers-test-claude-command ()
   (should (string= "claude-agent-acp" (emagent-claude-command)))
   (should (listp (emagent-claude-command-params))))
+
+(ert-deftest emagent-providers-test-claude-builtin-agents ()
+  (let ((agents (emagent-claude-agents nil)))
+    (dolist (name '("general-purpose" "Explore" "Plan"))
+      (let ((entry (cl-find name agents :key (lambda (a) (map-elt a 'name)) :test #'string=)))
+        (should entry)
+        (should (not (string-empty-p (map-elt entry 'description))))))))
+
+(ert-deftest emagent-providers-test-claude-custom-agents-from-project ()
+  (let* ((root (emagent-test--temp-directory))
+         (agents-dir (expand-file-name ".claude/agents" root))
+         (file (expand-file-name "reviewer.md" agents-dir)))
+    (unwind-protect
+        (progn
+          (make-directory agents-dir t)
+          (with-temp-file file
+            (insert "---\nname: reviewer\ndescription: Reviews code for correctness and style\n---\nYou are a careful code reviewer.\n"))
+          (let* ((agents (emagent-claude-agents root))
+                 (entry (cl-find "reviewer" agents :key (lambda (a) (map-elt a 'name)) :test #'string=)))
+            (should entry)
+            (should (string= "Reviews code for correctness and style"
+                             (map-elt entry 'description)))))
+      (when (file-exists-p root)
+        (delete-directory root t)))))
+
+(ert-deftest emagent-providers-test-claude-custom-agent-overrides-builtin ()
+  (let* ((root (emagent-test--temp-directory))
+         (agents-dir (expand-file-name ".claude/agents" root))
+         (file (expand-file-name "general-purpose.md" agents-dir)))
+    (unwind-protect
+        (progn
+          (make-directory agents-dir t)
+          (with-temp-file file
+            (insert "---\nname: general-purpose\ndescription: Custom override\n---\nBody.\n"))
+          (let* ((agents (emagent-claude-agents root))
+                 (entry (cl-find "general-purpose" agents :key (lambda (a) (map-elt a 'name)) :test #'string=)))
+            (should entry)
+            (should (string= "Custom override" (map-elt entry 'description)))))
+      (when (file-exists-p root)
+        (delete-directory root t)))))
+
+(ert-deftest emagent-providers-test-claude-agent-frontmatter-parsing ()
+  (let ((root (emagent-test--temp-directory)))
+    (unwind-protect
+        (progn
+          (make-directory root t)
+          (let ((quoted (expand-file-name "quoted.md" root))
+                (no-dashes (expand-file-name "no-dashes.md" root))
+                (no-name (expand-file-name "no-name.md" root))
+                (extra-keys (expand-file-name "extra-keys.md" root)))
+            (with-temp-file quoted
+              (insert "---\nname: \"reviewer\"\ndescription: 'Quoted description'\n---\nBody.\n"))
+            (should (equal '("reviewer" . "Quoted description")
+                           (emagent-claude--agent-frontmatter quoted)))
+            (with-temp-file no-dashes
+              (insert "name: reviewer\ndescription: No frontmatter here\n"))
+            (should-not (emagent-claude--agent-frontmatter no-dashes))
+            (with-temp-file no-name
+              (insert "---\ndescription: Missing a name\n---\nBody.\n"))
+            (should-not (emagent-claude--agent-frontmatter no-name))
+            (with-temp-file extra-keys
+              (insert "---\nname: reviewer\ntools: Read, Grep\nmodel: sonnet\ndescription: Ignores unknown keys\n---\nBody.\n"))
+            (should (equal '("reviewer" . "Ignores unknown keys")
+                           (emagent-claude--agent-frontmatter extra-keys)))))
+      (when (file-exists-p root)
+        (delete-directory root t)))))
 
 (ert-deftest emagent-providers-test-cursor-command ()
   (should (string= "cursor-agent" (emagent-cursor-command)))

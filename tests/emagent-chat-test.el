@@ -6,6 +6,7 @@
 (require 'emagent-test-utils)
 (require 'emagent-chat)
 (require 'emagent-acp)
+(require 'emagent-claude)
 
 ;;;; Slugs and labels
 
@@ -291,6 +292,76 @@
   (should (emagent-chat--command-matches-needle-p "/skill:relax" "relax"))
   (should (string= "workflow" (emagent-chat--command-needle-base "workflow:")))
   (should (string= "relax" (emagent-chat--command-skill-part "/skill:relax"))))
+
+;;;; Agent delegation (/agent)
+
+(ert-deftest emagent-chat-test-client-slash-command-available-p ()
+  (let ((unrestricted (emagent-chat--slash-command-plist "model" "desc"))
+        (claude-only (append (emagent-chat--slash-command-plist "agent" "desc")
+                             '((provider . claude)))))
+    (let ((emagent-chat-provider 'cursor))
+      (should (emagent-chat--client-slash-command-available-p unrestricted))
+      (should-not (emagent-chat--client-slash-command-available-p claude-only)))
+    (let ((emagent-chat-provider 'claude))
+      (should (emagent-chat--client-slash-command-available-p unrestricted))
+      (should (emagent-chat--client-slash-command-available-p claude-only)))))
+
+(ert-deftest emagent-chat-test-agent-command-provider-gated ()
+  "/agent signals a clear user-error under the Cursor provider."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (goto-char (point-max))
+    (insert "* etyurkin> /agent")
+    (let ((emagent-chat-provider 'cursor))
+      (should-error (emagent-chat--slash-agent-apply) :type 'user-error))))
+
+(ert-deftest emagent-chat-test-agent-command-inserts-instruction ()
+  "/agent replaces its token with a visible Task-tool delegation instruction."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (goto-char (point-max))
+    (insert "* etyurkin> /agent")
+    (let ((emagent-chat-provider 'claude))
+      (cl-letf (((symbol-function 'emagent-claude-agents)
+                 (lambda (&rest _) (list (emagent-chat--slash-command-plist
+                                          "reviewer" "Reviews code"))))
+                ((symbol-function 'emagent-acp--read-labeled-choice)
+                 (lambda (&rest _) "reviewer — Reviews code")))
+        (emagent-chat--slash-agent-apply)))
+    (should (string-match-p
+             "\\[Use the Task tool with subagent_type=\"reviewer\" for this request\\.\\]"
+             (buffer-string)))
+    (should-not (string-match-p "/agent" (buffer-string)))))
+
+(ert-deftest emagent-chat-test-agent-command-midsentence ()
+  "/agent mid-sentence only replaces its own token, not the surrounding text."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (goto-char (point-max))
+    (insert "* etyurkin> commit, use /agent please")
+    (search-backward "/agent")
+    (let ((emagent-chat-provider 'claude))
+      (cl-letf (((symbol-function 'emagent-claude-agents)
+                 (lambda (&rest _) (list (emagent-chat--slash-command-plist "explore" nil))))
+                ((symbol-function 'emagent-acp--read-labeled-choice)
+                 (lambda (&rest _) "explore")))
+        (emagent-chat--slash-agent-apply)))
+    (should (string-match-p "commit, use \\[Use the Task tool" (buffer-string)))
+    (should (string-match-p "for this request\\.\\] please" (buffer-string)))))
+
+(ert-deftest emagent-chat-test-slash-command-completion-filters-by-provider ()
+  "TAB-completion offers /agent only under Claude; direct lookup stays unfiltered."
+  (with-temp-buffer
+    (delay-mode-hooks (emagent-mode))
+    (goto-char (point-max))
+    (insert "* etyurkin> /agent")
+    (let ((emagent-chat-provider 'cursor))
+      (let ((capf (emagent-chat-slash-command-completion-at-point)))
+        (should-not (member "agent" (nth 2 capf))))
+      (should (emagent-chat--client-slash-command "agent")))
+    (let ((emagent-chat-provider 'claude))
+      (let ((capf (emagent-chat-slash-command-completion-at-point)))
+        (should (member "agent" (nth 2 capf)))))))
 
 ;;;; Response markup
 
@@ -1005,6 +1076,81 @@ dialogs (and short chats) kept yanking point to the end on every chunk."
             (should (string-match-p "Thinking" text))
             (should (string-match-p "→ grep" text))
             (should-not (string-match-p "Executing" text)))))))))
+
+;;;; Nested subagent tool calls
+
+(ert-deftest emagent-chat-test-nested-tool-call-creates-folded-section ()
+  "A nested tool call gets its own folded `*** ...' section."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "thinking...")
+          (emagent-chat-show-tool-call "task-1" "Task")
+          (emagent-chat-show-tool-call
+           "child-1" "Read: /a.el" nil nil "task-1" "Task: explore — look around")
+          (let ((text (substring-no-properties (buffer-string))))
+            (should (string-match-p "\\*\\*\\* Task: explore — look around" text))
+            (should (string-match-p "→ Read: /a\\.el" text)))
+          (let ((section (gethash "task-1" emagent-chat--subagent-sections)))
+            (should section)
+            (let ((entry (gethash "child-1" (plist-get section :lines))))
+              (should entry)
+              (should (outline-invisible-p (car entry)))))))))))
+
+(ert-deftest emagent-chat-test-nested-tool-call-updates-in-place ()
+  "A second update for the same nested id replaces the line, not duplicates it."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "thinking...")
+          (emagent-chat-show-tool-call "child-1" "Read: /a.el" nil nil "task-1" "Task")
+          (emagent-chat-show-tool-call
+           "child-1" "Read: /a.el (Allow: Agent)" nil nil "task-1" "Task")
+          (let ((section (gethash "task-1" emagent-chat--subagent-sections)))
+            (should (= 1 (hash-table-count (plist-get section :lines))))
+            (should (string-match-p "Read (Allow: Agent): /a\\.el"
+                                    (substring-no-properties (buffer-string)))))))))))
+
+(ert-deftest emagent-chat-test-nested-tool-call-defaults-heading-when-unknown ()
+  "A nested call with no parent heading still gets a section, generically titled."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "thinking...")
+          (emagent-chat-show-tool-call "child-1" "Read: /a.el" nil nil "task-1" nil)
+          (should (gethash "task-1" emagent-chat--subagent-sections))
+          (should (string-match-p "\\*\\*\\* Subagent"
+                                  (substring-no-properties (buffer-string))))))))))
+
+(ert-deftest emagent-chat-test-reset-response-state-clears-subagent-sections ()
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer _dir)
+     (emagent-test--with-busy-session
+      (lambda ()
+        (with-current-buffer buffer
+          (goto-char (point-max))
+          (emagent-chat--begin-response (point))
+          (emagent-chat-begin-thought)
+          (emagent-chat-append-thought "thinking...")
+          (emagent-chat-show-tool-call "child-1" "Read: /a.el" nil nil "task-1" "Task")
+          (should (> (hash-table-count emagent-chat--subagent-sections) 0))
+          (emagent-chat--reset-response-state)
+          (should (= 0 (hash-table-count emagent-chat--subagent-sections)))))))))
 
 (ert-deftest emagent-chat-test-tool-call-line-recorded-for-update ()
   (emagent-test--with-emagent-buffer

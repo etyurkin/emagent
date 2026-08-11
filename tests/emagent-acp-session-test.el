@@ -2566,6 +2566,75 @@ project directory rather than opening up unconfined access."
                              (modeId . "agent")))))))
     (should (string= "agent" (emagent-acp-state-session-mode-id state)))))
 
+(ert-deftest emagent-acp-session-test-active-task-calls-tracks-lifecycle ()
+  "A Task-titled tool_call registers while pending, clears on completion."
+  (let ((state (emagent-test--make-acp-state)))
+    (emagent-acp--on-notification
+     :state state
+     :emagent-acp-notification
+     '((method . "session/update")
+       (params . ((update . ((sessionUpdate . "tool_call")
+                             (toolCallId . "task-1")
+                             (title . "Task")
+                             (status . "pending")))))))
+    (should (gethash "task-1" (emagent-acp-state-active-task-calls state)))
+    (emagent-acp--on-notification
+     :state state
+     :emagent-acp-notification
+     '((method . "session/update")
+       (params . ((update . ((sessionUpdate . "tool_call_update")
+                             (toolCallId . "task-1")
+                             (status . "completed")))))))
+    (should-not (gethash "task-1" (emagent-acp-state-active-task-calls state)))))
+
+(ert-deftest emagent-acp-session-test-active-task-calls-ignores-non-task ()
+  "Only Task-titled calls affect the active-task-calls liveness table."
+  (let ((state (emagent-test--make-acp-state)))
+    (emagent-acp--on-notification
+     :state state
+     :emagent-acp-notification
+     '((method . "session/update")
+       (params . ((update . ((sessionUpdate . "tool_call")
+                             (toolCallId . "bash-1")
+                             (title . "Terminal")
+                             (status . "pending")))))))
+    (should (zerop (hash-table-count (emagent-acp-state-active-task-calls state))))))
+
+(ert-deftest emagent-acp-session-test-render-holds-open-while-task-active ()
+  "Stable finish text does not close the response while a subagent is active."
+  (let ((state (emagent-test--make-acp-state)))
+    (puthash "task-1" t (emagent-acp-state-active-task-calls state))
+    (setf (emagent-acp-state-prompt-finishing state) t
+          (emagent-acp-state-assistant-text state) "done"
+          (emagent-acp-state-cb-finish state) (lambda (&rest _) nil))
+    (emagent-acp--render-prompt-response state)
+    (should (emagent-acp-state-prompt-finishing state))
+    (should-not (emagent-acp-state-prompt-finalized state))))
+
+(ert-deftest emagent-acp-session-test-render-closes-once-task-drains ()
+  "Once the last active subagent finishes, the deferred close fires."
+  (let ((state (emagent-test--make-acp-state))
+        (closed nil))
+    (puthash "task-1" t (emagent-acp-state-active-task-calls state))
+    (setf (emagent-acp-state-prompt-finishing state) t
+          (emagent-acp-state-assistant-text state) "done"
+          (emagent-acp-state-cb-finish state) (lambda (&rest _) nil))
+    (emagent-acp--render-prompt-response state)
+    (should (emagent-acp-state-prompt-finishing state))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-chat--close-finished-response)
+          (lambda () (setq closed t))))
+      (emagent-acp--on-notification
+       :state state
+       :emagent-acp-notification
+       '((method . "session/update")
+         (params . ((update . ((sessionUpdate . "tool_call_update")
+                               (toolCallId . "task-1")
+                               (title . "Task")
+                               (status . "completed")))))))
+      (should closed))
+    (should-not (emagent-acp-state-prompt-finishing state))
+    (should (emagent-acp-state-prompt-finalized state))))
 
 (ert-deftest emagent-acp-session-test-edit-diff-cache-session-scoped ()
   "Clearing one session's edit-diff cache must not drop another session's."
