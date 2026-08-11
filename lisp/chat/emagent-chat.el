@@ -3417,8 +3417,7 @@ the mode line pulling session state back out of the ACP layer."
       (force-mode-line-update))))
 
 (defun emagent-chat--mode-line-task-plan ()
-  "Return a propertized \"tasks:N\" fragment for outstanding background
-tasks, or nil."
+  "Return a propertized \"tasks:N\" fragment for outstanding tasks, or nil."
   (let ((n (emagent-chat--stat :task-plan-pending)))
     (when (and (numberp n) (> n 0))
       (propertize (format "tasks:%d" n) 'face 'shadow))))
