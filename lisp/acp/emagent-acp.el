@@ -2517,12 +2517,16 @@ Arguments: STATE, SESSION-ID, BLOCKS, IMAGES."
                       (emagent-acp-state-prompt-generation state)
                       gen))))))
 
+(defconst emagent-acp--continue-prompt-text
+  "Interrupted by a transient error; continue from where you left off."
+  "User-turn text sent when auto-resuming a turn that already did real work.")
+
 (defun emagent-acp--log-transient-error (state &optional message)
   "Log MESSAGE and STATE's partial assistant output to `emagent-log-buffer-name'.
 
 Used when a transient error ends an in-flight turn: the details are recorded in
 the log instead of the chat buffer, and the turn is then resumed with
-\"continue\" (see `emagent-acp--schedule-continue')."
+`emagent-acp--continue-prompt-text' (see `emagent-acp--schedule-continue')."
   (when (and message (not (string-empty-p message)))
     (emagent-log "transient error: %s" message))
   (let ((text (string-trim (or (emagent-acp-state-assistant-text state) ""))))
@@ -2530,16 +2534,18 @@ the log instead of the chat buffer, and the turn is then resumed with
       (emagent-log "partial output before auto-continue:\n%s" text))))
 
 (defun emagent-acp--schedule-continue (state session-id images gen reason)
-  "Resume an errored in-flight turn by re-dispatching a \"continue\" prompt.
+  "Resume an errored in-flight turn with `emagent-acp--continue-prompt-text'.
 
 Unlike `emagent-acp--schedule-prompt-retry' (which replays the ORIGINAL prompt
-and is only safe when the turn did no work), this sends a fresh \"continue\"
-turn so tool side effects such as commits or pushes are never repeated.  The
-open response block is kept, so the continued output renders into it; the
-transient error itself is only logged (see `emagent-acp--log-transient-error'),
-never rendered into the chat buffer.  REASON is logged with the attempt count;
-the `:continue-attempts' counter bounds the number of resumes and the GEN guard
-cancels a stale resume after an interrupt or new prompt.
+and is only safe when the turn did no work), this sends a fresh resume turn so
+tool side effects such as commits or pushes are never repeated.  Callers must
+only schedule this when the turn already did real work; exhausted no-work
+retries must abort instead.  The open response block is kept, so the continued
+output renders into it; the transient error itself is only logged (see
+`emagent-acp--log-transient-error'), never rendered into the chat buffer.
+REASON is logged with the attempt count; the `:continue-attempts' counter
+bounds the number of resumes and the GEN guard cancels a stale resume after an
+interrupt or new prompt.
 
 Arguments: STATE, SESSION-ID, IMAGES."
   (let* ((attempt (1+ (or (emagent-acp-state-continue-attempts state) 0)))
@@ -2557,7 +2563,8 @@ Arguments: STATE, SESSION-ID, IMAGES."
                   (emagent-acp-state-busy state))
          (emagent-acp--dispatch-prompt-request
           :state state :session-id session-id
-          :blocks [((type . "text") (text . "continue"))]
+          :blocks `[((type . "text")
+                     (text . ,emagent-acp--continue-prompt-text))]
           :images images
           :gen gen :attempt 1))))))
 
@@ -2572,11 +2579,15 @@ and whether the turn already did work:
   `emagent-acp--turn-did-no-work-p') is replayed with exponential backoff up to
   `emagent-acp-prompt-retry-attempts' via `emagent-acp--schedule-prompt-retry'.
 
-- A turn that already ran tool calls or produced content but ended on a
-  transient error (`emagent-acp--turn-hit-transient-error-p') is resumed by
-  auto-sending \"continue\" via `emagent-acp--schedule-continue', so side
-  effects such as commits or pushes are never repeated.  The error is logged to
-  `emagent-log-buffer-name' rather than rendered into the chat buffer.
+- A turn that already ran tool calls or produced real content but ended on a
+  transient error (`emagent-acp--turn-hit-transient-error-p' and not
+  `emagent-acp--turn-did-no-work-p') is resumed via
+  `emagent-acp--schedule-continue' (sending `emagent-acp--continue-prompt-text'),
+  so side effects such as commits or pushes are never repeated.  The error is
+  logged to `emagent-log-buffer-name' rather than rendered into the chat buffer.
+
+- Exhausted retries on a no-work turn abort (or complete with the error
+  text) instead of escalating to an auto-continue prompt.
 
 GEN guards against a stale retry firing after the prompt was superseded or
 interrupted.
@@ -2604,7 +2615,8 @@ Arguments: STATE, SESSION-ID, BLOCKS, IMAGES."
         ((and (emagent-acp-state-busy state)
               (< (or (emagent-acp-state-continue-attempts state) 0)
                  emagent-acp-prompt-retry-attempts)
-              (emagent-acp--turn-hit-transient-error-p state))
+              (emagent-acp--turn-hit-transient-error-p state)
+              (not (emagent-acp--turn-did-no-work-p state)))
          (emagent-acp--log-transient-error state)
          (setf (emagent-acp-state-assistant-text state) "")
          (setf (emagent-acp-state-thought-text state) "")
@@ -2629,7 +2641,8 @@ Arguments: STATE, SESSION-ID, BLOCKS, IMAGES."
           ((and (emagent-acp-state-busy state)
                 (emagent-acp--retriable-prompt-error-p message)
                 (< (or (emagent-acp-state-continue-attempts state) 0)
-                   emagent-acp-prompt-retry-attempts))
+                   emagent-acp-prompt-retry-attempts)
+                (not (emagent-acp--turn-did-no-work-p state)))
            (emagent-acp--log-transient-error state message)
            (setf (emagent-acp-state-assistant-text state) "")
            (setf (emagent-acp-state-thought-text state) "")
@@ -2641,7 +2654,6 @@ Arguments: STATE, SESSION-ID, BLOCKS, IMAGES."
            (emagent-acp--abort-prompt state (format "prompt failed: %s" message))
            (emagent-acp--notify-user
             state (format "emagent: prompt failed: %s" message)))))))))
-
 (defun emagent-acp--reset-permission-gate (state)
   "Cancel STATE's pending permission drain and clear the permission gate.
 Replies `cancelled' to any outstanding requests so the agent does not hang.

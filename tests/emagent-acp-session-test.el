@@ -2265,7 +2265,212 @@ project directory rather than opening up unconfined access."
     (clrhash (emagent-acp-state-tool-call-titles state))
     ;; Substantial content also counts as work.
     (setf (emagent-acp-state-assistant-text state) (make-string 500 ?x))
+    (should-not (emagent-acp--turn-did-no-work-p state))
+    ;; A long pure error dump is still no work (do not escalate to continue).
+    (setf (emagent-acp-state-assistant-text state)
+          (concat "RetriableError: WritableIterable is closed\n"
+                  (make-string 500 ?x)))
+    (should (emagent-acp--turn-did-no-work-p state))
+    (should (emagent-acp--assistant-text-is-error-dump-p
+             (emagent-acp-state-assistant-text state)))
+    ;; Prose before a trailing error marker still counts as work.
+    (setf (emagent-acp-state-assistant-text state)
+          (concat (make-string 400 ?y)
+                  "\nError: RetriableError: socket hang up"))
+    (should-not (emagent-acp--turn-did-no-work-p state))
+    (should-not (emagent-acp--assistant-text-is-error-dump-p
+                 (emagent-acp-state-assistant-text state)))))
+
+(ert-deftest emagent-acp-session-test-continue-requires-real-work ()
+  "Auto-continue is only for turns that already did real work."
+  (let ((state (emagent-test--make-acp-state)))
+    (should (equal emagent-acp--continue-prompt-text
+                   "Interrupted by a transient error; continue from where you left off."))
+    (should-not (equal emagent-acp--continue-prompt-text "continue"))
+    ;; No-work + transient marker: retry/abort territory, not continue.
+    (setf (emagent-acp-state-assistant-text state)
+          "Error: RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh")
+    (should (emagent-acp--turn-hit-transient-error-p state))
+    (should (emagent-acp--turn-did-no-work-p state))
+    ;; Work + transient marker: continue is allowed.
+    (puthash "call-1" "shell" (emagent-acp-state-tool-call-titles state))
+    (setf (emagent-acp-state-assistant-text state)
+          "Committed.\nRetriableError: WritableIterable is closed")
+    (should (emagent-acp--turn-hit-transient-error-p state))
     (should-not (emagent-acp--turn-did-no-work-p state))))
+
+(ert-deftest emagent-acp-session-test-schedule-continue-sends-resume-text ()
+  "Auto-continue dispatches the locked resume sentence, not bare continue."
+  (let* ((state (emagent-test--make-acp-state))
+         (seen-blocks nil)
+         (emagent-acp-prompt-retry-base-delay 0))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-prompt-generation state) 7)
+    (emagent-test--with-mocks
+        (((symbol-function 'run-with-timer)
+          (lambda (_sec _repeat fn) (funcall fn) nil))
+         ((symbol-function 'emagent-acp--schedule-prompt-watchdog)
+          (lambda (_) nil))
+         ((symbol-function 'emagent-acp--notify-user)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--dispatch-prompt-request)
+          (cl-function
+           (lambda (&key blocks &allow-other-keys)
+             (setq seen-blocks blocks)))))
+      (emagent-acp--schedule-continue state "sess" nil 7 "test reason")
+      (should (vectorp seen-blocks))
+      (should (= 1 (length seen-blocks)))
+      (should (equal (map-elt (aref seen-blocks 0) 'type) "text"))
+      (should (equal (map-elt (aref seen-blocks 0) 'text)
+                     emagent-acp--continue-prompt-text))
+      (should (= 1 (emagent-acp-state-continue-attempts state))))))
+
+(ert-deftest emagent-acp-session-test-dispatch-continue-after-work ()
+  "Retriable failure after tool work schedules continue, not abort."
+  (let* ((state (emagent-test--make-acp-state))
+         (continued nil)
+         (aborted nil)
+         (retried nil))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-prompt-generation state) 3
+          (emagent-acp-state-assistant-text state) "partial")
+    (puthash "call-1" "shell" (emagent-acp-state-tool-call-titles state))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--send-request)
+          (cl-function
+           (lambda (&key on-failure &allow-other-keys)
+             (funcall on-failure
+                      '((message . "RetriableError: WritableIterable is closed"))
+                      nil))))
+         ((symbol-function 'emagent-acp--schedule-continue)
+          (lambda (&rest _) (setq continued t)))
+         ((symbol-function 'emagent-acp--schedule-prompt-retry)
+          (lambda (&rest _) (setq retried t)))
+         ((symbol-function 'emagent-acp--abort-prompt)
+          (lambda (&rest _) (setq aborted t)))
+         ((symbol-function 'emagent-acp--log-transient-error)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--clear-thought-buffer)
+          (lambda (_) nil))
+         ((symbol-function 'emagent-acp--cancel-prompt-render)
+          (lambda (_) nil))
+         ((symbol-function 'emagent-acp--notify-user)
+          (lambda (&rest _) nil)))
+      (emagent-acp--dispatch-prompt-request
+       :state state :session-id "sess" :blocks [] :images nil
+       :gen 3 :attempt 1)
+      (should continued)
+      (should-not retried)
+      (should-not aborted))))
+
+(ert-deftest emagent-acp-session-test-dispatch-exhausted-no-work-aborts ()
+  "Exhausted no-work retriable failures abort instead of auto-continuing."
+  (let* ((state (emagent-test--make-acp-state))
+         (continued nil)
+         (aborted nil)
+         (retried nil))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-prompt-generation state) 3
+          (emagent-acp-state-assistant-text state) ""
+          (emagent-acp-state-continue-attempts state) 0)
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--send-request)
+          (cl-function
+           (lambda (&key on-failure &allow-other-keys)
+             (funcall on-failure
+                      '((message . "RetriableError: ENOTFOUND"))
+                      nil))))
+         ((symbol-function 'emagent-acp--schedule-continue)
+          (lambda (&rest _) (setq continued t)))
+         ((symbol-function 'emagent-acp--schedule-prompt-retry)
+          (lambda (&rest _) (setq retried t)))
+         ((symbol-function 'emagent-acp--abort-prompt)
+          (lambda (_s message)
+            (setq aborted message)))
+         ((symbol-function 'emagent-acp--notify-user)
+          (lambda (&rest _) nil)))
+      (emagent-acp--dispatch-prompt-request
+       :state state :session-id "sess" :blocks [] :images nil
+       :gen 3 :attempt emagent-acp-prompt-retry-attempts)
+      (should-not continued)
+      (should-not retried)
+      (should (stringp aborted))
+      (should (string-match-p "RetriableError" aborted)))))
+
+(ert-deftest emagent-acp-session-test-dispatch-success-error-after-work-continues ()
+  "On-success transient marker after real work schedules continue."
+  (let* ((state (emagent-test--make-acp-state))
+         (continued nil)
+         (completed nil))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-prompt-generation state) 4
+          (emagent-acp-state-assistant-text state)
+          "Committed.\nRetriableError: WritableIterable is closed")
+    (puthash "call-1" "shell" (emagent-acp-state-tool-call-titles state))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--send-request)
+          (cl-function
+           (lambda (&key on-success &allow-other-keys)
+             (funcall on-success '((stopReason . "end_turn"))))))
+         ((symbol-function 'emagent-acp--schedule-continue)
+          (lambda (&rest _) (setq continued t)))
+         ((symbol-function 'emagent-acp--complete-prompt)
+          (lambda (&rest _) (setq completed t)))
+         ((symbol-function 'emagent-acp--log-transient-error)
+          (lambda (&rest _) nil))
+         ((symbol-function 'emagent-acp--clear-thought-buffer)
+          (lambda (_) nil))
+         ((symbol-function 'emagent-acp--cancel-prompt-render)
+          (lambda (_) nil)))
+      (emagent-acp--dispatch-prompt-request
+       :state state :session-id "sess" :blocks [] :images nil
+       :gen 4 :attempt 1)
+      (should continued)
+      (should-not completed))))
+
+(ert-deftest emagent-acp-session-test-dispatch-long-error-dump-does-not-continue ()
+  "A long pure error dump is no-work: retry while budget remains, else complete."
+  (let* ((state (emagent-test--make-acp-state))
+         (continued nil)
+         (retried nil)
+         (completed nil))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-prompt-generation state) 5
+          (emagent-acp-state-assistant-text state)
+          (concat "RetriableError: WritableIterable is closed\n"
+                  (make-string 500 ?x)))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--send-request)
+          (cl-function
+           (lambda (&key on-success &allow-other-keys)
+             (funcall on-success '((stopReason . "end_turn"))))))
+         ((symbol-function 'emagent-acp--schedule-continue)
+          (lambda (&rest _) (setq continued t)))
+         ((symbol-function 'emagent-acp--schedule-prompt-retry)
+          (lambda (&rest _) (setq retried t)))
+         ((symbol-function 'emagent-acp--complete-prompt)
+          (lambda (&rest _) (setq completed t)))
+         ((symbol-function 'emagent-acp--clear-thought-buffer)
+          (lambda (_) nil))
+         ((symbol-function 'emagent-acp--cancel-prompt-render)
+          (lambda (_) nil)))
+      (emagent-acp--dispatch-prompt-request
+       :state state :session-id "sess" :blocks [] :images nil
+       :gen 5 :attempt 1)
+      (should retried)
+      (should-not continued)
+      (should-not completed)
+      ;; Retry path clears assistant text; restore the dump for the exhausted case.
+      (setf (emagent-acp-state-assistant-text state)
+            (concat "RetriableError: WritableIterable is closed\n"
+                    (make-string 500 ?x)))
+      (setq retried nil continued nil completed nil)
+      (emagent-acp--dispatch-prompt-request
+       :state state :session-id "sess" :blocks [] :images nil
+       :gen 5 :attempt emagent-acp-prompt-retry-attempts)
+      (should-not retried)
+      (should-not continued)
+      (should completed))))
 
 (ert-deftest emagent-acp-session-test-turn-hit-transient-error-p ()
   (let ((state (emagent-test--make-acp-state)))

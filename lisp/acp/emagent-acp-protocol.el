@@ -2190,13 +2190,29 @@ Deliberately stricter than `emagent-acp--retriable-prompt-error-p': it must
 not match prose such as \"network error\" or \"timeout\" that can legitimately
 appear inside a real answer.")
 
+(defun emagent-acp--assistant-text-is-error-dump-p (text)
+  "Return non-nil when TEXT is essentially a transient error dump.
+
+A machine error marker near the start means the turn produced no real
+answer--even when the dump is long.  Prose before the marker means the
+turn did work and must not be treated as empty."
+  (let ((text (string-trim (or text ""))))
+    (and (not (string-empty-p text))
+         (string-match emagent-acp--agent-error-signature-re text)
+         (< (match-beginning 0) 80))))
+
 (defun emagent-acp--turn-did-no-work-p (state)
   "Return non-nil when STATE's turn did no real work.
-No tool invocations and little text means replaying the prompt is safe."
+
+No tool invocations, and either little text or text that is only a
+transient error dump, means replaying the original prompt is safe.
+Long error-only dumps still count as no work so recovery does not
+escalate to an auto-continue prompt."
   (let ((text (string-trim (or (emagent-acp-state-assistant-text state) "")))
         (titles (emagent-acp-state-tool-call-titles state)))
     (and (or (null titles) (zerop (hash-table-count titles)))
-         (< (length text) 400))))
+         (or (< (length text) 400)
+             (emagent-acp--assistant-text-is-error-dump-p text)))))
 
 (defun emagent-acp--agent-error-only-response-p (state)
   "Return non-nil when STATE's finished turn is only a transient agent error.
@@ -2221,8 +2237,10 @@ machine-generated error markers."
 Unlike `emagent-acp--agent-error-only-response-p' this does not require the
 turn to be empty: it is true even when tool calls ran or real content was
 produced.  Such a turn must NOT be replayed (that would repeat side effects
-like commits or pushes); instead emagent resumes it by sending \"continue\",
-mirroring what a user does by hand."
+like commits or pushes); instead emagent resumes it with
+`emagent-acp--continue-prompt-text', mirroring what a user does by hand.
+Callers must still require that the turn did real work before auto-continuing,
+so exhausted no-work retries abort instead of sending an auto-continue prompt."
   (let ((text (or (emagent-acp-state-assistant-text state) "")))
     (and (not (emagent-acp-state-compress-pending state))
          (not (emagent-acp-state-quiet-prompt state))
