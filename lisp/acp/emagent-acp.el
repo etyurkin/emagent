@@ -2523,7 +2523,7 @@ Arguments: STATE, SESSION-ID, BLOCKS, IMAGES."
   "User-turn text sent when auto-resuming a turn that already did real work.")
 
 (defun emagent-acp--log-transient-error (state &optional message)
-  "Log MESSAGE and STATE's partial assistant output to `emagent-log-buffer-name'.
+  "Log MESSAGE and STATE partial output to `emagent-log-buffer-name'.
 
 Used when a transient error ends an in-flight turn: the details are recorded in
 the log instead of the chat buffer, and the turn is then resumed with
