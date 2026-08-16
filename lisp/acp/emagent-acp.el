@@ -2570,29 +2570,31 @@ Arguments: STATE, SESSION-ID, IMAGES."
           :gen gen :attempt 1))))))
 
 (cl-defun emagent-acp--dispatch-prompt-request (&key state session-id blocks images gen attempt)
-  "Send the session/prompt request, recovering from transient network failures.
+  "Send the session/prompt request, recovering from transient failures.
 
-ATTEMPT is the 1-based try count.  Recovery depends on how the failure arrives
-and whether the turn already did work:
+ATTEMPT is the 1-based try count.  Recovery depends on how the failure
+arrives and whether the turn already did work:
 
 - Pure transient failure with no tool calls or content
   (`emagent-acp--agent-error-only-response-p' /
-  `emagent-acp--turn-did-no-work-p') is replayed with exponential backoff up to
-  `emagent-acp-prompt-retry-attempts' via `emagent-acp--schedule-prompt-retry'.
+  `emagent-acp--turn-did-no-work-p') is replayed with exponential
+  backoff up to `emagent-acp-prompt-retry-attempts' via
+  `emagent-acp--schedule-prompt-retry'.
 
-- A turn that already ran tool calls or produced real content but ended on a
-  transient error (`emagent-acp--turn-hit-transient-error-p' and not
-  `emagent-acp--turn-did-no-work-p') is resumed via
-  `emagent-acp--schedule-continue' (sending `emagent-acp--continue-prompt-text'),
-  so side effects such as commits or pushes are never repeated.  The error is
-  logged to `emagent-log-buffer-name' rather than rendered into the chat buffer.
+- A turn that already ran tool calls or produced real content but ended
+  on a transient error (`emagent-acp--turn-hit-transient-error-p' and
+  not `emagent-acp--turn-did-no-work-p') is resumed via
+  `emagent-acp--schedule-continue' (sending
+  `emagent-acp--continue-prompt-text'), so side effects such as commits
+  or pushes are never repeated.  The error is logged to
+  `emagent-log-buffer-name' rather than rendered into the chat buffer.
 
 - Exhausted retries on a no-work / error-only turn always abort with a
-  chat-visible error (`emagent-acp--abort-prompt'); they never complete as a
-  normal response and never escalate to an auto-continue prompt.
+  chat-visible error (`emagent-acp--abort-prompt'); they never complete
+  as a normal response and never escalate to an auto-continue prompt.
 
-GEN guards against a stale retry firing after the prompt was superseded or
-interrupted.
+GEN guards against a stale retry firing after the prompt was superseded
+or interrupted.
 
 Arguments: STATE, SESSION-ID, BLOCKS, IMAGES."
   (emagent-acp--send-request
