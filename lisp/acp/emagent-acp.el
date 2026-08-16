@@ -2490,14 +2490,15 @@ rendered into the chat buffer."
   "Re-dispatch the in-flight prompt after exponential backoff.
 
 REASON is a short human-readable phrase describing why the retry fires; it is
-shown to the user together with the attempt count.  The GEN guard prevents a
-stale retry from firing after the prompt was superseded or interrupted.
+logged and, when `emagent-acp-show-prompt-retries' is non-nil, shown in the
+minibuffer with the attempt count.  The GEN guard prevents a stale retry from
+firing after the prompt was superseded or interrupted.
 
 Arguments: STATE, SESSION-ID, BLOCKS, IMAGES."
   (let* ((delay (emagent-acp--prompt-retry-delay attempt))
          (next (1+ attempt)))
     (setf (emagent-acp-state-prompt-retry-gen state) gen)
-    (emagent-acp--notify-user
+    (emagent-acp--notify-prompt-retry
      state
      (format "emagent: %s; retrying prompt (%d/%d) in %.1fs"
              reason next emagent-acp-prompt-retry-attempts delay))
@@ -2551,7 +2552,7 @@ Arguments: STATE, SESSION-ID, IMAGES."
   (let* ((attempt (1+ (or (emagent-acp-state-continue-attempts state) 0)))
          (delay (emagent-acp--prompt-retry-delay attempt)))
     (setf (emagent-acp-state-continue-attempts state) attempt)
-    (emagent-acp--notify-user
+    (emagent-acp--notify-prompt-retry
      state
      (format "emagent: %s; auto-continuing (%d/%d) in %.1fs"
              reason attempt emagent-acp-prompt-retry-attempts delay))
@@ -2586,8 +2587,9 @@ and whether the turn already did work:
   so side effects such as commits or pushes are never repeated.  The error is
   logged to `emagent-log-buffer-name' rather than rendered into the chat buffer.
 
-- Exhausted retries on a no-work turn abort (or complete with the error
-  text) instead of escalating to an auto-continue prompt.
+- Exhausted retries on a no-work / error-only turn always abort with a
+  chat-visible error (`emagent-acp--abort-prompt'); they never complete as a
+  normal response and never escalate to an auto-continue prompt.
 
 GEN guards against a stale retry firing after the prompt was superseded or
 interrupted.
@@ -2624,6 +2626,16 @@ Arguments: STATE, SESSION-ID, BLOCKS, IMAGES."
          (emagent-acp--cancel-prompt-render state)
          (emagent-acp--schedule-continue
           state session-id images gen "agent turn ended on a transient error"))
+        ((and (emagent-acp-state-busy state)
+              (emagent-acp--agent-error-only-response-p state))
+         (let ((message (string-trim (or (emagent-acp-state-assistant-text state) ""))))
+           (emagent-acp--abort-prompt
+            state
+            (format "prompt failed after %d attempts: %s"
+                    attempt
+                    (if (string-empty-p message)
+                        "transient agent error"
+                      message)))))
         (t
          (emagent-acp--complete-prompt state response)))))
    :on-failure
@@ -2651,9 +2663,13 @@ Arguments: STATE, SESSION-ID, BLOCKS, IMAGES."
            (emagent-acp--schedule-continue
             state session-id images gen (format "prompt interrupted (%s)" message)))
           (t
-           (emagent-acp--abort-prompt state (format "prompt failed: %s" message))
-           (emagent-acp--notify-user
-            state (format "emagent: prompt failed: %s" message)))))))))
+           (emagent-acp--abort-prompt
+            state
+            (format "prompt failed%s: %s"
+                    (if (>= attempt emagent-acp-prompt-retry-attempts)
+                        (format " after %d attempts" attempt)
+                      "")
+                    message)))))))))
 (defun emagent-acp--reset-permission-gate (state)
   "Cancel STATE's pending permission drain and clear the permission gate.
 Replies `cancelled' to any outstanding requests so the agent does not hang.
@@ -2868,7 +2884,13 @@ tool-resolve), extend the watchdog instead of finalizing — up to
 `emagent-acp-watchdog-max-extensions' times — so the UI does not close the
 Response while the agent keeps working.  Compress turns with buffered
 SUMMARY text finalize on the first stall even if session/prompt is still
-pending (Claude ACP can wedge without ever returning)."
+pending (Claude ACP can wedge without ever returning).
+
+A stall with no assistant text (common before the first response chunk) or
+with only a transient error dump aborts via `emagent-acp--abort-prompt' so
+the chat shows an error instead of going quiet.  A stall after real partial
+output still finalizes that partial, and announces the stall in the
+minibuffer."
   (when-let ((old (emagent-acp-state-prompt-watchdog-timer state)))
     (cancel-timer old))
   (let* ((token (cl-gensym "emagent-prompt-watchdog"))
@@ -2898,18 +2920,29 @@ pending (Claude ACP can wedge without ever returning)."
                           (emagent-acp-state-prompt-watchdog-extensions state)
                           emagent-acp-watchdog-max-extensions)
                          (emagent-acp--schedule-prompt-watchdog state))
-                        ((and (emagent-acp-state-assistant-text state)
-                              (not (string-empty-p
-                                    (emagent-acp-state-assistant-text state))))
-                         (when waiting
-                           (emagent-log
-                            "emagent: pending ACP work abandoned after stall; finalizing partial"))
-                         (emagent-log "emagent: prompt stalled; finalizing partial response")
-                         (emagent-acp--complete-prompt state nil))
                         (t
-                         (emagent-acp--abort-prompt
-                          state
-                          "prompt stalled — reconnect with M-x emagent-mode or kill and reopen the buffer")))))))))
+                         (let* ((text (string-trim
+                                       (or (emagent-acp-state-assistant-text state) "")))
+                                (real-partial
+                                 (and (not (string-empty-p text))
+                                      (not (emagent-acp--assistant-text-is-error-dump-p
+                                            text)))))
+                           (cond
+                            (real-partial
+                             (when waiting
+                               (emagent-log
+                                "emagent: pending ACP work abandoned after stall; finalizing partial"))
+                             (emagent-log
+                              "emagent: prompt stalled; finalizing partial response")
+                             (message
+                              "emagent: prompt stalled; finalizing partial response")
+                             (emagent-acp--complete-prompt state nil))
+                            (t
+                             (emagent-acp--abort-prompt
+                              state
+                              (if (string-empty-p text)
+                                  "prompt stalled before any response — reconnect with M-x emagent-mode or kill and reopen the buffer"
+                                (format "prompt stalled: %s" text))))))))))))))
     (setf (emagent-acp-state-prompt-watchdog state) token)
     (setf (emagent-acp-state-prompt-watchdog-timer state) timer)))
 

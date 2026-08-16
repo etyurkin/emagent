@@ -643,6 +643,18 @@ Arguments: EMAGENT-ACP-UPDATE."
   "Append MESSAGE to `emagent-log-buffer-name'."
   (emagent-log "%s" message))
 
+(defun emagent-acp--notify-prompt-retry (state message)
+  "Log MESSAGE; also show it in the minibuffer when retries are visible.
+
+Always logs via `emagent-acp--notify-user'.  When
+`emagent-acp-show-prompt-retries' is non-nil, also calls `message' so
+retry/auto-continue progress is visible without opening the log buffer.
+
+Arguments: STATE, MESSAGE."
+  (emagent-acp--notify-user state message)
+  (when emagent-acp-show-prompt-retries
+    (message "%s" message)))
+
 (defun emagent-acp--trace (format-string &rest args)
   "Append a trace line when `emagent-acp-trace' is non-nil.
 
@@ -1965,7 +1977,7 @@ first stall when SUMMARY text is already buffered."
   :type 'integer
   :group 'emagent)
 
-(defcustom emagent-acp-prompt-retry-attempts 3
+(defcustom emagent-acp-prompt-retry-attempts 5
   "How many times to try a prompt before showing a network error to the user.
 
 A prompt request that fails with a transient network error (see
@@ -1973,7 +1985,8 @@ A prompt request that fails with a transient network error (see
 \"RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh\")
 is retried automatically with exponential backoff up to this many total
 attempts.  Only after the last attempt fails is the error surfaced in the
-chat buffer.  Set to 1 to disable retries."
+chat buffer via `emagent-chat-fail-assistant'.  Also bounds auto-continue
+resumes after mid-turn transient failures.  Set to 1 to disable retries."
   :type 'integer
   :group 'emagent)
 
@@ -1981,9 +1994,19 @@ chat buffer.  Set to 1 to disable retries."
   "Base seconds for exponential backoff between retriable prompt retries.
 
 The delay before retry N (1-based) is BASE * 2^(N-1), so with the default
-1.5 the waits are roughly 1.5s, then 3s, then 6s.  See
-`emagent-acp-prompt-retry-attempts'."
+1.5 and `emagent-acp-prompt-retry-attempts' 5 the waits are roughly
+1.5s, 3s, 6s, 12s, then 24s."
   :type 'number
+  :group 'emagent)
+
+(defcustom emagent-acp-show-prompt-retries t
+  "When non-nil, show prompt retry and auto-continue progress in the minibuffer.
+
+Messages are always written to `emagent-log-buffer-name'.  When this is
+non-nil they are also shown with `message' so a flaky *.cursor.sh
+connection is visible while backoff runs.  Final failures always surface
+in the chat buffer regardless of this setting."
+  :type 'boolean
   :group 'emagent)
 
 (defcustom emagent-acp-trace nil

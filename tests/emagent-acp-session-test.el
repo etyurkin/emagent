@@ -2204,6 +2204,48 @@ project directory rather than opening up unconfined access."
       (sleep-for 0.05)
       (should (eq completed t)))))
 
+(ert-deftest emagent-acp-session-test-watchdog-error-dump-aborts ()
+  "A stall with only a transient error dump aborts visibly, never quiet-completes."
+  (let* ((state (emagent-test--make-acp-state))
+         (completed nil)
+         (aborted nil)
+         (emagent-acp-watchdog-timeout 0.01)
+         (emagent-acp-watchdog-max-extensions 0))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-assistant-text state)
+          "Error: RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh")
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--complete-prompt)
+          (lambda (&rest _) (setq completed t)))
+         ((symbol-function 'emagent-acp--abort-prompt)
+          (lambda (_s message) (setq aborted message)))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (_s) nil)))
+      (emagent-acp--schedule-prompt-watchdog state)
+      (sleep-for 0.05)
+      (should-not completed)
+      (should (stringp aborted))
+      (should (string-match-p "RetriableError\\|stalled" aborted)))))
+
+(ert-deftest emagent-acp-session-test-watchdog-empty-aborts-before-response ()
+  "A stall with no assistant text aborts with a before-response message."
+  (let* ((state (emagent-test--make-acp-state))
+         (completed nil)
+         (aborted nil)
+         (emagent-acp-watchdog-timeout 0.01)
+         (emagent-acp-watchdog-max-extensions 0))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-assistant-text state) "")
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--complete-prompt)
+          (lambda (&rest _) (setq completed t)))
+         ((symbol-function 'emagent-acp--abort-prompt)
+          (lambda (_s message) (setq aborted message)))
+         ((symbol-function 'emagent-acp--refresh-mode-line) (lambda (_s) nil)))
+      (emagent-acp--schedule-prompt-watchdog state)
+      (sleep-for 0.05)
+      (should-not completed)
+      (should (string-match-p "before any response" aborted)))))
+
 
 (ert-deftest emagent-acp-session-test-watchdog-permission-extends-past-max ()
   "Open permission dialogs keep extending past max (user wait, not wedge)."
@@ -2363,6 +2405,39 @@ project directory rather than opening up unconfined access."
       (should-not retried)
       (should-not aborted))))
 
+(ert-deftest emagent-acp-session-test-dispatch-exhausted-error-only-aborts ()
+  "Exhausted agent-error-only success responses abort instead of completing."
+  (let* ((state (emagent-test--make-acp-state))
+         (retried nil)
+         (completed nil)
+         (aborted nil))
+    (setf (emagent-acp-state-busy state) t
+          (emagent-acp-state-prompt-generation state) 9
+          (emagent-acp-state-assistant-text state)
+          "Error: RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh")
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--send-request)
+          (cl-function
+           (lambda (&key on-success &allow-other-keys)
+             (funcall on-success '((stopReason . "end_turn"))))))
+         ((symbol-function 'emagent-acp--schedule-prompt-retry)
+          (lambda (&rest _) (setq retried t)))
+         ((symbol-function 'emagent-acp--complete-prompt)
+          (lambda (&rest _) (setq completed t)))
+         ((symbol-function 'emagent-acp--abort-prompt)
+          (lambda (_s message) (setq aborted message)))
+         ((symbol-function 'emagent-acp--clear-thought-buffer)
+          (lambda (_) nil))
+         ((symbol-function 'emagent-acp--cancel-prompt-render)
+          (lambda (_) nil)))
+      (emagent-acp--dispatch-prompt-request
+       :state state :session-id "sess" :blocks [] :images nil
+       :gen 9 :attempt emagent-acp-prompt-retry-attempts)
+      (should-not retried)
+      (should-not completed)
+      (should (string-match-p "after 5 attempts" aborted))
+      (should (string-match-p "ENOTFOUND" aborted)))))
+
 (ert-deftest emagent-acp-session-test-dispatch-exhausted-no-work-aborts ()
   "Exhausted no-work retriable failures abort instead of auto-continuing."
   (let* ((state (emagent-test--make-acp-state))
@@ -2429,11 +2504,12 @@ project directory rather than opening up unconfined access."
       (should-not completed))))
 
 (ert-deftest emagent-acp-session-test-dispatch-long-error-dump-does-not-continue ()
-  "A long pure error dump is no-work: retry while budget remains, else complete."
+  "A long pure error dump is no-work: retry while budget remains, else abort."
   (let* ((state (emagent-test--make-acp-state))
          (continued nil)
          (retried nil)
-         (completed nil))
+         (completed nil)
+         (aborted nil))
     (setf (emagent-acp-state-busy state) t
           (emagent-acp-state-prompt-generation state) 5
           (emagent-acp-state-assistant-text state)
@@ -2450,6 +2526,8 @@ project directory rather than opening up unconfined access."
           (lambda (&rest _) (setq retried t)))
          ((symbol-function 'emagent-acp--complete-prompt)
           (lambda (&rest _) (setq completed t)))
+         ((symbol-function 'emagent-acp--abort-prompt)
+          (lambda (_s message) (setq aborted message)))
          ((symbol-function 'emagent-acp--clear-thought-buffer)
           (lambda (_) nil))
          ((symbol-function 'emagent-acp--cancel-prompt-render)
@@ -2460,17 +2538,20 @@ project directory rather than opening up unconfined access."
       (should retried)
       (should-not continued)
       (should-not completed)
+      (should-not aborted)
       ;; Retry path clears assistant text; restore the dump for the exhausted case.
       (setf (emagent-acp-state-assistant-text state)
             (concat "RetriableError: WritableIterable is closed\n"
                     (make-string 500 ?x)))
-      (setq retried nil continued nil completed nil)
+      (setq retried nil continued nil completed nil aborted nil)
       (emagent-acp--dispatch-prompt-request
        :state state :session-id "sess" :blocks [] :images nil
        :gen 5 :attempt emagent-acp-prompt-retry-attempts)
       (should-not retried)
       (should-not continued)
-      (should completed))))
+      (should-not completed)
+      (should (stringp aborted))
+      (should (string-match-p "after 5 attempts\\|RetriableError" aborted)))))
 
 (ert-deftest emagent-acp-session-test-turn-hit-transient-error-p ()
   (let ((state (emagent-test--make-acp-state)))
@@ -2492,7 +2573,33 @@ project directory rather than opening up unconfined access."
   (let ((emagent-acp-prompt-retry-base-delay 1.5))
     (should (= (emagent-acp--prompt-retry-delay 1) 1.5))
     (should (= (emagent-acp--prompt-retry-delay 2) 3.0))
-    (should (= (emagent-acp--prompt-retry-delay 3) 6.0))))
+    (should (= (emagent-acp--prompt-retry-delay 3) 6.0))
+    (should (= (emagent-acp--prompt-retry-delay 4) 12.0))
+    (should (= (emagent-acp--prompt-retry-delay 5) 24.0))))
+
+(ert-deftest emagent-acp-session-test-prompt-retry-defaults ()
+  (should (= emagent-acp-prompt-retry-attempts 5))
+  (should emagent-acp-show-prompt-retries))
+
+(ert-deftest emagent-acp-session-test-notify-prompt-retry-respects-flag ()
+  (let ((logged nil)
+        (messaged nil)
+        (state (emagent-test--make-acp-state)))
+    (emagent-test--with-mocks
+        (((symbol-function 'emagent-acp--notify-user)
+          (lambda (_s msg) (setq logged msg)))
+         ((symbol-function 'message)
+          (lambda (fmt &rest args)
+            (setq messaged (apply #'format fmt args)))))
+      (let ((emagent-acp-show-prompt-retries t))
+        (emagent-acp--notify-prompt-retry state "emagent: retrying")
+        (should (equal logged "emagent: retrying"))
+        (should (equal messaged "emagent: retrying")))
+      (setq logged nil messaged nil)
+      (let ((emagent-acp-show-prompt-retries nil))
+        (emagent-acp--notify-prompt-retry state "emagent: retrying")
+        (should (equal logged "emagent: retrying"))
+        (should-not messaged)))))
 
 (ert-deftest emagent-acp-session-test-context-fill-percent ()
   (let ((state (emagent-test--make-acp-state)))
