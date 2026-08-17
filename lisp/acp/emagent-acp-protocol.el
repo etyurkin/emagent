@@ -643,6 +643,18 @@ Arguments: EMAGENT-ACP-UPDATE."
   "Append MESSAGE to `emagent-log-buffer-name'."
   (emagent-log "%s" message))
 
+(defun emagent-acp--notify-prompt-retry (state message)
+  "Log MESSAGE; also show it in the minibuffer when retries are visible.
+
+Always logs via `emagent-acp--notify-user'.  When
+`emagent-acp-show-prompt-retries' is non-nil, also calls `message' so
+retry/auto-continue progress is visible without opening the log buffer.
+
+Arguments: STATE, MESSAGE."
+  (emagent-acp--notify-user state message)
+  (when emagent-acp-show-prompt-retries
+    (message "%s" message)))
+
 (defun emagent-acp--trace (format-string &rest args)
   "Append a trace line when `emagent-acp-trace' is non-nil.
 
@@ -1965,7 +1977,7 @@ first stall when SUMMARY text is already buffered."
   :type 'integer
   :group 'emagent)
 
-(defcustom emagent-acp-prompt-retry-attempts 3
+(defcustom emagent-acp-prompt-retry-attempts 5
   "How many times to try a prompt before showing a network error to the user.
 
 A prompt request that fails with a transient network error (see
@@ -1973,7 +1985,8 @@ A prompt request that fails with a transient network error (see
 \"RetriableError: [unavailable] getaddrinfo ENOTFOUND api2.cursor.sh\")
 is retried automatically with exponential backoff up to this many total
 attempts.  Only after the last attempt fails is the error surfaced in the
-chat buffer.  Set to 1 to disable retries."
+chat buffer via `emagent-chat-fail-assistant'.  Also bounds auto-continue
+resumes after mid-turn transient failures.  Set to 1 to disable retries."
   :type 'integer
   :group 'emagent)
 
@@ -1981,9 +1994,19 @@ chat buffer.  Set to 1 to disable retries."
   "Base seconds for exponential backoff between retriable prompt retries.
 
 The delay before retry N (1-based) is BASE * 2^(N-1), so with the default
-1.5 the waits are roughly 1.5s, then 3s, then 6s.  See
-`emagent-acp-prompt-retry-attempts'."
+1.5 and `emagent-acp-prompt-retry-attempts' 5 the waits are roughly
+1.5s, 3s, 6s, 12s, then 24s."
   :type 'number
+  :group 'emagent)
+
+(defcustom emagent-acp-show-prompt-retries t
+  "When non-nil, show prompt retry and auto-continue progress in the minibuffer.
+
+Messages are always written to `emagent-log-buffer-name'.  When this is
+non-nil they are also shown with `message' so a flaky *.cursor.sh
+connection is visible while backoff runs.  Final failures always surface
+in the chat buffer regardless of this setting."
+  :type 'boolean
   :group 'emagent)
 
 (defcustom emagent-acp-trace nil
@@ -2190,13 +2213,29 @@ Deliberately stricter than `emagent-acp--retriable-prompt-error-p': it must
 not match prose such as \"network error\" or \"timeout\" that can legitimately
 appear inside a real answer.")
 
+(defun emagent-acp--assistant-text-is-error-dump-p (text)
+  "Return non-nil when TEXT is essentially a transient error dump.
+
+A machine error marker near the start means the turn produced no real
+answer--even when the dump is long.  Prose before the marker means the
+turn did work and must not be treated as empty."
+  (let ((text (string-trim (or text ""))))
+    (and (not (string-empty-p text))
+         (string-match emagent-acp--agent-error-signature-re text)
+         (< (match-beginning 0) 80))))
+
 (defun emagent-acp--turn-did-no-work-p (state)
   "Return non-nil when STATE's turn did no real work.
-No tool invocations and little text means replaying the prompt is safe."
+
+No tool invocations, and either little text or text that is only a
+transient error dump, means replaying the original prompt is safe.
+Long error-only dumps still count as no work so recovery does not
+escalate to an auto-continue prompt."
   (let ((text (string-trim (or (emagent-acp-state-assistant-text state) "")))
         (titles (emagent-acp-state-tool-call-titles state)))
     (and (or (null titles) (zerop (hash-table-count titles)))
-         (< (length text) 400))))
+         (or (< (length text) 400)
+             (emagent-acp--assistant-text-is-error-dump-p text)))))
 
 (defun emagent-acp--agent-error-only-response-p (state)
   "Return non-nil when STATE's finished turn is only a transient agent error.
@@ -2221,8 +2260,10 @@ machine-generated error markers."
 Unlike `emagent-acp--agent-error-only-response-p' this does not require the
 turn to be empty: it is true even when tool calls ran or real content was
 produced.  Such a turn must NOT be replayed (that would repeat side effects
-like commits or pushes); instead emagent resumes it by sending \"continue\",
-mirroring what a user does by hand."
+like commits or pushes); instead emagent resumes it with
+`emagent-acp--continue-prompt-text', mirroring what a user does by hand.
+Callers must still require that the turn did real work before auto-continuing,
+so exhausted no-work retries abort instead of sending an auto-continue prompt."
   (let ((text (or (emagent-acp-state-assistant-text state) "")))
     (and (not (emagent-acp-state-compress-pending state))
          (not (emagent-acp-state-quiet-prompt state))
