@@ -424,17 +424,19 @@ current buffer."
       (emagent--read-project-directory)
     (emagent--project-directory-initial)))
 
-(defun emagent--start-with-provider (provider project-dir connect &optional model-id _handshake)
+(defun emagent--start-with-provider (provider project-dir connect &optional model-id _handshake force-new)
   "Start emagent using PROVIDER in PROJECT-DIR.
 CONNECT non-nil connects the ACP session immediately.
 When MODEL-ID is non-nil, persist it before connecting.
 When `emagent--pending-config-spec' is set, also write
 #+EMAGENT_MODEL_SPEC so the variant is visible and restored.
-When the project buffer is already connected, the chosen variant is
-applied to the live session instead of waiting for a reconnect.
+When FORCE-NEW is non-nil, always create a distinct buffer
+\(`emagent-chat-open' :force-new).  When the project buffer is already
+connected and FORCE-NEW is nil, the chosen variant is applied to the live
+session instead of waiting for a reconnect.
 Always show BUFFER immediately — do not wait for an async connect
 reveal, which can no-op while a prior connect is still in flight."
-  (let ((buffer (emagent-chat-open :project-dir project-dir))
+  (let ((buffer (emagent-chat-open :project-dir project-dir :force-new force-new))
         (spec (and (boundp 'emagent--pending-config-spec)
                    emagent--pending-config-spec)))
     (with-current-buffer buffer
@@ -445,7 +447,7 @@ reveal, which can no-op while a prior connect is still in flight."
         (emagent-chat-set-model model-id spec))
       (when connect
         (cond
-         ((emagent-acp--connected-p)
+         ((and (not force-new) (emagent-acp--connected-p))
           (when (and model-id (not (string-empty-p model-id)))
             (when-let ((state emagent-acp--session)
                        (session-id (emagent-acp-state-session-id state)))
@@ -465,13 +467,15 @@ Nil when no buffer exists for PROJECT-DIR or it has no #+EMAGENT_AGENT."
     (with-current-buffer buffer
       (emagent-session-agent))))
 
-(defun emagent--start-session (project-dir &optional fixed-provider)
+(defun emagent--start-session (project-dir &optional fixed-provider force-new)
   "Start emagent in PROJECT-DIR, optionally limiting to FIXED-PROVIDER.
 
-When PROJECT-DIR already has an emagent buffer with an agent, the picker
-is limited to that agent — `emagent-chat-open' reuses the buffer, and
-its session cannot change agents."
+When FORCE-NEW is nil and PROJECT-DIR already has an emagent buffer with an
+agent, the picker is limited to that agent — `emagent-chat-open' reuses the
+buffer, and its session cannot change agents.  FORCE-NEW always creates a
+new buffer and allows a full agent/model pick."
   (let* ((existing (and (null fixed-provider)
+                        (null force-new)
                         (emagent--existing-buffer-agent project-dir)))
          (fixed-provider (or fixed-provider existing)))
     (when existing
@@ -480,7 +484,8 @@ its session cannot change agents."
     (let* ((pair (emagent--read-agent-and-model project-dir fixed-provider))
            (provider (car pair))
            (handshake (emagent-trust--configure provider project-dir)))
-      (emagent--start-with-provider provider project-dir t (cdr pair) handshake))))
+      (emagent--start-with-provider
+       provider project-dir t (cdr pair) handshake force-new))))
 
 (defun emagent--project-directory-initial ()
   "Default project directory for a new emagent session.
@@ -596,17 +601,38 @@ also re-seeded so TAB completion stays populated during reconnect."
      (message "emagent: connected"))))
 
 ;;;###autoload
-(defun emagent (&optional prompt-directory)
-  "Start a new emagent session and connect.
+(defun emagent-new-session ()
+  "Create a new emagent buffer and connect a fresh ACP session.
 
-Infers the project directory from the current buffer, probes installed
-agents for models when `emagent-probe-models-at-start' is non-nil, and
-prompts when more than one agent/model combination is available.  After you
-pick an agent, workspace trust is checked (`emagent-trust--configure'); see
-`emagent-trust-enabled'.  With a prefix argument PROMPT-DIRECTORY, read the
-project directory instead."
+Always prompts for the project directory (default: inferred from the
+current buffer).  Unlike plain `emagent', this never reuses an existing
+project buffer — use it (or \\[universal-argument] \\[emagent]) for a
+second concurrent session on the same project."
+  (interactive)
+  (emagent--start-session (emagent--read-project-directory) nil t))
+
+;;;###autoload
+(defun emagent (arg)
+  "Switch to this project's emagent session, or start one if none exists.
+
+Infers the project directory from the current buffer.  When a live emagent
+buffer already exists for that project, switch to it.  Otherwise probe
+installed agents for models when `emagent-probe-models-at-start' is
+non-nil, prompt when needed, check workspace trust
+\(`emagent-trust--configure'; see `emagent-trust-enabled'), and connect.
+
+With a prefix argument ARG, run `emagent-new-session' instead (always
+create a new buffer; prompts for project directory)."
   (interactive "P")
-  (emagent--start-session (emagent--project-directory prompt-directory)))
+  (if arg
+      (call-interactively #'emagent-new-session)
+    (let* ((dir (emagent--project-directory-initial))
+           (existing (emagent-chat-find-project-buffer dir)))
+      (if existing
+          (progn
+            (pop-to-buffer existing)
+            (message "emagent: switching to existing session"))
+        (emagent--start-session dir)))))
 
 ;;;###autoload
 (defun emagent-set-project-directory (new-dir)

@@ -4886,6 +4886,20 @@ Run \\[emagent-mode] to reconnect a saved session."
     (interactive "P")
     (emagent-mode-entry arg)))
 
+(defun emagent-chat--buffer-name-for-label (label)
+  "Return a unique *Emagent LABEL* buffer name."
+  (let ((base (format "*Emagent %s*" label))
+        (names (mapcar #'buffer-name (emagent-chat--buffers))))
+    (if (not (member base names))
+        base
+      (let ((n 2)
+            (candidate nil))
+        (while (progn
+                 (setq candidate (format "*Emagent %s-%d*" label n))
+                 (member candidate names))
+          (setq n (1+ n)))
+        candidate))))
+
 (defun emagent-chat-find-project-buffer (project-dir)
   "Return the first live emagent buffer whose project is PROJECT-DIR, or nil."
   (let ((dir (file-name-as-directory (expand-file-name project-dir))))
@@ -4896,17 +4910,19 @@ Run \\[emagent-mode] to reconnect a saved session."
            (equal dir (file-name-as-directory (expand-file-name project))))))
      (emagent-chat--buffers))))
 
-(cl-defun emagent-chat-open (&key project-dir)
+(cl-defun emagent-chat-open (&key project-dir force-new)
   "Open or create an emagent buffer for PROJECT-DIR.
 
-An existing emagent buffer for PROJECT-DIR is reused — one session per
-project; a fresh `M-x emagent' must not silently spawn a second buffer.
-New buffer names look like *emagent myproj* from a short cwd label.
-PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
+Unless FORCE-NEW is non-nil, an existing emagent buffer for PROJECT-DIR is
+reused — plain `M-x emagent' switches to that session.  FORCE-NEW always
+creates a distinct buffer (see `emagent-new-session').  New buffer names look
+like *Emagent myproj* from a short cwd label.  PROJECT-DIR is stored as
+#+EMAGENT_PROJECT and passed to the ACP agent as cwd."
   (unless project-dir
     (user-error "PROJECT-DIR is required"))
   (let* ((dir (expand-file-name project-dir))
-         (existing (emagent-chat-find-project-buffer dir))
+         (existing (and (not force-new)
+                        (emagent-chat-find-project-buffer dir)))
          (label (emagent-chat--short-cwd-label dir))
          (slug (emagent-chat--sanitize-slug label))
          (buffer (or existing
@@ -4915,9 +4931,12 @@ PROJECT-DIR is stored as #+EMAGENT_PROJECT and passed to the ACP agent as cwd."
     (with-current-buffer buffer
       (unless (eq major-mode 'emagent-mode)
         (emagent-mode-force))
-      (setq emagent-chat-slug slug
-            emagent-chat-session-id (or emagent-chat-session-id
-                                        (emagent-session-store-read-session-property)))
+      (setq emagent-chat-slug slug)
+      (if force-new
+          (emagent-session-clear-id)
+        (setq emagent-chat-session-id
+              (or emagent-chat-session-id
+                  (emagent-session-store-read-session-property))))
       (emagent-session-set-project-directory dir))
     buffer))
 
@@ -4968,6 +4987,7 @@ working inside session buffers."
              ("f" "Field info (org's C-c ?)" org-table-field-info)]
             ["Session"
              ("c" "Connect / reconnect agent" emagent-connect)
+             ("n" "New session" emagent-new-session)
              ("m" "Set session model (/model = one turn)" emagent-set-model)
              ("p" "Change project directory" emagent-set-project-directory)
              ("P" "Reset permissions" emagent-reset-permissions)
@@ -4976,7 +4996,7 @@ working inside session buffers."
              ("l" "View log" emagent-log-view)])
          t)
         (call-interactively 'emagent--transient-menu))
-    (message "emagent: SPC=send, c=connect, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
+    (message "emagent: SPC=send, c=connect, n=new session, g=interrupt, a=attach, i=image, m=model, t=trust, R=reconnect, l=log")))
 
 ;; Register session org buffers already open when this file finishes loading
 ;; (after `emagent--derived-mode' is captured).
@@ -5259,17 +5279,6 @@ leaving its headline visible as a collapsed summary."
                 (substring dir (1+ (length home))))
                (t (file-name-nondirectory dir)))))
     (emagent-chat--sanitize-slug (or raw emagent-chat-default-slug))))
-
-(defun emagent-chat--buffer-name-for-label (label)
-  "Return a unique *emagent LABEL* buffer name."
-  (let ((base (format "*Emagent %s*" label))
-        (names (mapcar #'buffer-name (emagent-chat--buffers))))
-    (if (not (member base names))
-        base
-      (let ((n 2))
-        (while (member (format "*emagent %s-%d*" label n) names)
-          (setq n (1+ n)))
-        (format "*emagent %s-%d*" label n)))))
 
 (defun emagent-chat--window-configuration-change (&optional _frames)
   "Flush deferred font-lock and refresh mode lines on focus change."

@@ -257,6 +257,58 @@ the buffer.  Cookie housekeeping had the same bug when inserting."
          (when (buffer-live-p b1) (kill-buffer b1))
          (when (buffer-live-p b2) (kill-buffer b2)))))))
 
+(ert-deftest emagent-core-test-chat-open-force-new-distinct-buffer ()
+  "`emagent-chat-open' :force-new creates a second buffer for the same project."
+  (emagent-test--with-temp-project
+   (lambda (dir)
+     (let (b1 b2)
+       (unwind-protect
+           (progn
+             (setq b1 (emagent-chat-open :project-dir dir)
+                   b2 (emagent-chat-open :project-dir dir :force-new t))
+             (should (buffer-live-p b1))
+             (should (buffer-live-p b2))
+             (should-not (eq b1 b2))
+             (should (equal (file-name-as-directory (expand-file-name dir))
+                            (file-name-as-directory
+                             (with-current-buffer b1
+                               (emagent-session-project-directory)))))
+             (should (equal (file-name-as-directory (expand-file-name dir))
+                            (file-name-as-directory
+                             (with-current-buffer b2
+                               (emagent-session-project-directory))))))
+         (when (buffer-live-p b1) (kill-buffer b1))
+         (when (buffer-live-p b2) (kill-buffer b2)))))))
+
+(ert-deftest emagent-core-test-emagent-switches-to-existing ()
+  "Plain `emagent' pops the existing project buffer without starting anew."
+  (emagent-test--with-emagent-buffer
+   (lambda (buffer dir)
+     (let ((popped nil)
+           (started nil))
+       (cl-letf (((symbol-function 'emagent--project-directory-initial)
+                  (lambda () dir))
+                 ((symbol-function 'pop-to-buffer)
+                  (lambda (b &rest _)
+                    (setq popped b)
+                    b))
+                 ((symbol-function 'emagent--start-session)
+                  (lambda (&rest _)
+                    (setq started t))))
+         (emagent nil)
+         (should (eq popped buffer))
+         (should-not started))))))
+
+(ert-deftest emagent-core-test-emagent-prefix-calls-new-session ()
+  "Prefix `emagent' delegates to `emagent-new-session'."
+  (let ((called nil))
+    (cl-letf (((symbol-function 'emagent-new-session)
+               (lambda () (setq called t)))
+              ((symbol-function 'call-interactively)
+               (lambda (fn &rest _) (funcall fn))))
+      (emagent '(4))
+      (should called))))
+
 
 (ert-deftest emagent-core-test-project-directory-initial-emagent-buffer ()
   "Emagent buffers keep the session project even when visited under scratch/."
