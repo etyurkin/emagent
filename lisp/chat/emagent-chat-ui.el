@@ -427,8 +427,9 @@ point is within the block; `emagent-chat--send-bounds' does."
 
 Point must be on the prompt's heading line or within its direct body,
 above its response subsections.  Trailing blank lines after the body
-still count: after RET or a paste ending in a newline, C-c C-c must
-send.  Anywhere else there is nothing to send; then fall through to org."
+still count: after a newline or a paste ending in a newline,
+\\[emagent-chat-send] must send.  Anywhere else there is nothing to send;
+then fall through to org."
   (save-excursion
     ;; Blank lines after the last non-blank body line are outside the
     ;; trimmed block end from `emagent-chat--user-block-bounds'.  Walk
