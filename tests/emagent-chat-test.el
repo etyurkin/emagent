@@ -34,6 +34,13 @@
     (let ((bounds (emagent-chat--send-bounds)))
       (should bounds)
       (should (= (car bounds) (point-min))))
+    ;; Blank line after the body (RET / paste trailing NL): still sendable.
+    (goto-char (point-min))
+    (search-forward "body line")
+    (end-of-line)
+    (forward-char 1) ;; onto the blank line between body and ** Thinking
+    (should (looking-at-p "[ \t]*$"))
+    (should (emagent-chat--send-bounds))
     ;; On a response subsection heading: nothing to send.
     (search-forward "** Thinking")
     (should-not (emagent-chat--send-bounds))
@@ -42,6 +49,15 @@
     (should-not (emagent-chat--send-bounds))
     ;; On a later prompt: re-evaluable.
     (search-forward "next")
+    (should (emagent-chat--send-bounds))))
+
+(ert-deftest emagent-chat-test-send-bounds-trailing-blank-at-eob ()
+  "Trailing blank lines at EOB after a prompt body are still in the prompt."
+  (with-temp-buffer
+    (insert (format "* %s> hello\nline one\n\n\n" (user-login-name)))
+    (goto-char (point-max))
+    (should (emagent-chat--send-bounds))
+    (forward-line -1)
     (should (emagent-chat--send-bounds))))
 
 

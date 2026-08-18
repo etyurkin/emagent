@@ -426,13 +426,24 @@ point is within the block; `emagent-chat--send-bounds' does."
   "Return (BEG . END) of the `* user>' prompt at point, or nil.
 
 Point must be on the prompt's heading line or within its direct body,
-above its response subsections.  Anywhere else there is nothing to
-send; then fall through to org."
-  (let ((block (emagent-chat--user-block-bounds)))
-    (when (and block
-               (>= (point) (car block))
-               (<= (line-beginning-position) (cdr block)))
-      block)))
+above its response subsections.  Trailing blank lines after the body
+still count: after a newline or a paste ending in a newline,
+\\[emagent-chat-send] must send.  Anywhere else there is nothing to send;
+then fall through to org."
+  (save-excursion
+    ;; Blank lines after the last non-blank body line are outside the
+    ;; trimmed block end from `emagent-chat--user-block-bounds'.  Walk
+    ;; back over them so containment still succeeds.
+    (while (and (not (bobp))
+                (save-excursion
+                  (beginning-of-line)
+                  (looking-at-p "[ \t]*$")))
+      (forward-line -1))
+    (let ((block (emagent-chat--user-block-bounds)))
+      (when (and block
+                 (>= (point) (car block))
+                 (<= (line-beginning-position) (cdr block)))
+        block))))
 
 (defun emagent-chat--open-reasoning-begin ()
   "Return point at the `** Thinking' headline in the open response body.
